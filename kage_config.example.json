@@ -12,5 +12,22 @@
   "vault_path": "~/Documents/MyVault",
   "claude_cli": "",
   "gemini_cli": "",
-  "personal_keywords": []
+  "personal_keywords": [],
+
+  "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
+  "models": {
+    "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },
+    "tier2": { "litellm_name": "tier-2-worker",       "ollama_model": "qwen3.6:35b", "short": "qwen35b" },
+    "tier3": { "provider": "claude",  "model": "claude-haiku-4-5",  "short": "haiku"  },
+    "tier4": { "provider": "gemini",  "model": "",                  "short": "gemini" },
+    "tier5": { "provider": "claude",  "model": "claude-sonnet-4-6", "short": "sonnet" },
+    "tier6": { "provider": "claude",  "model": "claude-opus-4-8",   "short": "opus"   }
+  },
+
+  "_comment_providers": "Infrastructure URLs. Change ollama_url if Ollama runs on a different host/port.",
+  "providers": {
+    "ollama_url":  "http://localhost:11434",
+    "litellm_url": "http://localhost:4000",
+    "litellm_key": "sk-orchestrator-local"
+  }
 }

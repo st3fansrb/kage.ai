@@ -1,0 +1,17 @@
+model_list:
+  - model_name: KAGE_TIER1_NAME
+    litellm_params:
+      model: ollama/KAGE_TIER1_MODEL
+      api_base: KAGE_OLLAMA_URL
+
+  - model_name: KAGE_TIER2_NAME
+    litellm_params:
+      model: ollama/KAGE_TIER2_MODEL
+      api_base: KAGE_OLLAMA_URL
+
+router_settings:
+  num_retries: 2
+  timeout: 120
+
+general_settings:
+  master_key: KAGE_LITELLM_KEY

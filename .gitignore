@@ -12,6 +12,7 @@ status.json
 usage_log.jsonl
 scheduled_tasks.json
 risk_settings.json
+litellm_config.yaml
 
 __pycache__/
 *.pyc
