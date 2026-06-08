@@ -449,11 +449,17 @@ async def startup_cache():
         _db_conn.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL DEFAULT 'default',
                 role TEXT,
                 content TEXT,
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Non-destructive migration: add session_id to existing tables
+        existing_cols = [r[1] for r in _db_conn.execute("PRAGMA table_info(messages)").fetchall()]
+        if "session_id" not in existing_cols:
+            _db_conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT 'default'")
+        _db_conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id)")
         _db_conn.commit()
 
         _chroma_client = chromadb.PersistentClient(path=str(CACHE_DB_PATH))
@@ -593,19 +599,35 @@ async def api_pending():
 
 
 @app.get("/api/history")
-async def api_history():
-    """Return last 50 messages from SQLite history."""
+async def api_history(session_id: str = "default"):
+    """Return last 50 messages for a session from SQLite history."""
     if _db_conn is None:
         return []
     try:
         cursor = _db_conn.execute(
-            "SELECT role, content FROM messages ORDER BY id DESC LIMIT 50"
+            "SELECT role, content FROM messages WHERE session_id=? ORDER BY id DESC LIMIT 50",
+            (session_id,)
         )
         rows = cursor.fetchall()
-        # Return in chronological order
         return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
     except Exception as e:
         logger.error(f"History fetch failed: {e}")
+        return []
+
+
+@app.get("/api/sessions")
+async def api_sessions():
+    """Return list of recent chat sessions."""
+    if _db_conn is None:
+        return []
+    try:
+        cursor = _db_conn.execute("""
+            SELECT session_id, MIN(timestamp) as started, COUNT(*) as msg_count
+            FROM messages GROUP BY session_id ORDER BY started DESC LIMIT 20
+        """)
+        return [{"id": r[0], "started": r[1], "messages": r[2]} for r in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"Sessions fetch failed: {e}")
         return []
 
 
@@ -757,6 +779,7 @@ async def task_run(request: Request):
 async def chat_completions(request: Request):
     body = await request.json()
     messages: list = body.get("messages", [])
+    session_id: str = request.headers.get("x-session-id", "default")
 
     last_user = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
@@ -823,7 +846,7 @@ async def chat_completions(request: Request):
     # Save User message to SQLite
     if _db_conn:
         try:
-            _db_conn.execute("INSERT INTO messages (role, content) VALUES (?, ?)", ("user", last_user))
+            _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "user", last_user))
             _db_conn.commit()
         except Exception as e:
             logger.error(f"Failed to save user message: {e}")
@@ -860,7 +883,7 @@ async def chat_completions(request: Request):
                 # History store
                 if _db_conn:
                     try:
-                        _db_conn.execute("INSERT INTO messages (role, content) VALUES (?, ?)", ("assistant", clean_text))
+                        _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "assistant", clean_text))
                         _db_conn.commit()
                     except Exception as e:
                         logger.error(f"Failed to save assistant message: {e}")
