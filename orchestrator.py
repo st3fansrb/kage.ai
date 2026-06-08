@@ -73,16 +73,27 @@ EMBED_MODEL          = _cfg.get("embed_model",      "nomic-embed-text")
 CACHE_SIMILARITY_THRESHOLD = _cfg.get("cache_threshold", 0.92)
 CACHE_TTL_SECONDS    = _cfg.get("cache_ttl",        86400)
 
-TIER_MODELS = {
-    1: "tier-1-orchestrator",
-    2: "tier-2-worker",
-    3: ("claude", "claude-haiku-4-5"),
-    4: ("gemini", None),
-    5: ("claude", "claude-sonnet-4-6"),
-    6: ("claude", "claude-opus-4-8"),
-}
+def _build_tier_models(cfg: dict) -> dict:
+    m = cfg.get("models", {})
+    def _t(key: str, prov_def: str, model_def: str):
+        t = m.get(key, {})
+        return (t.get("provider", prov_def), t.get("model", model_def) or model_def)
+    return {
+        1: m.get("tier1", {}).get("litellm_name", "tier-1-orchestrator"),
+        2: m.get("tier2", {}).get("litellm_name", "tier-2-worker"),
+        3: _t("tier3", "claude",  "claude-haiku-4-5"),
+        4: _t("tier4", "gemini",  ""),
+        5: _t("tier5", "claude",  "claude-sonnet-4-6"),
+        6: _t("tier6", "claude",  "claude-opus-4-8"),
+    }
 
-TIER_SHORT = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+def _build_tier_short(cfg: dict) -> dict:
+    m = cfg.get("models", {})
+    _defaults = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+    return {i: m.get(f"tier{i}", {}).get("short", _defaults[i]) for i in range(1, 7)}
+
+TIER_MODELS = _build_tier_models(_cfg)
+TIER_SHORT  = _build_tier_short(_cfg)
 
 _TIER_CONFIDENCE = {1: 0.9, 2: 0.75, 3: 0.8, 4: 0.8, 5: 0.85, 6: 0.9}
 

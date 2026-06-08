@@ -79,17 +79,56 @@ if [ ! -f "$DIR/kage_config.json" ]; then
     warn "  - ntfy_topic: pick a unique name (e.g. kage-yourname-abc123)"
     warn "  - api_token:  run 'openssl rand -hex 20' and paste the result"
     warn "  - vault_path: path to your Obsidian vault (or any folder)"
+    warn "  - models:     adjust tier→model mapping if you have different models"
     echo ""
 else
     ok "kage_config.json exists"
 fi
 
-# Ollama model
+# litellm_config.yaml (generated from kage_config.json models section)
+if [ ! -f "$DIR/litellm_config.yaml" ]; then
+    "$DIR/.venv/bin/python3" - "$DIR" <<'PYEOF'
+import sys, json
+from pathlib import Path
+d   = Path(sys.argv[1])
+cfg = json.loads((d / "kage_config.json").read_text())
+m   = cfg.get("models", {})
+p   = cfg.get("providers", {})
+t1  = m.get("tier1", {})
+t2  = m.get("tier2", {})
+tmpl = (d / "litellm_config.example.yaml").read_text()
+tmpl = tmpl.replace("KAGE_TIER1_NAME",  t1.get("litellm_name", "tier-1-orchestrator"))
+tmpl = tmpl.replace("KAGE_TIER1_MODEL", t1.get("ollama_model",  "qwen3:8b"))
+tmpl = tmpl.replace("KAGE_TIER2_NAME",  t2.get("litellm_name", "tier-2-worker"))
+tmpl = tmpl.replace("KAGE_TIER2_MODEL", t2.get("ollama_model",  "qwen3.6:35b"))
+tmpl = tmpl.replace("KAGE_OLLAMA_URL",  p.get("ollama_url",     "http://localhost:11434"))
+tmpl = tmpl.replace("KAGE_LITELLM_KEY", p.get("litellm_key",   "sk-orchestrator-local"))
+(d / "litellm_config.yaml").write_text(tmpl)
+PYEOF
+    ok "litellm_config.yaml generated"
+else
+    ok "litellm_config.yaml exists"
+fi
+
+# Ollama model discovery
 if command -v ollama &>/dev/null; then
-    if ollama list 2>/dev/null | grep -q "qwen"; then
-        ok "Qwen model available"
+    OLLAMA_MODELS=$("$DIR/.venv/bin/python3" -c "
+import urllib.request, json, sys
+try:
+    data = json.loads(urllib.request.urlopen('http://localhost:11434/api/tags', timeout=2).read())
+    names = [m['name'] for m in data.get('models', [])]
+    print('\n'.join(names)) if names else print('')
+except Exception:
+    print('')
+" 2>/dev/null || echo "")
+    if [ -n "$OLLAMA_MODELS" ]; then
+        ok "Ollama running — available models:"
+        echo "$OLLAMA_MODELS" | while read -r model; do echo "      $model"; done
     else
-        warn "No Qwen model found — pull with: ollama pull qwen3:8b"
+        warn "Ollama not running or no models pulled yet"
+        warn "  Pull tier-1: ollama pull qwen3:8b"
+        warn "  Pull tier-2: ollama pull qwen3.6:35b"
+        warn "  Pull embed:  ollama pull nomic-embed-text"
     fi
 fi
 
