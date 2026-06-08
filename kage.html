@@ -249,6 +249,7 @@ button{font-family:inherit;color:inherit;border:none;background:none;cursor:poin
       <span class="mark"><span class="glyph"></span>kage</span>
       <span class="conn"><span class="cdot"></span>localhost:4001</span>
       <a href="/dashboard" class="dash-link" title="Dashboard">📊</a>
+      <button id="btnNewChat" class="dash-link" title="New conversation" onclick="newChat()" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0 4px;">✦</button>
       <span class="mini" id="budgetMini"><b>—</b>/20 cloud</span>
     </header>
     <div class="feed" id="feed"></div>
@@ -322,6 +323,10 @@ const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=
 
 /* ---------- auth token (injected by orchestrator at serve-time) ---------- */
 const API_TOKEN = '';
+
+/* ---------- session ---------- */
+let sessionId = localStorage.getItem('kage_session') || crypto.randomUUID();
+localStorage.setItem('kage_session', sessionId);
 
 function authFetch(url, opts) {
   opts = opts || {};
@@ -496,7 +501,7 @@ function flashPendingTab(){
    ============================================================ */
 async function loadHistory(){
   try {
-    const history = await authFetch('/api/history').then(r=>r.json());
+    const history = await authFetch('/api/history?session_id='+encodeURIComponent(sessionId)).then(r=>r.json());
     if(!history || !history.length) return;
     
     // Clear feed if needed or just append
@@ -518,6 +523,14 @@ async function loadHistory(){
     });
     scrollFeed();
   } catch(e) { console.warn('Failed to load history:', e); }
+}
+
+function newChat(){
+  sessionId = crypto.randomUUID();
+  localStorage.setItem('kage_session', sessionId);
+  conversationHistory.length = 0;
+  feed.innerHTML = '';
+  scrollFeed();
 }
 
 /* ============================================================
@@ -612,7 +625,7 @@ async function handleSend(){
   try{
     const resp = await authFetch('/v1/chat/completions',{
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json', 'X-Session-Id': sessionId},
       body:JSON.stringify({model:'auto', messages:conversationHistory, stream:true}),
     });
 
