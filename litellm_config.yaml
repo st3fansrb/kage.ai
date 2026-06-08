@@ -1,0 +1,17 @@
+model_list:
+  - model_name: tier-1-orchestrator
+    litellm_params:
+      model: ollama/qwen3:8b
+      api_base: http://localhost:11434
+
+  - model_name: tier-2-worker
+    litellm_params:
+      model: ollama/qwen3.6:35b
+      api_base: http://localhost:11434
+
+router_settings:
+  num_retries: 2
+  timeout: 120
+
+general_settings:
+  master_key: sk-orchestrator-local

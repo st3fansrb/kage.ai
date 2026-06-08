@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "KAGE_DIR/.venv/bin/python3 KAGE_DIR/risk_hook.py"
+          }
+        ]
+      }
+    ]
+  }
+}

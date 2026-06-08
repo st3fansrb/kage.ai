@@ -1,0 +1,16 @@
+{
+  "_comment": "Copy this file to kage_config.json and fill in your values.",
+
+  "ntfy_url": "https://ntfy.sh",
+  "ntfy_topic": "CHANGEME-pick-a-unique-topic-name",
+  "orchestrator_tailscale_url": "http://localhost:4001",
+  "autonomous_mode": false,
+  "confirm_timeout_secs": 300,
+  "max_cloud_calls_per_day": 20,
+  "api_token": "CHANGEME-run: openssl rand -hex 20",
+
+  "vault_path": "~/Documents/MyVault",
+  "claude_cli": "",
+  "gemini_cli": "",
+  "personal_keywords": []
+}
