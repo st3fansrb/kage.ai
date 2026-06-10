@@ -4,6 +4,10 @@
   "ntfy_url": "https://ntfy.sh",
   "ntfy_topic": "CHANGEME-pick-a-unique-topic-name",
   "orchestrator_tailscale_url": "http://localhost:4001",
+
+  "_comment_telegram": "Telegram Bot Gateway — înlocuitor bidirecțional pentru ntfy. Obții token de la @BotFather, chat_id cu @userinfobot.",
+  "telegram_bot_token": "CHANGEME",
+  "telegram_chat_id": "CHANGEME",
   "autonomous_mode": false,
   "confirm_timeout_secs": 300,
   "max_cloud_calls_per_day": 20,

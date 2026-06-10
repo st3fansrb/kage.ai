@@ -25,6 +25,7 @@ from filelock import FileLock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+import telegram_gateway as _tg_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -129,6 +130,9 @@ _db_conn: Optional[sqlite3.Connection] = None
 # ── Pending risk approvals (kage UI) ─────────────────────────────────────────
 pending_risk_meta: dict[str, dict] = {}
 _active_task_queues: dict[str, asyncio.Queue] = {}
+
+# ── Telegram gateway (Faza 17) ────────────────────────────────────────────────
+_tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
 
 async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: str, is_sysrun: bool, parent_id: Optional[str] = None):
@@ -321,7 +325,7 @@ async def _run_scheduled_task(task: dict) -> None:
     _log_to_vault(tier, f"[SCHEDULED] {msg}", obs_context is not None, confidence, False)
 
     preview = result_text[:200] if result_text else "(niciun răspuns)"
-    _send_ntfy_sync(f"⏰ T{tier}: {msg[:40]}", preview, priority="default")
+    _notify(f"⏰ T{tier}: {msg[:40]}", preview, priority="default")
     logger.info(f"Scheduled task done: tier={tier} msg={msg[:40]!r}")
 
 
@@ -409,6 +413,27 @@ async def startup_scheduler():
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
         logger.error(f"Scheduler startup failed: {e}")
+
+
+@app.on_event("startup")
+async def startup_telegram():
+    global _tg_gateway
+    try:
+        cfg = _load_kage_config()
+        gw = _tg_module.init_gateway(cfg)
+        if gw:
+            _tg_gateway = gw
+            await _tg_gateway.start()
+        else:
+            logger.info("[TelegramGateway] dezactivat (telegram_bot_token/chat_id neconfigurate)")
+    except Exception as e:
+        logger.error(f"Telegram gateway startup failed: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_telegram():
+    if _tg_gateway:
+        await _tg_gateway.stop()
 
 
 TIER_EXAMPLES: dict[int, list[str]] = {
@@ -509,13 +534,20 @@ async def risk_register(request_id: str, request: Request):
         body = await request.json()
     except Exception:
         body = {}
+    tool_name = body.get("tool_name", "")
+    cmd = body.get("cmd", "")
+    reason = body.get("reason", "")
     pending_risk_meta[request_id] = {
         "id": request_id,
-        "tool_name": body.get("tool_name", ""),
-        "cmd": body.get("cmd", ""),
-        "reason": body.get("reason", ""),
+        "tool_name": tool_name,
+        "cmd": cmd,
+        "reason": reason,
         "time": body.get("time", "now"),
     }
+    if _tg_gateway:
+        asyncio.create_task(
+            _tg_gateway.send_risk_approval(request_id, tool_name, cmd, reason)
+        )
     return {"ok": True}
 
 
@@ -1016,7 +1048,7 @@ async def _qwen_classify(message: str) -> tuple[int, float, str]:
         logger.warning(f"Classification failed ({e}), failures={_ollama_failures}")
         if _ollama_failures >= 3:
             _ollama_dead = True
-            _send_ntfy_sync("⚠️ Ollama offline", "Clasificarea a eșuat de 3 ori. Fallback heuristic activ.", priority="high")
+            _notify("⚠️ Ollama offline", "Clasificarea a eșuat de 3 ori. Fallback heuristic activ.", priority="high")
             logger.error("Ollama circuit breaker tripped — heuristic fallback active")
         t = _heuristic_classify(message)
         return t, _TIER_CONFIDENCE.get(t, 0.75), "heur"
@@ -1072,7 +1104,7 @@ def _budget_check(tier: int, confidence: float) -> tuple[int, float, Optional[st
     today = datetime.date.today().isoformat()
 
     if cloud_today >= max_cloud:
-        _send_ntfy_sync(
+        _notify(
             "🚫 Budget cloud depășit",
             f"Limita de {max_cloud} apeluri cloud/zi atinsă. Request redirecționat la T2.",
             priority="high",
@@ -1083,7 +1115,7 @@ def _budget_check(tier: int, confidence: float) -> tuple[int, float, Optional[st
 
     if cloud_today >= int(max_cloud * 0.8) and _budget_alert_80_sent != today:
         _budget_alert_80_sent = today
-        _send_ntfy_sync(
+        _notify(
             "⚠️ Budget cloud 80%",
             f"{cloud_today}/{max_cloud} apeluri cloud folosite azi.",
             priority="default",
@@ -1835,6 +1867,13 @@ def _send_ntfy_sync(title: str, body: str, priority: str = "default") -> None:
         logger.debug(f"ntfy send failed: {e}")
 
 
+def _notify(title: str, body: str, priority: str = "default") -> None:
+    """Trimite notificare pe ntfy (sync) și Telegram (async, fire-and-forget)."""
+    _send_ntfy_sync(title, body, priority)
+    if _tg_gateway:
+        asyncio.create_task(_tg_gateway.send_notification(title, body, priority))
+
+
 def _status_snapshot() -> StreamingResponse:
     """Instant !status response — no LLM call."""
     try:
@@ -2082,7 +2121,7 @@ async def _route_litellm(
             logger.warning(f"Tier {tier} → Tier {fallback_tier} ({type(e).__name__})")
             info = f"[Tier {tier} unavailable → escalated to Tier {fallback_tier}]\n\n"
             yield f"data: {json.dumps({'choices': [{'delta': {'content': info}, 'index': 0}]})}\n\n"
-            _send_ntfy_sync(
+            _notify(
                 f"⬆️ Escalare tier {tier}→{fallback_tier}",
                 f"LiteLLM indisponibil, escalat automat la tier {fallback_tier}.",
             )

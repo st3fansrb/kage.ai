@@ -8,6 +8,8 @@ ntfy_config.json
 cache_db/
 .logs/
 
+.widget.log
+.widget.pid
 status.json
 usage_log.jsonl
 scheduled_tasks.json
