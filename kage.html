@@ -247,7 +247,7 @@ button{font-family:inherit;color:inherit;border:none;background:none;cursor:poin
   <section class="chat" data-screen-label="Chat">
     <header class="chat-top">
       <span class="mark"><span class="glyph"></span>kage</span>
-      <span class="conn"><span class="cdot"></span>localhost:4001</span>
+      <span class="conn"><span class="cdot"></span><span id="connHost">…</span></span>
       <a href="/dashboard" class="dash-link" title="Dashboard">📊</a>
       <button id="btnNewChat" class="dash-link" title="New conversation" onclick="newChat()" style="background:none;border:none;cursor:pointer;font-size:15px;padding:0 4px;">✦</button>
       <span class="mini" id="budgetMini"><b>—</b>/20 cloud</span>
@@ -356,7 +356,7 @@ let showAllChips = false;
 /* ---------- live state ---------- */
 const state = {
   budget:{used:0, max:20},
-  cache:{hits:0, miss:0},
+  cache:{hits:0, miss:0, memory:0},
   tiers:[0,0,0,0,0,0],
   recent:[],
   pending:[],
@@ -394,7 +394,7 @@ function renderCache(){
   const total = hits+miss;
   const rate = total > 0 ? Math.round(hits/total*100) : 0;
   $('#cacheRate').textContent = rate+'%';
-  $('#cacheMeta').textContent = hits+' hit · '+miss+' miss';
+  $('#cacheMeta').textContent = hits+' hit · '+miss+' miss · '+state.cache.memory+' ctx';
 }
 function renderTiers(){
   const bars = $('#bars');
@@ -670,7 +670,7 @@ async function handleSend(){
       }
     }
   }catch(e){
-    buffer = '*Connection error — is the orchestrator running on :4001?*';
+    buffer = '*Connection error — is the orchestrator running?*';
   }
 
   a.bub.innerHTML = md(buffer);
@@ -810,7 +810,7 @@ async function poll(){
   try{
     const s = await authFetch('/api/stats').then(r=>r.json());
     state.budget = {used: s.cloud||0, max: s.max_cloud||20};
-    state.cache  = {hits: s.cache_hits||0, miss: s.cache_misses||0};
+    state.cache  = {hits: s.cache_hits||0, miss: s.cache_misses||0, memory: s.memory_count||0};
     state.tiers  = [1,2,3,4,5,6].map(t=>(s.by_tier&&s.by_tier[t])||0);
     state.recent = (s.last_10||[]).slice(0,5).map(e=>({
       tier:  e.tier,
@@ -830,6 +830,7 @@ async function poll(){
    INIT
    ============================================================ */
 function init(){
+  $('#connHost').textContent = window.location.host;
   buildChips();
   renderAll();
 

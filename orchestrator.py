@@ -73,6 +73,11 @@ CACHE_DB_PATH        = PROJECT_ROOT / "cache_db"
 EMBED_MODEL          = _cfg.get("embed_model",      "nomic-embed-text")
 CACHE_SIMILARITY_THRESHOLD = _cfg.get("cache_threshold", 0.92)
 CACHE_TTL_SECONDS    = _cfg.get("cache_ttl",        86400)
+MAX_CONTEXT_MESSAGES = _cfg.get("max_context_messages", 20)
+ENABLE_SUMMARIZATION = _cfg.get("enable_summarization", False)
+MEMORY_TOP_K               = _cfg.get("memory_top_k", 5)
+MEMORY_DEDUP_THRESHOLD     = _cfg.get("memory_dedup_threshold", 0.95)
+MEMORY_RELEVANCE_THRESHOLD = _cfg.get("memory_relevance_threshold", 0.70)
 
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
@@ -123,6 +128,7 @@ _scheduler: Optional[AsyncIOScheduler] = None
 _chroma_client: Optional[chromadb.PersistentClient] = None
 _cache_collection = None
 _routing_collection = None
+_memory_collection = None
 _cache_hits: int = 0
 _cache_misses: int = 0
 _db_conn: Optional[sqlite3.Connection] = None
@@ -465,7 +471,7 @@ TIER_EXAMPLES: dict[int, list[str]] = {
 
 @app.on_event("startup")
 async def startup_cache():
-    global _chroma_client, _cache_collection, _routing_collection, _db_conn
+    global _chroma_client, _cache_collection, _routing_collection, _memory_collection, _db_conn
     try:
         CACHE_DB_PATH.mkdir(parents=True, exist_ok=True)
         # SQLite History
@@ -494,8 +500,11 @@ async def startup_cache():
         _routing_collection = _chroma_client.get_or_create_collection(
             "tier_routing", metadata={"hnsw:space": "cosine"}
         )
+        _memory_collection = _chroma_client.get_or_create_collection(
+            "long_term_memory", metadata={"hnsw:space": "cosine"}
+        )
         count = _cache_collection.count()
-        logger.info(f"ChromaDB ready — cache={count} routing={_routing_collection.count()}")
+        logger.info(f"ChromaDB ready — cache={count} routing={_routing_collection.count()} memory={_memory_collection.count()}")
         if count > 0:
             asyncio.create_task(_cache_vacuum())
 
@@ -856,8 +865,9 @@ async def chat_completions(request: Request):
 
     badge = _tier_badge_ext(tier, routing_method, confidence, budget_downgraded)
 
+    memory_ctx = await _memory_retrieve(session_id, last_user, precomputed_emb=cache_embedding)
     obs_context = _get_obsidian_context(last_user)
-    system_prompt = _build_system_prompt(tier, obs_context)
+    system_prompt = _build_system_prompt(tier, obs_context, memory_ctx)
     messages_out = _inject_system_prompt(messages, system_prompt)
     _save_match = re.search(r"!save\s+(\S+)", last_user, re.IGNORECASE)
     save_path: Optional[str] = _save_match.group(1) if _save_match else (
@@ -884,6 +894,7 @@ async def chat_completions(request: Request):
             logger.error(f"Failed to save user message: {e}")
 
     if tier <= 2:
+        messages_out = await _compact_messages(messages_out, MAX_CONTEXT_MESSAGES)
         response = await _route_litellm(tier, messages_out, system_prompt, last_user, messages, save_path=save_path, badge=badge)
     else:
         response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path, badge=badge)
@@ -912,6 +923,8 @@ async def chat_completions(request: Request):
                 # Cache store
                 if use_cache and cache_embedding is not None:
                     asyncio.create_task(_cache_store_async(cache_query, clean_text, tier, cache_embedding))
+                # Memory store — fire-and-forget
+                asyncio.create_task(_memory_store(session_id, last_user, clean_text))
                 # History store
                 if _db_conn:
                     try:
@@ -1206,6 +1219,60 @@ async def _cache_vacuum() -> None:
         logger.warning(f"Cache vacuum failed: {e}")
 
 
+async def _memory_store(session_id: str, user_msg: str, assistant_msg: str) -> None:
+    """Stochează perechea (user, assistant) în long_term_memory cu dedup per-sesiune."""
+    if _memory_collection is None:
+        return
+    try:
+        document = f"{user_msg[:300]}\n{assistant_msg[:300]}"
+        emb = await _get_embedding(document)
+        if emb is None:
+            return
+        # Dedup: skip dacă există deja un fapt similar în această sesiune
+        if _memory_collection.count() > 0:
+            results = _memory_collection.query(
+                query_embeddings=[emb], n_results=1,
+                where={"session_id": session_id},
+                include=["distances"],
+            )
+            if results["distances"] and results["distances"][0]:
+                if 1.0 - results["distances"][0][0] >= MEMORY_DEDUP_THRESHOLD:
+                    return
+        _memory_collection.add(
+            documents=[document],
+            embeddings=[emb],
+            metadatas=[{"session_id": session_id, "timestamp": str(_time.time()), "type": "context"}],
+            ids=[uuid.uuid4().hex],
+        )
+    except Exception as e:
+        logger.debug(f"[Memory] store failed: {e}")
+
+
+async def _memory_retrieve(
+    session_id: str, query: str, precomputed_emb: Optional[list] = None
+) -> str:
+    """Returnează faptele relevante din long_term_memory pentru injecție în system prompt."""
+    if _memory_collection is None or _memory_collection.count() == 0:
+        return ""
+    try:
+        emb = precomputed_emb or await _get_embedding(query[:500])
+        if emb is None:
+            return ""
+        n = min(MEMORY_TOP_K, _memory_collection.count())
+        results = _memory_collection.query(
+            query_embeddings=[emb], n_results=n,
+            include=["documents", "distances"],
+        )
+        relevant = [
+            doc for doc, dist in zip(results["documents"][0], results["distances"][0])
+            if 1.0 - dist >= MEMORY_RELEVANCE_THRESHOLD
+        ]
+        return "\n".join(relevant) if relevant else ""
+    except Exception as e:
+        logger.debug(f"[Memory] retrieve failed: {e}")
+        return ""
+
+
 def _make_cache_hit_response(response_text: str, tier: int) -> StreamingResponse:
     badge = f"**[CACHE·T{tier}·{TIER_SHORT.get(tier, '?')}]** "
     full = badge + response_text
@@ -1281,6 +1348,7 @@ def _aggregate_usage() -> dict:
         "cache_hits": _cache_hits,
         "cache_misses": _cache_misses,
         "task_count": task_count,
+        "memory_count": _memory_collection.count() if _memory_collection else 0,
     }
 
 
@@ -2022,7 +2090,56 @@ _STEFAN_BASE = (
 )
 
 
-def _build_system_prompt(tier: int, obs_context: Optional[str]) -> str:
+async def _compact_messages(messages_out: list, max_messages: int) -> list:
+    """Sliding window compaction pentru LiteLLM (tiers 1-2). Protejează system prompt."""
+    system_msgs = [m for m in messages_out if m.get("role") == "system"]
+    conv_msgs   = [m for m in messages_out if m.get("role") != "system"]
+
+    if len(conv_msgs) <= max_messages:
+        return messages_out
+
+    window   = conv_msgs[-max_messages:]
+    overflow = conv_msgs[:-max_messages]
+
+    summary_msg: Optional[dict] = None
+
+    if ENABLE_SUMMARIZATION:
+        overflow_text = "\n".join(
+            f"{'User' if m['role'] == 'user' else 'Assistant'}: {str(m.get('content',''))[:400]}"
+            for m in overflow
+        )
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    f"{LITELLM_URL}/chat/completions",
+                    json={
+                        "model": TIER_MODELS[2],
+                        "messages": [
+                            {"role": "user", "content": (
+                                "Rezumă concis în 3-5 puncte esențiale, păstrând fapte și context tehnic:\n"
+                                f"<conversatie>{overflow_text}</conversatie>"
+                            )}
+                        ],
+                        "stream": False,
+                    },
+                    timeout=30,
+                )
+            summary_text = (
+                resp.json().get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+            )
+            if summary_text:
+                summary_msg = {"role": "assistant", "content": f"[Rezumat conversație anterioară]\n{summary_text}"}
+        except Exception as e:
+            logger.warning(f"[Compaction] summarization failed, using sliding window: {e}")
+
+    result = system_msgs + ([summary_msg] if summary_msg else []) + window
+    logger.debug(f"[Compaction] {len(conv_msgs)} → {len(result) - len(system_msgs)} conv msgs (max={max_messages})")
+    return result
+
+
+def _build_system_prompt(tier: int, obs_context: Optional[str], memory_ctx: Optional[str] = None) -> str:
     if tier == 1:
         base = _STEFAN_BASE + "\nFii concis — acesta e un task simplu."
     elif tier == 2:
@@ -2039,6 +2156,8 @@ def _build_system_prompt(tier: int, obs_context: Optional[str]) -> str:
 
     if obs_context:
         base += f"\n\n## Context personal (Obsidian StefanBrain)\n{obs_context}"
+    if memory_ctx:
+        base += f"\n\n## Memorie relevantă\n{memory_ctx}"
 
     return base
 
