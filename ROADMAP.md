@@ -3,9 +3,14 @@
 Sursă unică de adevăr pentru tot ce e planificat, în lucru, sau decis conștient că nu se face.
 `MULTI_TENANT_ARCH.md` a fost absorbit aici — poate fi șters.
 
+> **03.07.2026:** evaluarea tehnică completă e în `KAGE-EVALUARE.md`, iar planul de execuție
+> prioritizat (pachete de lucru + criterii de acceptare, pentru sesiuni AI viitoare) e în
+> `KAGE-HANDOFF.md`. **Ordinea de implementare de acolo are prioritate** față de secțiunile
+> „Prioritate medie/scăzută" de mai jos, care rămân ca istoric de idei.
+
 ---
 
-## Starea curentă: Faza 17 ✅
+## Starea curentă: Faza 19 ✅
 
 | Feature | Status |
 |---|---|
@@ -25,27 +30,12 @@ Sursă unică de adevăr pentru tot ce e planificat, în lucru, sau decis conșt
 | `kage_config.json` ca sursă de config unificată | ✅ |
 | Separare completă de Odysseus (eliminat din toate scripturile) | ✅ |
 | Telegram Bot Gateway (`@kage_hub_bot`) — canal bidirecțional, aprobare risc inline | ✅ |
-
----
-
-## Prioritate înaltă
-
-### Context Compaction
-Prevenirea erorilor de overflow la conversații lungi — prerequisit pentru orice UI nou.
-
-- Trunchierea inteligentă a contextului când depășește limita modelului
-- Rezumare automată a turelor vechi înainte de trimitere
-- Port al `services/context_compactor.py` din [Odysseus](https://github.com/pewdiepie-archdaemon/odysseus) (MIT)
-
----
-
-### Long-term Memory Vector
-Memorie reală per conversație — nu cache pe răspunsuri, ci fapte și preferințe persistente.
-
-- ChromaDB separat de semantic cache (colecție `long_term_memory`)
-- Injectat automat în prompt la fiecare turn relevant
-- Port al `services/memory_vector.py` din Odysseus (MIT)
-- Include fix auto-dedup (prezent în Odysseus, relevant pentru ChromaDB-ul local)
+| Context compaction (sliding window + summarization opțional, tiers 1-2) — Faza 18 | ✅ |
+| Long-term memory vector (`long_term_memory`, dedup, injecție în prompt) — Faza 18 | ✅ |
+| `kage.html` URL relativ (`window.location.host`) — prerequisit Cloudflare | ✅ |
+| Workspace confinement (`allowed_task_roots` pentru `!run`/`!sysrun`/`!swarm`) — Faza 19 | ✅ |
+| Backup zilnic `cache_db/` (tar.gz, rotație, `POST /admin/backup`) — Faza 19 | ✅ |
+| Suită teste pytest (28 teste: routing, budget, compaction, confinement, memory, backup) — Faza 19 | ✅ |
 
 ---
 
@@ -54,7 +44,7 @@ Memorie reală per conversație — nu cache pe răspunsuri, ci fapte și prefer
 ### Acces Remote via Cloudflare Tunnel
 Face Kage accesibil de pe orice device fără VPN sau port forwarding manual.
 
-**Prerequisit:** `kage.html` trebuie să folosească URL relativ în loc de `localhost:4001` hardcodat (schimbare ~10 linii).
+**Prerequisit:** ✅ rezolvat — `kage.html` folosește deja URL relativ (`window.location.host`).
 
 **Pași implementare:**
 ```bash
@@ -78,11 +68,8 @@ Indexare și căutare în vault-ul Obsidian sau fișiere locale — distinctă f
 
 ---
 
-### Workspace Confinement
-Complement al risk gate-ului — limitează `!run`/`!sysrun` la un folder definit.
-
-- `allowed_path` ca parametru opțional: orice tool call în afara lui e blocat automat
-- Port al `feat: workspace confinement` din Odysseus (MIT)
+### Workspace Confinement ✅ (Faza 19)
+Implementat — `_validate_task_cwd` validează `cwd`-ul agenților `!run`/`!sysrun`/`!swarm` față de `allowed_task_roots` din `kage_config.json` (canonicalizare cu `resolve()`, anti-bypass `..`/symlink). Listă goală/absentă = dezactivat (non-breaking); `PROJECT_ROOT` mereu permis pentru `!sysrun`. Task respins → răspuns `[BLOCKED]`, niciun subprocess lansat.
 
 ---
 
@@ -137,28 +124,23 @@ Extensie a `!swarm` existent — fiecare subagent primește un buget de cloud ca
 
 ## Stabilitate & Ops
 
-### Backup `cache_db/`
-`chat_history.db` (SQLite) și ChromaDB nu au strategie de backup. La corupere pierzi tot istoricul.
-
-- Script cron zilnic care copiază `cache_db/` în `~/Documents/StefanBrain/backups/kage/`
-- Sau rsync pe un volum extern
+### Backup `cache_db/` ✅ (Faza 19)
+`_backup_cache_db()` rulează zilnic la 05:00 (după vacuum-ul de la 04:00): snapshot SQLite via Online Backup API + copytree pentru ChromaDB, arhivat `cache_db-YYYYMMDD-HHMMSS.tar.gz` în `backup_dir` (default `~/Documents/StefanBrain/backups/kage`), cu rotație `backup_keep` (default 7). Trigger manual: `POST /admin/backup`.
 
 ---
 
-### kage.html URL Relativ
-Hardcodat azi: `http://localhost:4001`. Blochează Cloudflare Remote Access.
-
-- Înlocuiește toate referințele fixe cu URL relativ (`/api/...`) sau derivat din `window.location.origin`
-- Task mic (~10 linii), dar prerequisit obligatoriu înainte de Cloudflare
+### kage.html URL Relativ ✅
+Rezolvat — `kage.html` derivă host-ul din `window.location.host`, fără `localhost:4001` hardcodat. Cloudflare Remote Access nu mai e blocat de asta.
 
 ---
 
-### Teste de bază
-Zero acoperire azi la 2500+ linii. Risc real la refactoring.
+### Teste de bază ✅ (Faza 19)
+Suită pytest (`tests/`, `pytest.ini`, `requirements-dev.txt`): 28 teste pe `_heuristic_classify`, `_build_tier_models/short`, `decide_tier` (prefixe forțate), `_usage_counts_today`, `_budget_check`, `_compact_messages`, `_validate_task_cwd`, `_memory_retrieve`, `_backup_cache_db`. Import sigur al modulului (startup events nu rulează la import). Rulare: `pytest`.
 
-- Unit teste pentru `decide_tier`, `_budget_check`, `_semantic_classify`
-- Integration test pentru flow complet (mock LiteLLM + ChromaDB)
-- Nu e blocker pentru nicio altă fază, dar reduce riscul la modificări
+---
+
+### Mai rămâne
+- Integration test end-to-end pentru flow-ul complet (mock LiteLLM + ChromaDB) — unit-testele acoperă logica izolată, dar nu și calea HTTP completă.
 
 ---
 
@@ -175,7 +157,7 @@ Kage ca produs pentru verticala manufacturing/automotive România:
 ## Ce NU facem (decizie conștientă)
 
 - **Multi-user auth complex** — Kage e personal acum; multi-tenant vine abia cu Cloudflare Zero Trust
-- **Docker setup** — overhead nejustificat pentru deploy local
+- **Docker pentru deploy** — rămâne exclus (Ollama are nevoie de Metal → totul nativ); **revizuit 04.07.2026:** Docker e acceptat ca sandbox on-demand per-task pentru agenții `!run` (WP-G2 în KAGE-HANDOFF)
 - **Calendar / Email / Gallery integrations** — scope creep față de core use case
-- **Skill creation loop** (Hermes-style) — arhitectură separată, complexitate nejustificată momentan
-- **Voice transcription** — interesant dar nu în core loop
+- **Skill creation loop** (Hermes-style) — ~~complexitate nejustificată~~ **revizuit 03.07.2026:** skills scrise de mână în format Agent Skills intră în scope (itemul #12 din KAGE-EVALUARE); auto-distilarea rămâne exclusă până există run ledger (#5), și doar ca draft + aprobare
+- **Voice transcription** — ~~nu în core loop~~ **răsturnat 03.07.2026:** voice memos pe Telegram (whisper.cpp local, #13) și push-to-talk pe Mac + wake word (#14) intră în scope
