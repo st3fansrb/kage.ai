@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
 import tarfile
@@ -31,6 +32,9 @@ import telegram_gateway as _tg_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+# httpx la INFO scrie URL-ul complet al fiecărui getUpdates → token-ul botului Telegram
+# ajunge în log. Ridicăm pragul la WARNING. (WP1 / D-token)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent
@@ -291,6 +295,18 @@ async def auth_middleware(request: Request, call_next):
     return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
 
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Prinde orice excepție nehandled: loghează + notifică pe canalul de alerte,
+    în loc să lase clientul cu un 500 mut (exact golul prin care a trecut D1)."""
+    logger.exception(f"Eroare internă la {request.method} {request.url.path}: {exc}")
+    try:
+        _notify("💥 Eroare internă", f"{request.url.path}: {exc}", priority="high")
+    except Exception:
+        pass
+    return JSONResponse({"error": "internal server error", "detail": str(exc)}, status_code=500)
+
+
 # ── Scheduler helpers (Faza 10) ───────────────────────────────────────────────
 
 def _parse_cron(cron_str: str) -> dict:
@@ -369,9 +385,7 @@ async def _run_scheduled_task(task: dict) -> None:
 
 async def _handle_schedule_command(message: str) -> StreamingResponse:
     """Handle !schedule \"CRON\" mesaj from chat."""
-    import re as _re
-
-    m = _re.match(r'!schedule\s+"([^"]+)"\s+(.+)', message, _re.IGNORECASE | _re.DOTALL)
+    m = re.match(r'!schedule\s+"([^"]+)"\s+(.+)', message, re.IGNORECASE | re.DOTALL)
 
     async def respond(text: str):
         yield f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
@@ -786,17 +800,19 @@ async def pwa_manifest():
     })
 
 
-@app.post("/task/run")
-async def task_run(request: Request):
-    """Spawn autonomous agent as background task and stream output back.
-    Saves to history even if stream disconnects.
-    """
-    body = await request.json()
-    task_text = body.get("task", "").strip()
-    cwd = body.get("cwd", str(Path.home()))
+def _prepare_and_launch_task(task_text: str, cwd: str, register_queue: bool = True) -> tuple[Optional[str], Optional[str]]:
+    """Pregătește și pornește în fundal un task de agent (!run/!swarm/!sysrun).
 
+    Aplică transformarea !sysrun, verifică confinement-ul (allowed_task_roots),
+    alege swarm vs single agent (+ backend gemini/claude) și spawn-ează execuția.
+    Returnează (task_id, None) la succes sau (None, mesaj_eroare) dacă task-ul e gol
+    sau cwd-ul e blocat. Cu register_queue=True înregistrează o coadă în
+    _active_task_queues pentru streaming (folosit de /task/run); cu False task-ul
+    rulează fără consumator de stream — output-ul e salvat în DB oricum.
+    """
+    task_text = task_text.strip()
     if not task_text:
-        return JSONResponse({"error": "task is required"}, status_code=400)
+        return None, "task is required"
 
     # 1. System context routing (!sysrun)
     is_sysrun = task_text.startswith("!sysrun")
@@ -814,13 +830,7 @@ async def task_run(request: Request):
     if validated_cwd is None:
         logger.warning(f"[Confinement] task respins — cwd '{cwd}' în afara allowed_task_roots")
         _notify("🚫 Task blocat (confinement)", f"cwd {cwd} în afara workspace-ului permis", priority="default")
-
-        async def _blocked():
-            msg = f"**[BLOCKED]** cwd `{cwd}` e în afara workspace-ului permis (`allowed_task_roots`)."
-            yield f'data: {json.dumps({"choices": [{"delta": {"content": msg}}]})}\n\n'
-            yield "data: [DONE]\n\n"
-
-        return StreamingResponse(_blocked(), media_type="text/event-stream")
+        return None, f"cwd `{cwd}` e în afara workspace-ului permis (`allowed_task_roots`)."
     cwd = validated_cwd
 
     # 2. Swarm vs Single Agent
@@ -828,8 +838,8 @@ async def task_run(request: Request):
     if is_swarm:
         task_text = task_text[len("!swarm"):].strip()
         task_id = uuid.uuid4().hex[:8]
-        queue = asyncio.Queue()
-        _active_task_queues[task_id] = queue
+        if register_queue:
+            _active_task_queues[task_id] = asyncio.Queue()
         asyncio.create_task(_swarm_task_exec(task_id, task_text, cwd, is_sysrun))
     else:
         # Single agent backend selection
@@ -842,9 +852,34 @@ async def task_run(request: Request):
             task_text = task_text[7:].strip()
 
         task_id = uuid.uuid4().hex[:8]
-        queue = asyncio.Queue()
-        _active_task_queues[task_id] = queue
+        if register_queue:
+            _active_task_queues[task_id] = asyncio.Queue()
         asyncio.create_task(_background_task_exec(task_id, task_text, agent, cwd, is_sysrun))
+
+    return task_id, None
+
+
+@app.post("/task/run")
+async def task_run(request: Request):
+    """Spawn autonomous agent as background task and stream output back.
+    Saves to history even if stream disconnects.
+    """
+    body = await request.json()
+    task_text = body.get("task", "").strip()
+    cwd = body.get("cwd", str(Path.home()))
+
+    if not task_text:
+        return JSONResponse({"error": "task is required"}, status_code=400)
+
+    task_id, error = _prepare_and_launch_task(task_text, cwd, register_queue=True)
+    if error is not None:
+        async def _blocked():
+            yield f'data: {json.dumps({"choices": [{"delta": {"content": f"**[BLOCKED]** {error}"}}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_blocked(), media_type="text/event-stream")
+
+    queue = _active_task_queues[task_id]
 
     async def _stream():
         try:
@@ -873,15 +908,75 @@ async def admin_backup():
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
+async def _sse_to_openai_json(resp: StreamingResponse, model: str = "kage") -> JSONResponse:
+    """Consumă un StreamingResponse SSE și îl transformă într-un răspuns JSON
+    OpenAI-compatible (non-stream). Golirea generatorului declanșează și efectele
+    lui secundare (salvare istoric/cache/memorie), la fel ca în modul stream."""
+    collected: list[str] = []
+    async for chunk in resp.body_iterator:
+        chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for line in chunk_str.splitlines():
+            if line.startswith("data: ") and "[DONE]" not in line:
+                try:
+                    delta = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {})
+                    piece = delta.get("content", "")
+                    if piece:
+                        collected.append(piece)
+                except Exception:
+                    pass
+    content = "".join(collected)
+    return JSONResponse({
+        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+        "object": "chat.completion",
+        "created": int(_time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+    })
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
+    resp = await _chat_dispatch(request, body)
+    # Ramură non-stream: dacă clientul cere stream:false (ex. gateway-ul Telegram),
+    # colapsează SSE-ul într-un JSON OpenAI standard. (WP1 / D2)
+    if body.get("stream") is False and isinstance(resp, StreamingResponse):
+        return await _sse_to_openai_json(resp)
+    return resp
+
+
+async def _chat_dispatch(request: Request, body: dict):
     messages: list = body.get("messages", [])
     session_id: str = request.headers.get("x-session-id", "default")
 
     last_user = next(
         (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
     )
+
+    # Handler server-side pentru task-urile de agent (!run/!swarm/!sysrun), ÎNAINTE
+    # de cache. Pornește task-ul în fundal și răspunde cu o confirmare + task id.
+    # Streamul complet al task-ului (spre Telegram/UI) vine la WP8. (WP1 / D13)
+    _lu_stripped = last_user.strip()
+    if re.match(r"^!(run|swarm|sysrun)\b", _lu_stripped, re.IGNORECASE):
+        if _lu_stripped.lower().startswith("!run"):
+            _task_text = _lu_stripped[len("!run"):].strip()
+        else:
+            _task_text = _lu_stripped  # !swarm / !sysrun sunt interpretate în helper
+        task_id, error = _prepare_and_launch_task(_task_text, str(Path.home()), register_queue=False)
+        if error is not None:
+            confirm = f"**[BLOCKED]** {error}"
+        else:
+            confirm = f"🚀 Task pornit — id `{task_id}`. Rulează în fundal; rezultatul va veni când e gata."
+
+        async def _agent_confirm():
+            yield f'data: {json.dumps({"choices": [{"delta": {"content": confirm}, "index": 0}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_agent_confirm(), media_type="text/event-stream")
 
     if last_user.strip() == "!status":
         return _status_snapshot()
@@ -957,7 +1052,6 @@ async def chat_completions(request: Request):
         response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path, badge=badge)
 
     # Wrap generator to store response in cache and history after streaming completes
-    import re as _re
     original_gen = response.body_iterator
 
     async def history_caching_gen():
@@ -975,7 +1069,7 @@ async def chat_completions(request: Request):
         if collected:
             full = "".join(collected)
             # Strip leading badge (e.g. **[T3·haiku·sem:0.97]** )
-            clean_text = _re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
+            clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
             if clean_text:
                 # Cache store
                 if use_cache and cache_embedding is not None:

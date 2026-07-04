@@ -139,8 +139,15 @@ Suită pytest (`tests/`, `pytest.ini`, `requirements-dev.txt`): 28 teste pe `_he
 
 ---
 
-### Mai rămâne
-- Integration test end-to-end pentru flow-ul complet (mock LiteLLM + ChromaDB) — unit-testele acoperă logica izolată, dar nu și calea HTTP completă.
+### WP1 — Reparația fundației ✅ (04.07.2026)
+
+Primul pachet din `KAGE-HANDOFF.md`. Rezolvă D1/D2/D13 + igienă de log:
+- `import re` global (înlocuiește cele două `import re as _re` locale) — repară **500-ul de chat** (`NameError: re`) prezent din 8 iunie (D1).
+- Ramură **non-stream** în `POST /v1/chat/completions`: `stream:false` întoarce un JSON OpenAI standard (`_sse_to_openai_json`) — deblochează gateway-ul Telegram care făcea `resp.json()` pe corp SSE (D2).
+- Handler **server-side pentru `!run`/`!swarm`/`!sysrun`** în chat (`_prepare_and_launch_task`, refolosit și de `/task/run`): pornește task-ul și confirmă cu id (D13). Streamul complet spre Telegram vine la WP8.
+- `@app.exception_handler(Exception)` → notificare + log în loc de 500 mut.
+- `httpx` logger la WARNING (nu mai scrie token-ul botului Telegram în log).
+- **Teste e2e pe stratul HTTP** (`tests/test_e2e.py`, `respx` + `TestClient`): SSE parsabil, `stream:false` → JSON valid, `!run` pornit, confinement blochează — golul D3.
 
 ---
 

@@ -182,7 +182,7 @@ Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > fișiere decât cele listate. La final raportează criteriile de acceptare unul câte unul și
 > aplică pașii de housekeeping din §7.
 
-### WP1 (#1) — Reparația fundației · efort: o seară–un weekend
+### WP1 (#1) — Reparația fundației ✅ (04.07.2026) · efort: o seară–un weekend
 
 **Fișiere:** `orchestrator.py`, `tests/test_e2e.py` (nou).
 **Pași:**
