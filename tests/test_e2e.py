@@ -185,3 +185,65 @@ def test_run_command_defaults_to_allowed_root(client, monkeypatch):
     assert "[BLOCKED]" not in resp.text
     assert "Task pornit" in resp.text
     assert launched.get("cwd") == str(root)
+
+
+# ── Test 6 (WP-G1): !stop din chat → kill switch, oprește procese + scheduler ──
+
+@respx.mock
+def test_stop_command_triggers_kill_switch(client, monkeypatch):
+    _mock_backends(respx.mock)
+
+    class _FakeScheduler:
+        def __init__(self):
+            self.paused = False
+
+        def pause(self):
+            self.paused = True
+
+    class _FakeProc:
+        def __init__(self):
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+    sched = _FakeScheduler()
+    monkeypatch.setattr(orchestrator, "_scheduler", sched)
+    orchestrator._running_procs.clear()
+    proc = _FakeProc()
+    orchestrator._register_proc(proc)
+
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "!stop"}]},
+    )
+    assert resp.status_code == 200
+    assert "Kill switch" in resp.text
+    assert proc.terminated is True
+    assert sched.paused is True
+
+
+# ── Test 7 (WP-G1): POST /api/stop → JSON cu rezumatul kill switch-ului ────────
+
+def test_api_stop_endpoint(client, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_scheduler", None)
+    orchestrator._running_procs.clear()
+    resp = client.post("/api/stop")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "procs_killed" in body
+    assert "scheduler_paused" in body
+
+
+# ── Test 8 (WP-G1 / D15): /chat NU expune token-ul în HTML; îl pune pe cookie ──
+
+def test_chat_page_hides_token_in_cookie(client, monkeypatch):
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "secret-token-xyz")
+    resp = client.get("/chat")
+    assert resp.status_code == 200
+    # token-ul NU apare în sursa paginii
+    assert "secret-token-xyz" not in resp.text
+    # dar e livrat ca cookie HttpOnly
+    set_cookie = resp.headers.get("set-cookie", "")
+    assert "kage_token=secret-token-xyz" in set_cookie
+    assert "httponly" in set_cookie.lower()

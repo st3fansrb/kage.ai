@@ -21,7 +21,9 @@ from typing import Optional, Dict
 
 import uuid
 import time as _time
+import subprocess
 import httpx
+import yaml
 import chromadb
 import sqlite3
 from filelock import FileLock
@@ -122,6 +124,105 @@ def _default_task_cwd() -> str:
         return str(ALLOWED_TASK_ROOTS[0])
     return str(Path.home())
 
+# ── Policy as code (WP-G1, §6.2) ──────────────────────────────────────────────
+POLICY_FILE = PROJECT_ROOT / "policy.yaml"
+
+# Fallback dacă policy.yaml lipsește sau e corupt — capability minimă la chat,
+# completă la task/sysrun. Ține-le în sincron cu policy.yaml.
+_POLICY_FALLBACK = {
+    "run_types": {
+        "chat":      {"tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "disallowed": ["Bash", "Write", "Edit"], "permission_mode": "auto"},
+        "task":      {"tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "permission_mode": "auto"},
+        "sysrun":    {"tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "permission_mode": "auto"},
+        "scheduled": {"tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "disallowed": ["Bash", "Write", "Edit"], "permission_mode": "auto"},
+    }
+}
+
+def _load_policy() -> dict:
+    """Încarcă policy.yaml (necache-uit: fișier mic, permite editare la cald)."""
+    try:
+        if POLICY_FILE.exists():
+            data = yaml.safe_load(POLICY_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("run_types"), dict):
+                return data
+    except Exception as e:
+        logger.warning(f"[Policy] policy.yaml invalid, folosesc fallback: {e}")
+    return _POLICY_FALLBACK
+
+
+def _policy_cli_flags(run_type: str) -> list[str]:
+    """Traduce politica pentru `run_type` în flag-uri pentru claude CLI.
+
+    Întoarce lista de argumente (--allowedTools / --disallowedTools / --permission-mode).
+    Pentru `chat`/`scheduled` NU include Bash/Write/Edit → D7: un mesaj de chat normal
+    nu poate spawna claude cu Bash. `tools: []` → niciun --allowedTools (zero unelte).
+    """
+    spec = _load_policy().get("run_types", {}).get(run_type) \
+        or _POLICY_FALLBACK["run_types"].get(run_type, {})
+    flags: list[str] = []
+    tools = spec.get("tools") or []
+    if tools:
+        flags += ["--allowedTools", ",".join(tools)]
+    disallowed = spec.get("disallowed") or []
+    if disallowed:
+        flags += ["--disallowedTools", ",".join(disallowed)]
+    flags += ["--permission-mode", spec.get("permission_mode", "auto")]
+    return flags
+
+
+# ── Blast radius: vault sub git (WP-G1, §6.3) ─────────────────────────────────
+def _vault_git_commit(vault_path: Optional[Path] = None) -> str:
+    """`git init` (dacă lipsește) + commit al tuturor schimbărilor din vault.
+
+    Face fiecare `!save` al unui agent reversibil cu `git revert`. Rulează zilnic
+    (pipeline nocturn, 03:00) și e idempotent: dacă nu s-a schimbat nimic, no-op.
+    Returnează un mesaj de stare. Sincron (subprocess.run) — ușor de testat.
+    """
+    vault = Path(vault_path) if vault_path is not None else VAULT
+    if not vault.exists() or not vault.is_dir():
+        return f"[vault-git] skip: {vault} nu există"
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=str(vault),
+            capture_output=True, text=True, timeout=60,
+        )
+
+    try:
+        if not (vault / ".git").exists():
+            _git("init")
+            # Identitate locală, ca commit-ul să nu eșueze pe o mașină fără git config global.
+            _git("config", "user.name", "Kage")
+            _git("config", "user.email", "kage@localhost")
+            logger.info(f"[vault-git] init pe {vault}")
+
+        _git("add", "-A")
+        status = _git("status", "--porcelain")
+        if not status.stdout.strip():
+            return "[vault-git] nimic de comis"
+
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        res = _git("commit", "-m", f"kage auto-commit {ts}")
+        if res.returncode != 0:
+            logger.warning(f"[vault-git] commit eșuat: {res.stderr.strip()[:200]}")
+            return f"[vault-git] commit eșuat: {res.stderr.strip()[:120]}"
+        logger.info(f"[vault-git] commit ok pe {vault}")
+        return f"[vault-git] commit ok ({ts})"
+    except Exception as e:
+        logger.error(f"[vault-git] eroare: {e}")
+        return f"[vault-git] eroare: {e}"
+
+
+async def _vault_git_commit_job() -> None:
+    """Wrapper async pentru scheduler — rulează commit-ul fără a bloca event loop-ul."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _vault_git_commit)
+
+
 # ── Backup cache_db (Faza 19) ─────────────────────────────────────────────────
 BACKUP_DIR  = Path(_cfg.get("backup_dir", str(VAULT / "backups" / "kage"))).expanduser()
 BACKUP_KEEP = int(_cfg.get("backup_keep", 7))
@@ -184,6 +285,41 @@ _db_conn: Optional[sqlite3.Connection] = None
 pending_risk_meta: dict[str, dict] = {}
 _active_task_queues: dict[str, asyncio.Queue] = {}
 
+# ── Kill switch (WP-G1, §6.3) ─────────────────────────────────────────────────
+# Registru al proceselor-agent vii (claude/gemini spawn-ate). !stop le omoară pe
+# toate + pune scheduler-ul pe pauză. Procesele se auto-dezînregistrează la final.
+_running_procs: set = set()
+
+def _register_proc(proc) -> None:
+    _running_procs.add(proc)
+
+def _unregister_proc(proc) -> None:
+    _running_procs.discard(proc)
+
+def _stop_all() -> dict:
+    """Kill switch: SIGTERM pe toate procesele-agent vii + scheduler.pause().
+    Returnează un rezumat {procs_killed, scheduler_paused}."""
+    killed = 0
+    for proc in list(_running_procs):
+        try:
+            proc.terminate()
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning(f"[!stop] nu am putut opri procesul: {e}")
+        finally:
+            _running_procs.discard(proc)
+    scheduler_paused = False
+    if _scheduler is not None:
+        try:
+            _scheduler.pause()
+            scheduler_paused = True
+        except Exception as e:
+            logger.warning(f"[!stop] scheduler.pause() eșuat: {e}")
+    logger.info(f"[!stop] {killed} procese oprite, scheduler_paused={scheduler_paused}")
+    return {"procs_killed": killed, "scheduler_paused": scheduler_paused}
+
 # ── Telegram gateway (Faza 17) ────────────────────────────────────────────────
 _tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
@@ -199,16 +335,17 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
     if queue:
         await queue.put(badge)
 
+    proc = None
     try:
         env = {**os.environ, "ORCHESTRATOR_USER_MSG": task_text}
         if agent == "gemini":
             cmd = [GEMINI_CLI, "-p", task_text]
         else:
+            # Policy as code (WP-G1): !sysrun = auto-modificare, !run = task pe workspace.
             cmd = [
                 CLAUDE_CLI, "-p", task_text,
                 "--output-format", "text",
-                "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-                "--permission-mode", "auto",
+                *_policy_cli_flags("sysrun" if is_sysrun else "task"),
                 "--settings", str(RISK_SETTINGS),
             ]
 
@@ -220,6 +357,7 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
             env=env,
         )
         assert proc.stdout is not None
+        _register_proc(proc)
 
         while True:
             chunk = await proc.stdout.read(512)
@@ -254,6 +392,7 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
         if q:
             await q.put(err)
     finally:
+        _unregister_proc(proc)
         q = _active_task_queues.get(target_id)
         if q:
             # For swarm, we don't want to send [DONE] prematurely
@@ -301,7 +440,8 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
     query_token = request.query_params.get("token", "")
-    if auth_header == f"Bearer {token}" or query_token == token:
+    cookie_token = request.cookies.get("kage_token", "")
+    if auth_header == f"Bearer {token}" or query_token == token or cookie_token == token:
         return await call_next(request)
     return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -471,6 +611,7 @@ async def startup_scheduler():
                         loaded += 1
                     except Exception as e:
                         logger.warning(f"Task {task.get('id')} skip: {e}")
+        _scheduler.add_job(_vault_git_commit_job, "cron", hour=3, minute=0, id="__vault_git_commit__")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
         _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
         _scheduler.start()
@@ -800,12 +941,19 @@ async def dashboard():
 
 @app.get("/chat")
 async def chat_ui():
+    # WP-G1 (D15): token-ul NU se mai injectează în HTML/JS (era vizibil în sursa
+    # paginii). Îl livrăm ca cookie HttpOnly — invizibil pentru JS și pentru
+    # view-source; fetch-urile same-origin din pagină îl trimit automat.
     kage_path = Path(__file__).parent / "kage.html"
     html = kage_path.read_text(encoding="utf-8")
+    resp = HTMLResponse(html)
     token = _get_api_token()
     if token:
-        html = html.replace("const API_TOKEN = '';", f"const API_TOKEN = '{token}';")
-    return HTMLResponse(html)
+        resp.set_cookie(
+            "kage_token", token,
+            httponly=True, samesite="strict", path="/", max_age=60 * 60 * 24 * 30,
+        )
+    return resp
 
 
 @app.get("/manifest.json")
@@ -922,6 +1070,13 @@ async def task_run(request: Request):
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
+@app.post("/api/stop")
+async def api_stop():
+    """Kill switch (WP-G1): oprește toate procesele-agent + pauzează scheduler-ul.
+    Expus pentru butonul din UI; din chat/Telegram se apelează prin comanda `!stop`."""
+    return JSONResponse(_stop_all())
+
+
 @app.post("/admin/backup")
 async def admin_backup():
     """Trigger manual al backup-ului cache_db. Protejat de auth_middleware."""
@@ -1004,6 +1159,20 @@ async def _chat_dispatch(request: Request, body: dict):
 
     if last_user.strip() == "!status":
         return _status_snapshot()
+
+    if last_user.strip().lower() == "!stop":
+        return _stop_snapshot()
+
+    if last_user.strip().lower() == "!resume":
+        resumed = False
+        if _scheduler is not None:
+            try:
+                _scheduler.resume()
+                resumed = True
+            except Exception:
+                pass
+        msg = "▶️ Scheduler reluat." if resumed else "▶️ Scheduler indisponibil."
+        return _instant_sse(msg)
 
     if last_user.strip().lower() == "!sleep":
         return await _sleep_response()
@@ -1432,6 +1601,35 @@ async def _backup_cache_db() -> str:
         logger.error(f"[Backup] eșuat: {e}")
         _notify("⚠️ Backup eșuat", str(e), priority="high")
         raise
+
+
+def _restore_cache_db(archive_path, dest=None) -> str:
+    """Restaurează cache_db/ dintr-o arhivă produsă de `_backup_cache_db`.
+
+    Extrage `cache_db-*.tar.gz` și înlocuiește directorul `dest` (implicit
+    CACHE_DB_PATH). Directorul curent e mutat în `<dest>.pre-restore-<ts>` ca plasă
+    de siguranță. A se rula cu ORCHESTRATORUL OPRIT (SQLite/ChromaDB țin fișiere
+    deschise). Vezi RESTORE.md. Returnează un mesaj de stare.
+    """
+    archive = Path(archive_path)
+    target = Path(dest) if dest is not None else CACHE_DB_PATH
+    if not archive.exists():
+        raise FileNotFoundError(f"arhiva nu există: {archive}")
+
+    with tempfile.TemporaryDirectory() as staging:
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(staging)
+        extracted = Path(staging) / "cache_db"
+        if not extracted.exists():
+            raise ValueError(f"arhivă invalidă: lipsește cache_db/ în {archive.name}")
+        if target.exists():
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            safety = target.with_name(f"{target.name}.pre-restore-{ts}")
+            shutil.move(str(target), str(safety))
+            logger.info(f"[Restore] cache_db curent salvat în {safety}")
+        shutil.copytree(extracted, target)
+    logger.info(f"[Restore] cache_db restaurat din {archive.name}")
+    return f"cache_db restaurat din {archive.name}"
 
 
 async def _memory_store(session_id: str, user_msg: str, assistant_msg: str) -> None:
@@ -2105,6 +2303,8 @@ def _help_response() -> StreamingResponse:
         "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
+        "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",
+        "  `!resume`   → Reia scheduler-ul după !stop",
         "  `!help`     → Această listă",
         "  `escaladează` → echivalent cu !best (în română)",
         "",
@@ -2206,6 +2406,26 @@ def _status_snapshot() -> StreamingResponse:
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _instant_sse(text: str) -> StreamingResponse:
+    """Răspuns SSE instant cu un text fix (fără LLM). Folosit de comenzile de control."""
+    async def generate():
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _stop_snapshot() -> StreamingResponse:
+    """Instant !stop — kill switch: omoară procesele-agent + pauzează scheduler-ul."""
+    result = _stop_all()
+    text = (
+        "🛑 **Kill switch activat**\n"
+        f"  Procese-agent oprite: {result['procs_killed']}\n"
+        f"  Scheduler: {'pe pauză' if result['scheduler_paused'] else 'indisponibil'}\n"
+        "  Reia joburile programate cu `!resume`."
+    )
+    return _instant_sse(text)
 
 
 def _log_usage(tier: int, model: str, task_preview: str, duration_ms: Optional[int], agent: Optional[str] = None) -> None:
@@ -2595,13 +2815,13 @@ async def _generate_cli_chunks(
             yield "data: [DONE]\n\n"
         return
 
+    # Chat (fallback CLI): capability minimă — read-only, fără Bash (WP-G1 / D7).
     cmd = [
         CLAUDE_CLI, "-p", full_prompt,
         "--model", model,
         "--output-format", "stream-json",
         "--verbose",
-        "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--permission-mode", "auto",
+        *_policy_cli_flags("chat"),
         "--settings", str(RISK_SETTINGS),
     ]
     env = {**os.environ, "ORCHESTRATOR_USER_MSG": user_message}
@@ -2664,13 +2884,14 @@ async def _route_claude_autonomous(
     badge: Optional[str] = None,
 ) -> StreamingResponse:
     """Run Claude CLI in autonomous mode with PreToolUse risk gating."""
+    # Chat T3+ = răspuns conversațional, nu agent. Capability minimă — read-only,
+    # fără Bash/Write/Edit (WP-G1 / D7). Pentru execuție reală: !run/!sysrun.
     cmd = [
         CLAUDE_CLI, "-p", full_prompt,
         "--model", model,
         "--output-format", "stream-json",
         "--verbose",
-        "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--permission-mode", "auto",
+        *_policy_cli_flags("chat"),
         "--settings", str(RISK_SETTINGS),
     ]
     env = {**os.environ, "ORCHESTRATOR_USER_MSG": user_message}
@@ -2716,6 +2937,7 @@ async def _route_claude_autonomous(
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
+            _register_proc(proc)
 
             reader = asyncio.create_task(feed_queue())
             deadline = asyncio.get_event_loop().time() + 120
@@ -2772,6 +2994,7 @@ async def _route_claude_autonomous(
             logger.error(f"Claude autonomous error (tier {tier}): {e}")
             yield f'data: {json.dumps({"choices": [{"delta": {"content": f"[Eroare CLI tier {tier}: {e}]"}, "index": 0}]})}\n\n'
         finally:
+            _unregister_proc(proc)
             _write_status_idle(tier, model or "gemini-pro")
             yield "data: [DONE]\n\n"
 

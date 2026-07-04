@@ -326,7 +326,9 @@ button{font-family:inherit;color:inherit;border:none;background:none;cursor:poin
 const $ = s => document.querySelector(s);
 const el = (t,c,h)=>{const e=document.createElement(t);if(c)e.className=c;if(h!=null)e.innerHTML=h;return e;};
 
-/* ---------- auth token (injected by orchestrator at serve-time) ---------- */
+/* ---------- auth (WP-G1): token livrat ca cookie HttpOnly de /chat, NU injectat
+   în pagină. Fetch-urile same-origin trimit cookie-ul automat. API_TOKEN rămâne
+   gol — păstrat doar ca fallback pentru un token pus manual din consolă. ------- */
 const API_TOKEN = '';
 
 /* ---------- session ---------- */
@@ -353,6 +355,7 @@ const CHIPS = [
   {id:'nocache', label:'No-cache', core:false, tip:'Bypass the cache — force a fresh run'},
   {id:'retry',   label:'Retry',    core:false, tip:'Re-run the last request on a different tier'},
   {id:'status',  label:'Status',   core:false, tip:'Print system + budget status inline'},
+  {id:'stop',    label:'Stop',     core:false, tip:'Kill switch — oprește toți agenții + pauzează scheduler-ul'},
   {id:'help',    label:'Help',     core:false, tip:'List all prefix commands'},
 ];
 const active = new Set();
@@ -604,8 +607,8 @@ async function handleSend(){
   const text = ta.value.trim();
   if(state.busy) return;
 
-  // !status, !help, !sleep work as standalone commands even with an empty textarea
-  const CMD_ONLY = ['status','help','sleep'];
+  // !status, !help, !sleep, !stop work as standalone commands even with an empty textarea
+  const CMD_ONLY = ['status','help','sleep','stop'];
   const cmdOnly = CMD_ONLY.find(c=>active.has(c));
   if(!text && !cmdOnly) return;
 

@@ -186,6 +186,28 @@ Al treilea pachet din `KAGE-HANDOFF.md`. Repară D6 + deblochează `!run`:
 
 ---
 
+### WP-G1 — Governance ieftin ✅ (04.07.2026)
+
+Al patrulea pachet (§6 din `KAGE-HANDOFF.md`). Reduce blast-radius-ul agenților fără
+containere:
+
+- **`!stop` kill switch**: registru `_running_procs` + `_stop_all()` (SIGTERM pe toate
+  procesele-agent vii + `scheduler.pause()`); comenzi `!stop`/`!resume` în chat (deci și pe
+  Telegram), endpoint `POST /api/stop`, chip în UI.
+- **`policy.yaml` (policy as code)**: capabilități per tip de run. **Chat T3+ e read-only**
+  (fără Bash/Write/Edit — D7); `!run`/`!sysrun` = capability completă. Toate spawn-urile
+  claude citesc politica prin `_policy_cli_flags()`.
+- **Vault sub git**: `_vault_git_commit()` (init idempotent + commit) rulează zilnic la 03:00
+  → orice `!save` greșit e reversibil cu `git revert`.
+- **Token scos din HTML**: `/chat` livrează token-ul ca **cookie HttpOnly** (`kage_token`),
+  nu mai injectat în JS/sursă (D15).
+- **Restore documentat + testat**: `_restore_cache_db()` (cu plasă de siguranță) + `RESTORE.md`.
+- **Sandbox CLI**: nu există flag dedicat în claude 2.1.173 → izolare OS reală amânată pe WP-G2.
+- Teste: `test_policy.py`, `test_stop.py`, `test_vault_git.py`, `test_restore.py` + e2e
+  extins (46 → 69 verzi). `pyyaml` adăugat în `requirements.txt`.
+
+---
+
 ## Viziune business (toamnă 2026)
 
 Kage ca produs pentru verticala manufacturing/automotive România:

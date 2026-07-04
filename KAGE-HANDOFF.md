@@ -415,7 +415,7 @@ de a-și termina treaba. Deny-list pe regex = barieră de viteză, nu graniță.
    token-ul API e decorativ (`/chat` îl servește în HTML — D15) → de reparat **înainte** de
    Cloudflare; run ledger (WP8) = audit trail-ul.
 
-### WP-G1 — governance ieftin · efort: un weekend · imediat după WP2
+### WP-G1 — governance ieftin ✅ (04.07.2026) · efort: un weekend · imediat după WP2
 
 **Pași:** (1) `!stop` kill switch (server-side: SIGTERM pe procesele din
 `_active_task_queues` + `scheduler.pause()`; expus în chat, Telegram, UI); (2) `git init` +
@@ -427,6 +427,29 @@ sau token doar din config client-side); (6) documentează + testează restore-ul
 **Acceptare:** `!stop` oprește un task în curs (test manual) · un `!save` greșit e
 reversibil cu `git revert` în vault · mesaj de chat normal nu mai spawn-ează claude cu
 Bash · pytest verde.
+
+**Implementat (04.07.2026):**
+
+- (1) Kill switch: registru `_running_procs` (înregistrat în `_background_task_exec` și
+  `_route_claude_autonomous`), `_stop_all()` → SIGTERM + `scheduler.pause()`; comenzi
+  `!stop`/`!resume` în chat (deci și pe Telegram, prin pipeline), endpoint `POST /api/stop`,
+  chip în `kage.html`. Teste: `test_stop.py` + e2e.
+- (2) `_vault_git_commit()` (init idempotent + commit) + job scheduler la **03:00**
+  (`__vault_git_commit__`). Teste: `test_vault_git.py` (inclusiv revert round-trip).
+- (3) `policy.yaml` + `_load_policy()`/`_policy_cli_flags(run_type)`; toate cele 3 spawn-site
+  claude citesc politica. **Chat T3+ e read-only (fără Bash/Write/Edit)**; task/sysrun =
+  capability completă. Teste: `test_policy.py`.
+- (4) **Sandbox CLI: NU există flag dedicat în claude 2.1.173.** `--permission-mode` are doar
+  `acceptEdits/auto/bypassPermissions/default/plan`; referințele „sandbox" din `--help` sunt
+  doar text consultativ pentru `--allowedTools`/`--dangerously-skip-permissions`. Izolarea OS
+  reală rămâne pe **WP-G2** (containere). Mitigarea de azi: policy read-only la chat (3) +
+  blast radius (1,2,6) + hook-ul de risc.
+- (5) Token scos din HTML: `/chat` îl livrează ca **cookie HttpOnly** (`kage_token`), acceptat
+  și de `auth_middleware`. Nu mai apare în view-source/JS. Test: e2e `test_chat_page_hides_token`.
+- (6) `_restore_cache_db()` (cu plasă de siguranță `cache_db.pre-restore-*`) + **`RESTORE.md`**.
+  Teste: `test_restore.py` (round-trip + arhivă invalidă).
+
+Notă: `pyyaml` adăugat în `requirements.txt`. Baseline teste: 46 → **69 verzi**.
 
 ### WP-G2 — izolare reală · efort: mediu-mare · după WP9
 
