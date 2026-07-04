@@ -1,11 +1,12 @@
 {
   "_comment": "Copy this file to kage_config.json and fill in your values.",
 
+  "_comment_notify": "WP1b: Telegram e canalul unic de notificări + aprobări. ntfy rămâne DOAR fallback legacy (folosit doar dacă gateway-ul Telegram nu e configurat) — lasă ntfy_topic pe CHANGEME ca să-l dezactivezi.",
   "ntfy_url": "https://ntfy.sh",
   "ntfy_topic": "CHANGEME-pick-a-unique-topic-name",
-  "orchestrator_tailscale_url": "http://localhost:4001",
 
-  "_comment_telegram": "Telegram Bot Gateway — înlocuitor bidirecțional pentru ntfy. Obții token de la @BotFather, chat_id cu @userinfobot.",
+  "_comment_telegram": "Telegram Bot Gateway — canalul primar (bidirecțional). Token de la @BotFather, chat_id cu @userinfobot. orchestrator_tailscale_url = unde ajunge gateway-ul la orchestrator (localhost dacă rulează pe aceeași mașină).",
+  "orchestrator_tailscale_url": "http://localhost:4001",
   "telegram_bot_token": "CHANGEME",
   "telegram_chat_id": "CHANGEME",
   "autonomous_mode": false,

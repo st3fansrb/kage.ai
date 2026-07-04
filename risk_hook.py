@@ -276,7 +276,6 @@ def main() -> None:
 
     cfg              = _load_ntfy_config()
     autonomous_mode  = cfg.get("autonomous_mode", False)
-    tailscale_url    = cfg.get("orchestrator_tailscale_url", "").rstrip("/")
     confirm_timeout  = cfg.get("confirm_timeout_secs", 300)
 
     tool_preview = json.dumps(tool_input)[:100]
@@ -294,14 +293,10 @@ def main() -> None:
     elif risk_level == "Medium" and autonomous_mode:
         req_id = uuid.uuid4().hex[:12]
         api_token = _get_api_token()
-        actions: list[str] = []
-        if tailscale_url:
-            token_param = f"?token={api_token}" if api_token else ""
-            confirm_url = f"{tailscale_url}/risk/respond/{req_id}{token_param}"
-            actions = [
-                f'http, Confirmă, {confirm_url}, method=POST, body={{"action":"confirm"}}',
-                f'http, Blochează, {confirm_url}, method=POST, body={{"action":"block"}}',
-            ]
+
+        # WP1b: aprobarea se face prin butoanele inline Telegram (le emite
+        # orchestratorul la /risk/register de mai jos). Nu mai atașăm butoane
+        # ntfy cu link-uri Tailscale — Telegram e canalul unic.
 
         # Register with orchestrator so kage.html can surface the item
         try:
@@ -324,6 +319,7 @@ def main() -> None:
         except Exception:
             pass
 
+        # Fallback ntfy (fără butoane) — no-op dacă ntfy nu mai e configurat.
         _send_ntfy(
             title="🔶 Confirmare necesară — orchestrator",
             body=(
@@ -334,7 +330,6 @@ def main() -> None:
             ),
             cfg=cfg,
             priority="high",
-            actions=actions or None,
         )
 
         response = _wait_for_confirm(req_id, confirm_timeout)

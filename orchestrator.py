@@ -70,7 +70,9 @@ GEMINI_CLI   = _find_cli("gemini")
 RISK_SETTINGS        = PROJECT_ROOT / "risk_settings.json"
 STATUS_FILE          = PROJECT_ROOT / "status.json"
 USAGE_LOG            = PROJECT_ROOT / "usage_log.jsonl"
-NTFY_CONFIG_PATH     = next(
+# Config unificat (WP1b): kage_config.json e sursa; ntfy_config.json rămâne doar
+# fallback legacy pentru instalări vechi.
+KAGE_CONFIG_PATH     = next(
     (PROJECT_ROOT / n for n in ("kage_config.json", "ntfy_config.json") if (PROJECT_ROOT / n).exists()),
     PROJECT_ROOT / "kage_config.json",
 )
@@ -273,7 +275,7 @@ _AUTH_EXEMPT = {"/health", "/chat", "/dashboard", "/v1/models", "/manifest.json"
 
 def _get_api_token() -> str:
     try:
-        return json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8")).get("api_token", "")
+        return json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8")).get("api_token", "")
     except Exception:
         return ""
 
@@ -609,7 +611,9 @@ async def risk_register(request_id: str, request: Request):
 
 @app.post("/risk/respond/{request_id}")
 async def risk_respond(request_id: str, request: Request):
-    """Called by ntfy action buttons (Confirmă/Blochează) via Tailscale."""
+    """Rezolvă o aprobare de risc — calea primară (WP1b) sunt butoanele inline
+    Telegram (Confirmă/Blochează); `risk_hook.py` polling-uiește
+    `/risk/status/{id}` până se setează decizia aici."""
     try:
         body = await request.json()
     except Exception:
@@ -1259,7 +1263,7 @@ def _budget_check(tier: int, confidence: float) -> tuple[int, float, Optional[st
     """Enforce daily cloud budget. Returns (tier, confidence, warning_msg_or_none)."""
     global _budget_alert_80_sent
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20
@@ -1512,7 +1516,7 @@ def _aggregate_usage() -> dict:
     avg_latency = {t: int(sum(v) / len(v)) for t, v in latency_by_tier.items() if v}
 
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20
@@ -2106,7 +2110,7 @@ def _port_up(port: int) -> bool:
 
 def _send_ntfy_sync(title: str, body: str, priority: str = "default") -> None:
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         ntfy_url = cfg.get("ntfy_url", "").rstrip("/")
         topic = cfg.get("ntfy_topic", "")
         if not ntfy_url or not topic or "CHANGEME" in topic:
@@ -2127,16 +2131,23 @@ def _send_ntfy_sync(title: str, body: str, priority: str = "default") -> None:
 
 
 def _notify(title: str, body: str, priority: str = "default") -> None:
-    """Trimite notificare pe ntfy (sync) și Telegram (async, fire-and-forget)."""
-    _send_ntfy_sync(title, body, priority)
+    """Notifică pe Telegram (canal primar, WP1b). ntfy rămâne doar fallback dacă
+    gateway-ul Telegram nu e configurat — sau dacă nu există un event loop activ
+    (context sync/thread în care `asyncio.create_task` nu poate rula)."""
     if _tg_gateway:
-        asyncio.create_task(_tg_gateway.send_notification(title, body, priority))
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(_tg_gateway.send_notification(title, body, priority))
+            return
+        except RuntimeError:
+            pass  # fără loop activ → cade pe ntfy (dacă e configurat)
+    _send_ntfy_sync(title, body, priority)
 
 
 def _status_snapshot() -> StreamingResponse:
     """Instant !status response — no LLM call."""
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20

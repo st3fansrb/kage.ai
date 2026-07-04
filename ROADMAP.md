@@ -151,6 +151,22 @@ Primul pachet din `KAGE-HANDOFF.md`. Rezolvă D1/D2/D13 + igienă de log:
 
 ---
 
+### WP1b — Consolidarea canalelor: Telegram unic ✅ (04.07.2026)
+
+Al doilea pachet din `KAGE-HANDOFF.md`. Retrage ntfy.sh — Telegram devine canalul unic:
+- `_notify()` rutează întâi prin gateway-ul Telegram; ntfy rămâne **doar fallback** dacă
+  gateway-ul e neconfigurat sau dacă nu există event loop activ (context sync/thread).
+- Cheile de config (`max_cloud_calls_per_day`, `ntfy_topic`) sunt citite din
+  `kage_config.json` (`NTFY_CONFIG_PATH` → **`KAGE_CONFIG_PATH`**); `ntfy_config.json` rămâne
+  doar fallback legacy pentru instalări vechi.
+- `risk_hook.py`: eliminate butoanele ntfy cu **link-uri Tailscale** din fluxul de aprobare —
+  aprobarea de risc se face prin butoanele **inline Telegram** (emise de orchestrator la
+  `/risk/register`); `risk_hook` doar polling-uiește `/risk/status/{id}`.
+- `tests/test_notify.py` (nou): Telegram primar când gateway-ul e activ, fallback ntfy fără
+  gateway și fără loop.
+
+---
+
 ## Viziune business (toamnă 2026)
 
 Kage ca produs pentru verticala manufacturing/automotive România:

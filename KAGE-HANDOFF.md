@@ -205,7 +205,7 @@ curl SSE streamează · un mesaj de pe Telegram primește răspuns real (test ma
 `!run pwd` de pe Telegram întoarce confirmare cu task id · liniile noi de log nu conțin
 token-ul botului.
 
-### WP1b — Consolidarea canalelor: Telegram unic, retragerea ntfy · efort: o seară · după verificarea WP1
+### WP1b — Consolidarea canalelor: Telegram unic, retragerea ntfy ✅ (04.07.2026) · efort: o seară · după verificarea WP1
 
 **Decizie (04.07.2026, Stefan):** ntfy.sh se retrage — Telegram devine canalul unic de
 notificări + aprobări. Tailscale devine opțional: cu Telegram ca singur canal remote,

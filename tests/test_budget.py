@@ -7,7 +7,7 @@ import orchestrator
 def _set_max_cloud(monkeypatch, tmp_path, value):
     cfg = tmp_path / "cfg.json"
     cfg.write_text(json.dumps({"max_cloud_calls_per_day": value}), encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "NTFY_CONFIG_PATH", cfg)
+    monkeypatch.setattr(orchestrator, "KAGE_CONFIG_PATH", cfg)
 
 
 # ── _usage_counts_today ───────────────────────────────────────────────────────
