@@ -8,6 +8,8 @@ import json
 import os
 import shutil
 import socket
+import tarfile
+import tempfile
 import asyncio
 import datetime
 import logging
@@ -78,6 +80,36 @@ ENABLE_SUMMARIZATION = _cfg.get("enable_summarization", False)
 MEMORY_TOP_K               = _cfg.get("memory_top_k", 5)
 MEMORY_DEDUP_THRESHOLD     = _cfg.get("memory_dedup_threshold", 0.95)
 MEMORY_RELEVANCE_THRESHOLD = _cfg.get("memory_relevance_threshold", 0.70)
+
+# ── Workspace confinement (opțional, Faza 19) ─────────────────────────────────
+ALLOWED_TASK_ROOTS = [
+    Path(p).expanduser().resolve()
+    for p in _cfg.get("allowed_task_roots", [])
+    if isinstance(p, str) and p.strip()
+]
+
+def _validate_task_cwd(cwd: str) -> Optional[str]:
+    """Validează cwd-ul unui task de agent (!run/!sysrun/!swarm) față de allowed_task_roots.
+
+    Returnează calea canonică (str) dacă e permisă, altfel None.
+    Dacă allowed_task_roots e gol → confinement dezactivat (returnează cwd canonic).
+    PROJECT_ROOT e mereu permis implicit (necesar pentru !sysrun).
+    Canonicalizarea cu resolve() previne bypass prin `..` sau symlink.
+    """
+    try:
+        resolved = Path(cwd).expanduser().resolve()
+    except Exception:
+        return None
+    if not ALLOWED_TASK_ROOTS:
+        return str(resolved)
+    for root in ALLOWED_TASK_ROOTS + [PROJECT_ROOT.resolve()]:
+        if resolved == root or root in resolved.parents:
+            return str(resolved)
+    return None
+
+# ── Backup cache_db (Faza 19) ─────────────────────────────────────────────────
+BACKUP_DIR  = Path(_cfg.get("backup_dir", str(VAULT / "backups" / "kage"))).expanduser()
+BACKUP_KEEP = int(_cfg.get("backup_keep", 7))
 
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
@@ -415,6 +447,7 @@ async def startup_scheduler():
                     except Exception as e:
                         logger.warning(f"Task {task.get('id')} skip: {e}")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
+        _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
         _scheduler.start()
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
@@ -776,6 +809,20 @@ async def task_run(request: Request):
             f"Task: {task_text}"
         )
 
+    # 1b. Workspace confinement — validează cwd față de allowed_task_roots
+    validated_cwd = _validate_task_cwd(cwd)
+    if validated_cwd is None:
+        logger.warning(f"[Confinement] task respins — cwd '{cwd}' în afara allowed_task_roots")
+        _notify("🚫 Task blocat (confinement)", f"cwd {cwd} în afara workspace-ului permis", priority="default")
+
+        async def _blocked():
+            msg = f"**[BLOCKED]** cwd `{cwd}` e în afara workspace-ului permis (`allowed_task_roots`)."
+            yield f'data: {json.dumps({"choices": [{"delta": {"content": msg}}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_blocked(), media_type="text/event-stream")
+    cwd = validated_cwd
+
     # 2. Swarm vs Single Agent
     is_swarm = task_text.startswith("!swarm")
     if is_swarm:
@@ -814,6 +861,16 @@ async def task_run(request: Request):
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@app.post("/admin/backup")
+async def admin_backup():
+    """Trigger manual al backup-ului cache_db. Protejat de auth_middleware."""
+    try:
+        path = await _backup_cache_db()
+        return JSONResponse({"status": "ok", "archive": path})
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
 @app.post("/v1/chat/completions")
@@ -1217,6 +1274,46 @@ async def _cache_vacuum() -> None:
             logger.debug("Cache vacuum: nothing to remove")
     except Exception as e:
         logger.warning(f"Cache vacuum failed: {e}")
+
+
+async def _backup_cache_db() -> str:
+    """Backup cache_db/ (SQLite + ChromaDB) într-un tar.gz cu rotație. Returnează calea arhivei.
+
+    SQLite (chat_history.db) e copiat consistent via Online Backup API; restul cache_db/
+    (ChromaDB) prin copytree. Rulează zilnic la 05:00 sau on-demand via POST /admin/backup.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    archive_path = BACKUP_DIR / f"cache_db-{ts}.tar.gz"
+    try:
+        with tempfile.TemporaryDirectory() as staging:
+            staging_path = Path(staging) / "cache_db"
+            if CACHE_DB_PATH.exists():
+                shutil.copytree(CACHE_DB_PATH, staging_path)
+            else:
+                staging_path.mkdir(parents=True)
+            # Snapshot SQLite consistent (suprascrie copia brută din copytree)
+            if _db_conn is not None:
+                try:
+                    dest = sqlite3.connect(str(staging_path / "chat_history.db"))
+                    with dest:
+                        _db_conn.backup(dest)
+                    dest.close()
+                except Exception as e:
+                    logger.warning(f"[Backup] SQLite online backup eșuat, folosesc copia brută: {e}")
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(staging_path, arcname="cache_db")
+        # Rotație: păstrează ultimele BACKUP_KEEP arhive
+        if BACKUP_KEEP > 0:
+            backups = sorted(BACKUP_DIR.glob("cache_db-*.tar.gz"))
+            for old in backups[:-BACKUP_KEEP]:
+                old.unlink(missing_ok=True)
+        logger.info(f"[Backup] cache_db → {archive_path} ({archive_path.stat().st_size} bytes)")
+        return str(archive_path)
+    except Exception as e:
+        logger.error(f"[Backup] eșuat: {e}")
+        _notify("⚠️ Backup eșuat", str(e), priority="high")
+        raise
 
 
 async def _memory_store(session_id: str, user_msg: str, assistant_msg: str) -> None:

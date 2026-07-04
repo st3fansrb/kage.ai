@@ -15,10 +15,12 @@ usage_log.jsonl
 scheduled_tasks.json
 risk_settings.json
 litellm_config.yaml
+*.lock
 
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
 
 .DS_Store
 *.plist
