@@ -137,10 +137,10 @@ def test_run_command_launches_task(client, monkeypatch):
     assert launched["task_text"] == "listează fișierele"
 
 
-# ── Test 4: !run blocat de confinement → [BLOCKED], fără spawn ─────────────────
+# ── Test 4: /task/run cu cwd explicit în afara rooturilor → [BLOCKED] ──────────
 
 @respx.mock
-def test_run_command_blocked_by_confinement(client, monkeypatch):
+def test_task_run_blocked_by_explicit_bad_cwd(client, monkeypatch):
     _mock_backends(respx.mock)
 
     called = {"spawned": False}
@@ -149,13 +149,39 @@ def test_run_command_blocked_by_confinement(client, monkeypatch):
         called["spawned"] = True
 
     monkeypatch.setattr(orchestrator, "_background_task_exec", _fake_exec)
-    # confinement activ cu un root care NU include home → !run (cwd=home) e blocat
-    monkeypatch.setattr(orchestrator, "ALLOWED_TASK_ROOTS", [orchestrator.PROJECT_ROOT / "cache_db"])
-
-    resp = client.post(
-        "/v1/chat/completions",
-        json={"messages": [{"role": "user", "content": "!run rm -rf /"}]},
+    # confinement activ; cwd explicit /etc e în afara rooturilor → blocat
+    monkeypatch.setattr(
+        orchestrator, "ALLOWED_TASK_ROOTS",
+        [(orchestrator.PROJECT_ROOT / "cache_db").resolve()],
     )
+
+    resp = client.post("/task/run", json={"task": "listează", "cwd": "/etc"})
     assert resp.status_code == 200
     assert "[BLOCKED]" in resp.text
     assert called["spawned"] is False
+
+
+# ── Test 5 (WP2): !run fără cwd → default = primul allowed_task_root, pornește ─
+
+@respx.mock
+def test_run_command_defaults_to_allowed_root(client, monkeypatch):
+    _mock_backends(respx.mock)
+
+    launched = {}
+
+    async def _fake_exec(task_id, task_text, agent, cwd, is_sysrun, parent_id=None):
+        launched["cwd"] = cwd
+
+    monkeypatch.setattr(orchestrator, "_background_task_exec", _fake_exec)
+    root = (orchestrator.PROJECT_ROOT / "cache_db").resolve()
+    monkeypatch.setattr(orchestrator, "ALLOWED_TASK_ROOTS", [root])
+
+    resp = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "!run listează fișierele"}]},
+    )
+    assert resp.status_code == 200
+    # WP2: nu mai e blocat — cwd default e primul root permis, nu home
+    assert "[BLOCKED]" not in resp.text
+    assert "Task pornit" in resp.text
+    assert launched.get("cwd") == str(root)

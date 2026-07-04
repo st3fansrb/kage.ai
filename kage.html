@@ -255,6 +255,11 @@ button{font-family:inherit;color:inherit;border:none;background:none;cursor:poin
     <div class="feed" id="feed"></div>
     <div class="composer">
       <div class="chips" id="chips"></div>
+      <div id="cwdbar" style="display:none;padding:2px 2px 4px;font-size:12px;opacity:.85">
+        <label>cwd:
+          <select id="cwdSel" style="background:transparent;color:inherit;border:1px solid rgba(128,128,128,.4);border-radius:6px;padding:2px 6px;font-size:12px;max-width:100%"></select>
+        </label>
+      </div>
       <div class="inputbox">
         <textarea id="ta" rows="1" placeholder="Delegate a task…  (⌃⏎ to send)"></textarea>
         <button class="send" id="send">Send <span class="kbd">⌃⏎</span></button>
@@ -700,10 +705,12 @@ async function handleTaskRun(text){
     if (isSwarm) fullTask = '!swarm ' + fullTask;
     if (isSys) fullTask = '!sysrun ' + fullTask;
     
+    const cwdSel = $('#cwdSel');
+    const cwdVal = cwdSel && cwdSel.value;
     const resp = await authFetch('/task/run',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({task: fullTask}),
+      body:JSON.stringify(cwdVal ? {task: fullTask, cwd: cwdVal} : {task: fullTask}),
     });
 
     if(!resp.ok) throw new Error('HTTP '+resp.status);
@@ -763,6 +770,7 @@ function buildChips(){
       if(c.id==='best' && active.has('best')) active.delete('fast');
       if(c.id==='fast' && active.has('fast')) active.delete('best');
       syncChips();
+      updateCwdBar();
     });
     box.appendChild(b);
   });
@@ -782,6 +790,30 @@ function syncChips(){
     const btn = chipButtons.find(b => b.innerText.includes(c.label));
     if(btn) btn.classList.toggle('on', active.has(c.id));
   });
+}
+
+/* ============================================================
+   TASK CWD DROPDOWN (WP2) — populat din /api/config
+   ============================================================ */
+let taskRoots = [];
+async function loadConfig(){
+  try{
+    const cfg = await authFetch('/api/config').then(r=>r.json());
+    taskRoots = cfg.allowed_task_roots || [];
+    const sel = $('#cwdSel');
+    sel.innerHTML = '';
+    taskRoots.forEach(r=>{
+      const o = document.createElement('option');
+      o.value = r; o.textContent = r;
+      sel.appendChild(o);
+    });
+  }catch(_){}
+}
+function updateCwdBar(){
+  const bar = $('#cwdbar');
+  if(!bar) return;
+  const show = taskRoots.length>0 && (active.has('run')||active.has('swarm')||active.has('sysrun'));
+  bar.style.display = show ? 'block' : 'none';
 }
 
 /* ============================================================
@@ -843,6 +875,7 @@ function init(){
 
   document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>setTab(t.dataset.tab)));
 
+  loadConfig();
   loadHistory();
   poll();
   pollPending();

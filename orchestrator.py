@@ -113,6 +113,15 @@ def _validate_task_cwd(cwd: str) -> Optional[str]:
             return str(resolved)
     return None
 
+
+def _default_task_cwd() -> str:
+    """cwd implicit pentru !run fără cwd explicit (WP2): primul allowed_task_root,
+    ca !run din chat/Telegram/UI să pornească fără [BLOCKED]. Dacă confinement-ul
+    e dezactivat (listă goală), cade pe home."""
+    if ALLOWED_TASK_ROOTS:
+        return str(ALLOWED_TASK_ROOTS[0])
+    return str(Path.home())
+
 # ── Backup cache_db (Faza 19) ─────────────────────────────────────────────────
 BACKUP_DIR  = Path(_cfg.get("backup_dir", str(VAULT / "backups" / "kage"))).expanduser()
 BACKUP_KEEP = int(_cfg.get("backup_keep", 7))
@@ -683,6 +692,17 @@ async def api_stats():
     return _aggregate_usage()
 
 
+@app.get("/api/config")
+async def api_config():
+    """Config non-sensibil pentru UI (WP2): rooturile permise pentru task-uri +
+    cwd-ul implicit, ca task runner-ul din kage.html să ofere un dropdown de cwd."""
+    return {
+        "allowed_task_roots": [str(r) for r in ALLOWED_TASK_ROOTS],
+        "default_task_cwd": _default_task_cwd(),
+        "confinement_enabled": bool(ALLOWED_TASK_ROOTS),
+    }
+
+
 @app.get("/api/pending")
 async def api_pending():
     """Return pending risk-approval items for the kage UI."""
@@ -870,7 +890,7 @@ async def task_run(request: Request):
     """
     body = await request.json()
     task_text = body.get("task", "").strip()
-    cwd = body.get("cwd", str(Path.home()))
+    cwd = body.get("cwd") or _default_task_cwd()
 
     if not task_text:
         return JSONResponse({"error": "task is required"}, status_code=400)
@@ -970,7 +990,7 @@ async def _chat_dispatch(request: Request, body: dict):
             _task_text = _lu_stripped[len("!run"):].strip()
         else:
             _task_text = _lu_stripped  # !swarm / !sysrun sunt interpretate în helper
-        task_id, error = _prepare_and_launch_task(_task_text, str(Path.home()), register_queue=False)
+        task_id, error = _prepare_and_launch_task(_task_text, _default_task_cwd(), register_queue=False)
         if error is not None:
             confirm = f"**[BLOCKED]** {error}"
         else:

@@ -220,7 +220,7 @@ topic) în `kage_config.json`; (3) scoate linkurile cu IP-ul Tailscale din notif
 **Acceptare:** o alertă de buget și o aprobare de risc ajung pe Telegram · nimic nu mai
 scrie către ntfy.sh · pytest verde.
 
-### WP2 (#2) — Risk gate v2 + confinement funcțional · efort: mic
+### WP2 (#2) — Risk gate v2 + confinement funcțional ✅ (04.07.2026) · efort: mic
 
 **Fișiere:** `risk_hook.py`, `risk_settings.json`, `orchestrator.py`, `kage.html`,
 `tests/test_risk.py` (nou).

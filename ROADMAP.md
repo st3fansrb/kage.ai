@@ -165,6 +165,25 @@ Al doilea pachet din `KAGE-HANDOFF.md`. Retrage ntfy.sh — Telegram devine cana
 - `tests/test_notify.py` (nou): Telegram primar când gateway-ul e activ, fallback ntfy fără
   gateway și fără loop.
 
+### WP2 — Risk gate v2 + confinement funcțional ✅ (04.07.2026)
+
+Al treilea pachet din `KAGE-HANDOFF.md`. Repară D6 + deblochează `!run`:
+- **High → flux de aprobare** (register + Telegram inline + poll, timeout → deny) în loc de
+  deny direct; **Never** rămâne refuz direct.
+- **Axa 2 e vie** (`_has_explicit_keyword`): un risc High se coboară la **Medium** dacă un
+  cuvânt-cheie explicit (`șterge`, `delete`, …) apare în mesajul userului
+  (`ORCHESTRATOR_USER_MSG`, deja plumb-uit la spawn).
+- Pattern cleanup: `>\s*/dev/null` scos din HIGH (clasifica greșit `2>/dev/null` — D6);
+  `git rebase`/`git commit --amend` mutate din Never în High.
+- `risk_settings.json`: matcher `Bash|Write|Edit` → `Bash|Write|Edit|mcp__.*` (tool-urile MCP
+  trec acum prin gate, nu-l mai ocolesc).
+- `orchestrator.py`: `_default_task_cwd()` = primul `allowed_task_root` → `!run` din
+  chat/Telegram/UI pornește fără `[BLOCKED]` (D4); `GET /api/config` expune rooturile permise.
+- `kage.html`: dropdown de cwd la task runner, populat din `/api/config` (vizibil când e activ
+  `!run`/`!swarm`/`!sysrun` și există rooturi).
+- Teste: `tests/test_risk.py` (nou, 10) + `tests/test_e2e.py` extins (default cwd + block pe
+  cwd explicit rău).
+
 ---
 
 ## Viziune business (toamnă 2026)
