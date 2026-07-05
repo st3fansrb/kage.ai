@@ -1,11 +1,12 @@
 {
   "_comment": "Copy this file to kage_config.json and fill in your values.",
 
+  "_comment_notify": "WP1b: Telegram e canalul unic de notificări + aprobări. ntfy rămâne DOAR fallback legacy (folosit doar dacă gateway-ul Telegram nu e configurat) — lasă ntfy_topic pe CHANGEME ca să-l dezactivezi.",
   "ntfy_url": "https://ntfy.sh",
   "ntfy_topic": "CHANGEME-pick-a-unique-topic-name",
-  "orchestrator_tailscale_url": "http://localhost:4001",
 
-  "_comment_telegram": "Telegram Bot Gateway — înlocuitor bidirecțional pentru ntfy. Obții token de la @BotFather, chat_id cu @userinfobot.",
+  "_comment_telegram": "Telegram Bot Gateway — canalul primar (bidirecțional). Token de la @BotFather, chat_id cu @userinfobot. orchestrator_tailscale_url = unde ajunge gateway-ul la orchestrator (localhost dacă rulează pe aceeași mașină).",
+  "orchestrator_tailscale_url": "http://localhost:4001",
   "telegram_bot_token": "CHANGEME",
   "telegram_chat_id": "CHANGEME",
   "autonomous_mode": false,
@@ -26,6 +27,13 @@
   "memory_top_k": 5,
   "memory_dedup_threshold": 0.95,
   "memory_relevance_threshold": 0.70,
+
+  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun/!swarm la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis.",
+  "allowed_task_roots": [],
+
+  "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) cu rotație. Trigger manual: POST /admin/backup.",
+  "backup_dir": "~/Documents/MyVault/backups/kage",
+  "backup_keep": 7,
 
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
   "models": {

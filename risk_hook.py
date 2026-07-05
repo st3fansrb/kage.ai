@@ -51,8 +51,6 @@ NEVER_CMD_PATTERNS: list[tuple[str, str]] = [
     (r"curl[^|#\n]*\|\s*(bash|sh)\b",        "curl piped to shell"),
     (r"wget[^|#\n]*\|\s*(bash|sh)\b",        "wget piped to shell"),
     (r"git\s+push\s+(--force|-f)\b",         "git force push"),
-    (r"git\s+rebase\b",                      "git rebase"),
-    (r"git\s+(commit\s+)?--amend\b",         "git commit --amend"),
     (r"git\s+reset\s+--hard\s+.*\b(main|master)\b", "git reset --hard pe main"),
     # find -exec with destructive commands
     (r"\bfind\b.*\b-exec\s+(rm|unlink|shred)\b",      "find -exec cu ștergere"),
@@ -87,8 +85,11 @@ HIGH_CMD_PATTERNS: list[tuple[str, str]] = [
     (r"rm\s+.*\blib/",           "ștergere lib/"),
     (r"git\s+reset\b",           "git reset"),
     (r"git\s+clean\b",           "git clean"),
+    (r"git\s+rebase\b",          "git rebase"),
+    (r"git\s+(commit\s+)?--amend\b", "git commit --amend"),
     (r"\btruncate\b",            "truncate fișier"),
-    (r">\s*/dev/null",           "redirect to /dev/null"),
+    # WP2: `>\s*/dev/null` scos — clasifica greșit `2>/dev/null` (redirect benign)
+    # ca High (D6).
 ]
 
 HIGH_PATH_PARTS: list[str] = ["/src/", "/lib/", "/core/", "/auth/"]
@@ -104,6 +105,13 @@ EXPLICIT_KEYWORDS: list[str] = [
     "șterge", "delete", "remove", "clean", "rebuild", "recreate",
     "sterge", "elimina", "elimină", "curăță", "curata",
 ]
+
+
+def _has_explicit_keyword(user_message: str) -> bool:
+    """Axa 2 (instrucție explicită): userul a cerut explicit o operație distructivă?
+    Dacă da, un risc High se coboară la Medium (aprobare) în loc de deny direct."""
+    msg = (user_message or "").lower()
+    return any(kw in msg for kw in EXPLICIT_KEYWORDS)
 
 
 def _load_ntfy_config() -> dict:
@@ -205,6 +213,8 @@ def evaluate_risk(
 
         for pattern, reason in HIGH_CMD_PATTERNS:
             if re.search(pattern, cmd, re.IGNORECASE):
+                if _has_explicit_keyword(user_message):
+                    return "Medium", f"{reason} (downgrade High→Medium: instrucție explicită)"
                 return "High", f"Risc ridicat: {reason}"
 
         for pattern, reason in MEDIUM_CMD_PATTERNS:
@@ -228,6 +238,8 @@ def evaluate_risk(
 
         for part in HIGH_PATH_PARTS:
             if part in file_path:
+                if _has_explicit_keyword(user_message):
+                    return "Medium", f"Modificare fișiere active: {part} (downgrade: instrucție explicită)"
                 return "High", f"Modificare fișiere active: {part}"
 
     return "Safe", "Operație sigură"
@@ -255,6 +267,34 @@ def log_decision(
         pass
 
 
+def _register_with_orchestrator(
+    req_id: str, tool_name: str, tool_preview: str, reason: str
+) -> None:
+    """Înregistrează cererea de aprobare la orchestrator (`/risk/register/{id}`),
+    care emite butoanele inline Telegram și o expune în kage.html. Best-effort:
+    orice eroare de rețea e ignorată (Telegram poate fi jos)."""
+    api_token = _get_api_token()
+    try:
+        reg_data = json.dumps({
+            "tool_name": tool_name,
+            "cmd": tool_preview,
+            "reason": reason,
+            "time": datetime.datetime.now().strftime("%H:%M"),
+        }).encode("utf-8")
+        reg_headers: dict[str, str] = {"Content-Type": "application/json"}
+        if api_token:
+            reg_headers["Authorization"] = f"Bearer {api_token}"
+        reg_req = urllib.request.Request(
+            f"{ORCHESTRATOR_URL}/risk/register/{req_id}",
+            data=reg_data,
+            headers=reg_headers,
+            method="POST",
+        )
+        urllib.request.urlopen(reg_req, timeout=3)
+    except Exception:
+        pass
+
+
 def main() -> None:
     raw = sys.stdin.read()
     try:
@@ -276,56 +316,29 @@ def main() -> None:
 
     cfg              = _load_ntfy_config()
     autonomous_mode  = cfg.get("autonomous_mode", False)
-    tailscale_url    = cfg.get("orchestrator_tailscale_url", "").rstrip("/")
     confirm_timeout  = cfg.get("confirm_timeout_secs", 300)
 
     tool_preview = json.dumps(tool_input)[:100]
 
-    if risk_level in ("Never", "High"):
+    if risk_level == "Never":
         decision = "deny"
-        emoji = "🚫" if risk_level == "Never" else "🔴"
         _send_ntfy(
-            title=f"{emoji} BLOCAT [{risk_level}] — orchestrator",
+            title="🚫 BLOCAT [Never] — orchestrator",
             body=f"Tool: {tool_name}\nMotiv: {reason}\nInput: {tool_preview}",
             cfg=cfg,
             priority="high",
         )
 
-    elif risk_level == "Medium" and autonomous_mode:
+    elif risk_level == "High" or (risk_level == "Medium" and autonomous_mode):
+        # WP2: High intră în fluxul de aprobare (nu mai e deny direct); Medium doar
+        # în autonomous_mode. Calea primară de aprobare = butoanele inline Telegram
+        # (emise de orchestrator la /risk/register). Timeout → deny (fail-closed).
         req_id = uuid.uuid4().hex[:12]
-        api_token = _get_api_token()
-        actions: list[str] = []
-        if tailscale_url:
-            token_param = f"?token={api_token}" if api_token else ""
-            confirm_url = f"{tailscale_url}/risk/respond/{req_id}{token_param}"
-            actions = [
-                f'http, Confirmă, {confirm_url}, method=POST, body={{"action":"confirm"}}',
-                f'http, Blochează, {confirm_url}, method=POST, body={{"action":"block"}}',
-            ]
+        _register_with_orchestrator(req_id, tool_name, tool_preview, reason)
 
-        # Register with orchestrator so kage.html can surface the item
-        try:
-            reg_data = json.dumps({
-                "tool_name": tool_name,
-                "cmd": tool_preview,
-                "reason": reason,
-                "time": datetime.datetime.now().strftime("%H:%M"),
-            }).encode("utf-8")
-            reg_headers: dict[str, str] = {"Content-Type": "application/json"}
-            if api_token:
-                reg_headers["Authorization"] = f"Bearer {api_token}"
-            reg_req = urllib.request.Request(
-                f"{ORCHESTRATOR_URL}/risk/register/{req_id}",
-                data=reg_data,
-                headers=reg_headers,
-                method="POST",
-            )
-            urllib.request.urlopen(reg_req, timeout=3)
-        except Exception:
-            pass
-
+        # Fallback ntfy (fără butoane) — no-op dacă ntfy nu mai e configurat.
         _send_ntfy(
-            title="🔶 Confirmare necesară — orchestrator",
+            title=f"🔶 Confirmare necesară [{risk_level}] — orchestrator",
             body=(
                 f"Tool: {tool_name}\n"
                 f"Motiv: {reason}\n"
@@ -334,7 +347,6 @@ def main() -> None:
             ),
             cfg=cfg,
             priority="high",
-            actions=actions or None,
         )
 
         response = _wait_for_confirm(req_id, confirm_timeout)

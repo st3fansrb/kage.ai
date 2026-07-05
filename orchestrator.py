@@ -6,8 +6,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import socket
+import tarfile
+import tempfile
 import asyncio
 import datetime
 import logging
@@ -18,7 +21,9 @@ from typing import Optional, Dict
 
 import uuid
 import time as _time
+import subprocess
 import httpx
+import yaml
 import chromadb
 import sqlite3
 from filelock import FileLock
@@ -29,6 +34,9 @@ import telegram_gateway as _tg_module
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+# httpx la INFO scrie URL-ul complet al fiecărui getUpdates → token-ul botului Telegram
+# ajunge în log. Ridicăm pragul la WARNING. (WP1 / D-token)
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).parent
@@ -64,7 +72,9 @@ GEMINI_CLI   = _find_cli("gemini")
 RISK_SETTINGS        = PROJECT_ROOT / "risk_settings.json"
 STATUS_FILE          = PROJECT_ROOT / "status.json"
 USAGE_LOG            = PROJECT_ROOT / "usage_log.jsonl"
-NTFY_CONFIG_PATH     = next(
+# Config unificat (WP1b): kage_config.json e sursa; ntfy_config.json rămâne doar
+# fallback legacy pentru instalări vechi.
+KAGE_CONFIG_PATH     = next(
     (PROJECT_ROOT / n for n in ("kage_config.json", "ntfy_config.json") if (PROJECT_ROOT / n).exists()),
     PROJECT_ROOT / "kage_config.json",
 )
@@ -78,6 +88,144 @@ ENABLE_SUMMARIZATION = _cfg.get("enable_summarization", False)
 MEMORY_TOP_K               = _cfg.get("memory_top_k", 5)
 MEMORY_DEDUP_THRESHOLD     = _cfg.get("memory_dedup_threshold", 0.95)
 MEMORY_RELEVANCE_THRESHOLD = _cfg.get("memory_relevance_threshold", 0.70)
+
+# ── Workspace confinement (opțional, Faza 19) ─────────────────────────────────
+ALLOWED_TASK_ROOTS = [
+    Path(p).expanduser().resolve()
+    for p in _cfg.get("allowed_task_roots", [])
+    if isinstance(p, str) and p.strip()
+]
+
+def _validate_task_cwd(cwd: str) -> Optional[str]:
+    """Validează cwd-ul unui task de agent (!run/!sysrun/!swarm) față de allowed_task_roots.
+
+    Returnează calea canonică (str) dacă e permisă, altfel None.
+    Dacă allowed_task_roots e gol → confinement dezactivat (returnează cwd canonic).
+    PROJECT_ROOT e mereu permis implicit (necesar pentru !sysrun).
+    Canonicalizarea cu resolve() previne bypass prin `..` sau symlink.
+    """
+    try:
+        resolved = Path(cwd).expanduser().resolve()
+    except Exception:
+        return None
+    if not ALLOWED_TASK_ROOTS:
+        return str(resolved)
+    for root in ALLOWED_TASK_ROOTS + [PROJECT_ROOT.resolve()]:
+        if resolved == root or root in resolved.parents:
+            return str(resolved)
+    return None
+
+
+def _default_task_cwd() -> str:
+    """cwd implicit pentru !run fără cwd explicit (WP2): primul allowed_task_root,
+    ca !run din chat/Telegram/UI să pornească fără [BLOCKED]. Dacă confinement-ul
+    e dezactivat (listă goală), cade pe home."""
+    if ALLOWED_TASK_ROOTS:
+        return str(ALLOWED_TASK_ROOTS[0])
+    return str(Path.home())
+
+# ── Policy as code (WP-G1, §6.2) ──────────────────────────────────────────────
+POLICY_FILE = PROJECT_ROOT / "policy.yaml"
+
+# Fallback dacă policy.yaml lipsește sau e corupt — capability minimă la chat,
+# completă la task/sysrun. Ține-le în sincron cu policy.yaml.
+_POLICY_FALLBACK = {
+    "run_types": {
+        "chat":      {"tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "disallowed": ["Bash", "Write", "Edit"], "permission_mode": "auto"},
+        "task":      {"tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "permission_mode": "auto"},
+        "sysrun":    {"tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "permission_mode": "auto"},
+        "scheduled": {"tools": ["Read", "Glob", "Grep", "WebFetch", "WebSearch"],
+                      "disallowed": ["Bash", "Write", "Edit"], "permission_mode": "auto"},
+    }
+}
+
+def _load_policy() -> dict:
+    """Încarcă policy.yaml (necache-uit: fișier mic, permite editare la cald)."""
+    try:
+        if POLICY_FILE.exists():
+            data = yaml.safe_load(POLICY_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict) and isinstance(data.get("run_types"), dict):
+                return data
+    except Exception as e:
+        logger.warning(f"[Policy] policy.yaml invalid, folosesc fallback: {e}")
+    return _POLICY_FALLBACK
+
+
+def _policy_cli_flags(run_type: str) -> list[str]:
+    """Traduce politica pentru `run_type` în flag-uri pentru claude CLI.
+
+    Întoarce lista de argumente (--allowedTools / --disallowedTools / --permission-mode).
+    Pentru `chat`/`scheduled` NU include Bash/Write/Edit → D7: un mesaj de chat normal
+    nu poate spawna claude cu Bash. `tools: []` → niciun --allowedTools (zero unelte).
+    """
+    spec = _load_policy().get("run_types", {}).get(run_type) \
+        or _POLICY_FALLBACK["run_types"].get(run_type, {})
+    flags: list[str] = []
+    tools = spec.get("tools") or []
+    if tools:
+        flags += ["--allowedTools", ",".join(tools)]
+    disallowed = spec.get("disallowed") or []
+    if disallowed:
+        flags += ["--disallowedTools", ",".join(disallowed)]
+    flags += ["--permission-mode", spec.get("permission_mode", "auto")]
+    return flags
+
+
+# ── Blast radius: vault sub git (WP-G1, §6.3) ─────────────────────────────────
+def _vault_git_commit(vault_path: Optional[Path] = None) -> str:
+    """`git init` (dacă lipsește) + commit al tuturor schimbărilor din vault.
+
+    Face fiecare `!save` al unui agent reversibil cu `git revert`. Rulează zilnic
+    (pipeline nocturn, 03:00) și e idempotent: dacă nu s-a schimbat nimic, no-op.
+    Returnează un mesaj de stare. Sincron (subprocess.run) — ușor de testat.
+    """
+    vault = Path(vault_path) if vault_path is not None else VAULT
+    if not vault.exists() or not vault.is_dir():
+        return f"[vault-git] skip: {vault} nu există"
+
+    def _git(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            ["git", *args], cwd=str(vault),
+            capture_output=True, text=True, timeout=60,
+        )
+
+    try:
+        if not (vault / ".git").exists():
+            _git("init")
+            # Identitate locală, ca commit-ul să nu eșueze pe o mașină fără git config global.
+            _git("config", "user.name", "Kage")
+            _git("config", "user.email", "kage@localhost")
+            logger.info(f"[vault-git] init pe {vault}")
+
+        _git("add", "-A")
+        status = _git("status", "--porcelain")
+        if not status.stdout.strip():
+            return "[vault-git] nimic de comis"
+
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        res = _git("commit", "-m", f"kage auto-commit {ts}")
+        if res.returncode != 0:
+            logger.warning(f"[vault-git] commit eșuat: {res.stderr.strip()[:200]}")
+            return f"[vault-git] commit eșuat: {res.stderr.strip()[:120]}"
+        logger.info(f"[vault-git] commit ok pe {vault}")
+        return f"[vault-git] commit ok ({ts})"
+    except Exception as e:
+        logger.error(f"[vault-git] eroare: {e}")
+        return f"[vault-git] eroare: {e}"
+
+
+async def _vault_git_commit_job() -> None:
+    """Wrapper async pentru scheduler — rulează commit-ul fără a bloca event loop-ul."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _vault_git_commit)
+
+
+# ── Backup cache_db (Faza 19) ─────────────────────────────────────────────────
+BACKUP_DIR  = Path(_cfg.get("backup_dir", str(VAULT / "backups" / "kage"))).expanduser()
+BACKUP_KEEP = int(_cfg.get("backup_keep", 7))
 
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
@@ -137,6 +285,41 @@ _db_conn: Optional[sqlite3.Connection] = None
 pending_risk_meta: dict[str, dict] = {}
 _active_task_queues: dict[str, asyncio.Queue] = {}
 
+# ── Kill switch (WP-G1, §6.3) ─────────────────────────────────────────────────
+# Registru al proceselor-agent vii (claude/gemini spawn-ate). !stop le omoară pe
+# toate + pune scheduler-ul pe pauză. Procesele se auto-dezînregistrează la final.
+_running_procs: set = set()
+
+def _register_proc(proc) -> None:
+    _running_procs.add(proc)
+
+def _unregister_proc(proc) -> None:
+    _running_procs.discard(proc)
+
+def _stop_all() -> dict:
+    """Kill switch: SIGTERM pe toate procesele-agent vii + scheduler.pause().
+    Returnează un rezumat {procs_killed, scheduler_paused}."""
+    killed = 0
+    for proc in list(_running_procs):
+        try:
+            proc.terminate()
+            killed += 1
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.warning(f"[!stop] nu am putut opri procesul: {e}")
+        finally:
+            _running_procs.discard(proc)
+    scheduler_paused = False
+    if _scheduler is not None:
+        try:
+            _scheduler.pause()
+            scheduler_paused = True
+        except Exception as e:
+            logger.warning(f"[!stop] scheduler.pause() eșuat: {e}")
+    logger.info(f"[!stop] {killed} procese oprite, scheduler_paused={scheduler_paused}")
+    return {"procs_killed": killed, "scheduler_paused": scheduler_paused}
+
 # ── Telegram gateway (Faza 17) ────────────────────────────────────────────────
 _tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
@@ -152,16 +335,17 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
     if queue:
         await queue.put(badge)
 
+    proc = None
     try:
         env = {**os.environ, "ORCHESTRATOR_USER_MSG": task_text}
         if agent == "gemini":
             cmd = [GEMINI_CLI, "-p", task_text]
         else:
+            # Policy as code (WP-G1): !sysrun = auto-modificare, !run = task pe workspace.
             cmd = [
                 CLAUDE_CLI, "-p", task_text,
                 "--output-format", "text",
-                "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-                "--permission-mode", "auto",
+                *_policy_cli_flags("sysrun" if is_sysrun else "task"),
                 "--settings", str(RISK_SETTINGS),
             ]
 
@@ -173,6 +357,7 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
             env=env,
         )
         assert proc.stdout is not None
+        _register_proc(proc)
 
         while True:
             chunk = await proc.stdout.read(512)
@@ -207,6 +392,7 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
         if q:
             await q.put(err)
     finally:
+        _unregister_proc(proc)
         q = _active_task_queues.get(target_id)
         if q:
             # For swarm, we don't want to send [DONE] prematurely
@@ -237,7 +423,7 @@ _AUTH_EXEMPT = {"/health", "/chat", "/dashboard", "/v1/models", "/manifest.json"
 
 def _get_api_token() -> str:
     try:
-        return json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8")).get("api_token", "")
+        return json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8")).get("api_token", "")
     except Exception:
         return ""
 
@@ -254,9 +440,22 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     auth_header = request.headers.get("Authorization", "")
     query_token = request.query_params.get("token", "")
-    if auth_header == f"Bearer {token}" or query_token == token:
+    cookie_token = request.cookies.get("kage_token", "")
+    if auth_header == f"Bearer {token}" or query_token == token or cookie_token == token:
         return await call_next(request)
     return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Prinde orice excepție nehandled: loghează + notifică pe canalul de alerte,
+    în loc să lase clientul cu un 500 mut (exact golul prin care a trecut D1)."""
+    logger.exception(f"Eroare internă la {request.method} {request.url.path}: {exc}")
+    try:
+        _notify("💥 Eroare internă", f"{request.url.path}: {exc}", priority="high")
+    except Exception:
+        pass
+    return JSONResponse({"error": "internal server error", "detail": str(exc)}, status_code=500)
 
 
 # ── Scheduler helpers (Faza 10) ───────────────────────────────────────────────
@@ -337,9 +536,7 @@ async def _run_scheduled_task(task: dict) -> None:
 
 async def _handle_schedule_command(message: str) -> StreamingResponse:
     """Handle !schedule \"CRON\" mesaj from chat."""
-    import re as _re
-
-    m = _re.match(r'!schedule\s+"([^"]+)"\s+(.+)', message, _re.IGNORECASE | _re.DOTALL)
+    m = re.match(r'!schedule\s+"([^"]+)"\s+(.+)', message, re.IGNORECASE | re.DOTALL)
 
     async def respond(text: str):
         yield f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
@@ -414,7 +611,9 @@ async def startup_scheduler():
                         loaded += 1
                     except Exception as e:
                         logger.warning(f"Task {task.get('id')} skip: {e}")
+        _scheduler.add_job(_vault_git_commit_job, "cron", hour=3, minute=0, id="__vault_git_commit__")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
+        _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
         _scheduler.start()
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
@@ -562,7 +761,9 @@ async def risk_register(request_id: str, request: Request):
 
 @app.post("/risk/respond/{request_id}")
 async def risk_respond(request_id: str, request: Request):
-    """Called by ntfy action buttons (Confirmă/Blochează) via Tailscale."""
+    """Rezolvă o aprobare de risc — calea primară (WP1b) sunt butoanele inline
+    Telegram (Confirmă/Blochează); `risk_hook.py` polling-uiește
+    `/risk/status/{id}` până se setează decizia aici."""
     try:
         body = await request.json()
     except Exception:
@@ -630,6 +831,17 @@ async def health():
 async def api_stats():
     """JSON stats for live dashboard polling."""
     return _aggregate_usage()
+
+
+@app.get("/api/config")
+async def api_config():
+    """Config non-sensibil pentru UI (WP2): rooturile permise pentru task-uri +
+    cwd-ul implicit, ca task runner-ul din kage.html să ofere un dropdown de cwd."""
+    return {
+        "allowed_task_roots": [str(r) for r in ALLOWED_TASK_ROOTS],
+        "default_task_cwd": _default_task_cwd(),
+        "confinement_enabled": bool(ALLOWED_TASK_ROOTS),
+    }
 
 
 @app.get("/api/pending")
@@ -729,12 +941,19 @@ async def dashboard():
 
 @app.get("/chat")
 async def chat_ui():
+    # WP-G1 (D15): token-ul NU se mai injectează în HTML/JS (era vizibil în sursa
+    # paginii). Îl livrăm ca cookie HttpOnly — invizibil pentru JS și pentru
+    # view-source; fetch-urile same-origin din pagină îl trimit automat.
     kage_path = Path(__file__).parent / "kage.html"
     html = kage_path.read_text(encoding="utf-8")
+    resp = HTMLResponse(html)
     token = _get_api_token()
     if token:
-        html = html.replace("const API_TOKEN = '';", f"const API_TOKEN = '{token}';")
-    return HTMLResponse(html)
+        resp.set_cookie(
+            "kage_token", token,
+            httponly=True, samesite="strict", path="/", max_age=60 * 60 * 24 * 30,
+        )
+    return resp
 
 
 @app.get("/manifest.json")
@@ -753,17 +972,19 @@ async def pwa_manifest():
     })
 
 
-@app.post("/task/run")
-async def task_run(request: Request):
-    """Spawn autonomous agent as background task and stream output back.
-    Saves to history even if stream disconnects.
-    """
-    body = await request.json()
-    task_text = body.get("task", "").strip()
-    cwd = body.get("cwd", str(Path.home()))
+def _prepare_and_launch_task(task_text: str, cwd: str, register_queue: bool = True) -> tuple[Optional[str], Optional[str]]:
+    """Pregătește și pornește în fundal un task de agent (!run/!swarm/!sysrun).
 
+    Aplică transformarea !sysrun, verifică confinement-ul (allowed_task_roots),
+    alege swarm vs single agent (+ backend gemini/claude) și spawn-ează execuția.
+    Returnează (task_id, None) la succes sau (None, mesaj_eroare) dacă task-ul e gol
+    sau cwd-ul e blocat. Cu register_queue=True înregistrează o coadă în
+    _active_task_queues pentru streaming (folosit de /task/run); cu False task-ul
+    rulează fără consumator de stream — output-ul e salvat în DB oricum.
+    """
+    task_text = task_text.strip()
     if not task_text:
-        return JSONResponse({"error": "task is required"}, status_code=400)
+        return None, "task is required"
 
     # 1. System context routing (!sysrun)
     is_sysrun = task_text.startswith("!sysrun")
@@ -776,13 +997,21 @@ async def task_run(request: Request):
             f"Task: {task_text}"
         )
 
+    # 1b. Workspace confinement — validează cwd față de allowed_task_roots
+    validated_cwd = _validate_task_cwd(cwd)
+    if validated_cwd is None:
+        logger.warning(f"[Confinement] task respins — cwd '{cwd}' în afara allowed_task_roots")
+        _notify("🚫 Task blocat (confinement)", f"cwd {cwd} în afara workspace-ului permis", priority="default")
+        return None, f"cwd `{cwd}` e în afara workspace-ului permis (`allowed_task_roots`)."
+    cwd = validated_cwd
+
     # 2. Swarm vs Single Agent
     is_swarm = task_text.startswith("!swarm")
     if is_swarm:
         task_text = task_text[len("!swarm"):].strip()
         task_id = uuid.uuid4().hex[:8]
-        queue = asyncio.Queue()
-        _active_task_queues[task_id] = queue
+        if register_queue:
+            _active_task_queues[task_id] = asyncio.Queue()
         asyncio.create_task(_swarm_task_exec(task_id, task_text, cwd, is_sysrun))
     else:
         # Single agent backend selection
@@ -795,9 +1024,34 @@ async def task_run(request: Request):
             task_text = task_text[7:].strip()
 
         task_id = uuid.uuid4().hex[:8]
-        queue = asyncio.Queue()
-        _active_task_queues[task_id] = queue
+        if register_queue:
+            _active_task_queues[task_id] = asyncio.Queue()
         asyncio.create_task(_background_task_exec(task_id, task_text, agent, cwd, is_sysrun))
+
+    return task_id, None
+
+
+@app.post("/task/run")
+async def task_run(request: Request):
+    """Spawn autonomous agent as background task and stream output back.
+    Saves to history even if stream disconnects.
+    """
+    body = await request.json()
+    task_text = body.get("task", "").strip()
+    cwd = body.get("cwd") or _default_task_cwd()
+
+    if not task_text:
+        return JSONResponse({"error": "task is required"}, status_code=400)
+
+    task_id, error = _prepare_and_launch_task(task_text, cwd, register_queue=True)
+    if error is not None:
+        async def _blocked():
+            yield f'data: {json.dumps({"choices": [{"delta": {"content": f"**[BLOCKED]** {error}"}}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_blocked(), media_type="text/event-stream")
+
+    queue = _active_task_queues[task_id]
 
     async def _stream():
         try:
@@ -816,9 +1070,65 @@ async def task_run(request: Request):
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
+@app.post("/api/stop")
+async def api_stop():
+    """Kill switch (WP-G1): oprește toate procesele-agent + pauzează scheduler-ul.
+    Expus pentru butonul din UI; din chat/Telegram se apelează prin comanda `!stop`."""
+    return JSONResponse(_stop_all())
+
+
+@app.post("/admin/backup")
+async def admin_backup():
+    """Trigger manual al backup-ului cache_db. Protejat de auth_middleware."""
+    try:
+        path = await _backup_cache_db()
+        return JSONResponse({"status": "ok", "archive": path})
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+async def _sse_to_openai_json(resp: StreamingResponse, model: str = "kage") -> JSONResponse:
+    """Consumă un StreamingResponse SSE și îl transformă într-un răspuns JSON
+    OpenAI-compatible (non-stream). Golirea generatorului declanșează și efectele
+    lui secundare (salvare istoric/cache/memorie), la fel ca în modul stream."""
+    collected: list[str] = []
+    async for chunk in resp.body_iterator:
+        chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for line in chunk_str.splitlines():
+            if line.startswith("data: ") and "[DONE]" not in line:
+                try:
+                    delta = json.loads(line[6:]).get("choices", [{}])[0].get("delta", {})
+                    piece = delta.get("content", "")
+                    if piece:
+                        collected.append(piece)
+                except Exception:
+                    pass
+    content = "".join(collected)
+    return JSONResponse({
+        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+        "object": "chat.completion",
+        "created": int(_time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+    })
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
+    resp = await _chat_dispatch(request, body)
+    # Ramură non-stream: dacă clientul cere stream:false (ex. gateway-ul Telegram),
+    # colapsează SSE-ul într-un JSON OpenAI standard. (WP1 / D2)
+    if body.get("stream") is False and isinstance(resp, StreamingResponse):
+        return await _sse_to_openai_json(resp)
+    return resp
+
+
+async def _chat_dispatch(request: Request, body: dict):
     messages: list = body.get("messages", [])
     session_id: str = request.headers.get("x-session-id", "default")
 
@@ -826,8 +1136,43 @@ async def chat_completions(request: Request):
         (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
     )
 
+    # Handler server-side pentru task-urile de agent (!run/!swarm/!sysrun), ÎNAINTE
+    # de cache. Pornește task-ul în fundal și răspunde cu o confirmare + task id.
+    # Streamul complet al task-ului (spre Telegram/UI) vine la WP8. (WP1 / D13)
+    _lu_stripped = last_user.strip()
+    if re.match(r"^!(run|swarm|sysrun)\b", _lu_stripped, re.IGNORECASE):
+        if _lu_stripped.lower().startswith("!run"):
+            _task_text = _lu_stripped[len("!run"):].strip()
+        else:
+            _task_text = _lu_stripped  # !swarm / !sysrun sunt interpretate în helper
+        task_id, error = _prepare_and_launch_task(_task_text, _default_task_cwd(), register_queue=False)
+        if error is not None:
+            confirm = f"**[BLOCKED]** {error}"
+        else:
+            confirm = f"🚀 Task pornit — id `{task_id}`. Rulează în fundal; rezultatul va veni când e gata."
+
+        async def _agent_confirm():
+            yield f'data: {json.dumps({"choices": [{"delta": {"content": confirm}, "index": 0}]})}\n\n'
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(_agent_confirm(), media_type="text/event-stream")
+
     if last_user.strip() == "!status":
         return _status_snapshot()
+
+    if last_user.strip().lower() == "!stop":
+        return _stop_snapshot()
+
+    if last_user.strip().lower() == "!resume":
+        resumed = False
+        if _scheduler is not None:
+            try:
+                _scheduler.resume()
+                resumed = True
+            except Exception:
+                pass
+        msg = "▶️ Scheduler reluat." if resumed else "▶️ Scheduler indisponibil."
+        return _instant_sse(msg)
 
     if last_user.strip().lower() == "!sleep":
         return await _sleep_response()
@@ -900,7 +1245,6 @@ async def chat_completions(request: Request):
         response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path, badge=badge)
 
     # Wrap generator to store response in cache and history after streaming completes
-    import re as _re
     original_gen = response.body_iterator
 
     async def history_caching_gen():
@@ -918,7 +1262,7 @@ async def chat_completions(request: Request):
         if collected:
             full = "".join(collected)
             # Strip leading badge (e.g. **[T3·haiku·sem:0.97]** )
-            clean_text = _re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
+            clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
             if clean_text:
                 # Cache store
                 if use_cache and cache_embedding is not None:
@@ -1108,7 +1452,7 @@ def _budget_check(tier: int, confidence: float) -> tuple[int, float, Optional[st
     """Enforce daily cloud budget. Returns (tier, confidence, warning_msg_or_none)."""
     global _budget_alert_80_sent
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20
@@ -1219,6 +1563,75 @@ async def _cache_vacuum() -> None:
         logger.warning(f"Cache vacuum failed: {e}")
 
 
+async def _backup_cache_db() -> str:
+    """Backup cache_db/ (SQLite + ChromaDB) într-un tar.gz cu rotație. Returnează calea arhivei.
+
+    SQLite (chat_history.db) e copiat consistent via Online Backup API; restul cache_db/
+    (ChromaDB) prin copytree. Rulează zilnic la 05:00 sau on-demand via POST /admin/backup.
+    """
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    archive_path = BACKUP_DIR / f"cache_db-{ts}.tar.gz"
+    try:
+        with tempfile.TemporaryDirectory() as staging:
+            staging_path = Path(staging) / "cache_db"
+            if CACHE_DB_PATH.exists():
+                shutil.copytree(CACHE_DB_PATH, staging_path)
+            else:
+                staging_path.mkdir(parents=True)
+            # Snapshot SQLite consistent (suprascrie copia brută din copytree)
+            if _db_conn is not None:
+                try:
+                    dest = sqlite3.connect(str(staging_path / "chat_history.db"))
+                    with dest:
+                        _db_conn.backup(dest)
+                    dest.close()
+                except Exception as e:
+                    logger.warning(f"[Backup] SQLite online backup eșuat, folosesc copia brută: {e}")
+            with tarfile.open(archive_path, "w:gz") as tar:
+                tar.add(staging_path, arcname="cache_db")
+        # Rotație: păstrează ultimele BACKUP_KEEP arhive
+        if BACKUP_KEEP > 0:
+            backups = sorted(BACKUP_DIR.glob("cache_db-*.tar.gz"))
+            for old in backups[:-BACKUP_KEEP]:
+                old.unlink(missing_ok=True)
+        logger.info(f"[Backup] cache_db → {archive_path} ({archive_path.stat().st_size} bytes)")
+        return str(archive_path)
+    except Exception as e:
+        logger.error(f"[Backup] eșuat: {e}")
+        _notify("⚠️ Backup eșuat", str(e), priority="high")
+        raise
+
+
+def _restore_cache_db(archive_path, dest=None) -> str:
+    """Restaurează cache_db/ dintr-o arhivă produsă de `_backup_cache_db`.
+
+    Extrage `cache_db-*.tar.gz` și înlocuiește directorul `dest` (implicit
+    CACHE_DB_PATH). Directorul curent e mutat în `<dest>.pre-restore-<ts>` ca plasă
+    de siguranță. A se rula cu ORCHESTRATORUL OPRIT (SQLite/ChromaDB țin fișiere
+    deschise). Vezi RESTORE.md. Returnează un mesaj de stare.
+    """
+    archive = Path(archive_path)
+    target = Path(dest) if dest is not None else CACHE_DB_PATH
+    if not archive.exists():
+        raise FileNotFoundError(f"arhiva nu există: {archive}")
+
+    with tempfile.TemporaryDirectory() as staging:
+        with tarfile.open(archive, "r:gz") as tar:
+            tar.extractall(staging)
+        extracted = Path(staging) / "cache_db"
+        if not extracted.exists():
+            raise ValueError(f"arhivă invalidă: lipsește cache_db/ în {archive.name}")
+        if target.exists():
+            ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+            safety = target.with_name(f"{target.name}.pre-restore-{ts}")
+            shutil.move(str(target), str(safety))
+            logger.info(f"[Restore] cache_db curent salvat în {safety}")
+        shutil.copytree(extracted, target)
+    logger.info(f"[Restore] cache_db restaurat din {archive.name}")
+    return f"cache_db restaurat din {archive.name}"
+
+
 async def _memory_store(session_id: str, user_msg: str, assistant_msg: str) -> None:
     """Stochează perechea (user, assistant) în long_term_memory cu dedup per-sesiune."""
     if _memory_collection is None:
@@ -1321,7 +1734,7 @@ def _aggregate_usage() -> dict:
     avg_latency = {t: int(sum(v) / len(v)) for t, v in latency_by_tier.items() if v}
 
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20
@@ -1890,6 +2303,8 @@ def _help_response() -> StreamingResponse:
         "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
+        "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",
+        "  `!resume`   → Reia scheduler-ul după !stop",
         "  `!help`     → Această listă",
         "  `escaladează` → echivalent cu !best (în română)",
         "",
@@ -1915,7 +2330,7 @@ def _port_up(port: int) -> bool:
 
 def _send_ntfy_sync(title: str, body: str, priority: str = "default") -> None:
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         ntfy_url = cfg.get("ntfy_url", "").rstrip("/")
         topic = cfg.get("ntfy_topic", "")
         if not ntfy_url or not topic or "CHANGEME" in topic:
@@ -1936,16 +2351,23 @@ def _send_ntfy_sync(title: str, body: str, priority: str = "default") -> None:
 
 
 def _notify(title: str, body: str, priority: str = "default") -> None:
-    """Trimite notificare pe ntfy (sync) și Telegram (async, fire-and-forget)."""
-    _send_ntfy_sync(title, body, priority)
+    """Notifică pe Telegram (canal primar, WP1b). ntfy rămâne doar fallback dacă
+    gateway-ul Telegram nu e configurat — sau dacă nu există un event loop activ
+    (context sync/thread în care `asyncio.create_task` nu poate rula)."""
     if _tg_gateway:
-        asyncio.create_task(_tg_gateway.send_notification(title, body, priority))
+        try:
+            asyncio.get_running_loop()
+            asyncio.create_task(_tg_gateway.send_notification(title, body, priority))
+            return
+        except RuntimeError:
+            pass  # fără loop activ → cade pe ntfy (dacă e configurat)
+    _send_ntfy_sync(title, body, priority)
 
 
 def _status_snapshot() -> StreamingResponse:
     """Instant !status response — no LLM call."""
     try:
-        cfg = json.loads(NTFY_CONFIG_PATH.read_text(encoding="utf-8"))
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
     except Exception:
         max_cloud = 20
@@ -1984,6 +2406,26 @@ def _status_snapshot() -> StreamingResponse:
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _instant_sse(text: str) -> StreamingResponse:
+    """Răspuns SSE instant cu un text fix (fără LLM). Folosit de comenzile de control."""
+    async def generate():
+        yield f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _stop_snapshot() -> StreamingResponse:
+    """Instant !stop — kill switch: omoară procesele-agent + pauzează scheduler-ul."""
+    result = _stop_all()
+    text = (
+        "🛑 **Kill switch activat**\n"
+        f"  Procese-agent oprite: {result['procs_killed']}\n"
+        f"  Scheduler: {'pe pauză' if result['scheduler_paused'] else 'indisponibil'}\n"
+        "  Reia joburile programate cu `!resume`."
+    )
+    return _instant_sse(text)
 
 
 def _log_usage(tier: int, model: str, task_preview: str, duration_ms: Optional[int], agent: Optional[str] = None) -> None:
@@ -2373,13 +2815,13 @@ async def _generate_cli_chunks(
             yield "data: [DONE]\n\n"
         return
 
+    # Chat (fallback CLI): capability minimă — read-only, fără Bash (WP-G1 / D7).
     cmd = [
         CLAUDE_CLI, "-p", full_prompt,
         "--model", model,
         "--output-format", "stream-json",
         "--verbose",
-        "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--permission-mode", "auto",
+        *_policy_cli_flags("chat"),
         "--settings", str(RISK_SETTINGS),
     ]
     env = {**os.environ, "ORCHESTRATOR_USER_MSG": user_message}
@@ -2442,13 +2884,14 @@ async def _route_claude_autonomous(
     badge: Optional[str] = None,
 ) -> StreamingResponse:
     """Run Claude CLI in autonomous mode with PreToolUse risk gating."""
+    # Chat T3+ = răspuns conversațional, nu agent. Capability minimă — read-only,
+    # fără Bash/Write/Edit (WP-G1 / D7). Pentru execuție reală: !run/!sysrun.
     cmd = [
         CLAUDE_CLI, "-p", full_prompt,
         "--model", model,
         "--output-format", "stream-json",
         "--verbose",
-        "--allowedTools", "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--permission-mode", "auto",
+        *_policy_cli_flags("chat"),
         "--settings", str(RISK_SETTINGS),
     ]
     env = {**os.environ, "ORCHESTRATOR_USER_MSG": user_message}
@@ -2494,6 +2937,7 @@ async def _route_claude_autonomous(
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
             )
+            _register_proc(proc)
 
             reader = asyncio.create_task(feed_queue())
             deadline = asyncio.get_event_loop().time() + 120
@@ -2550,6 +2994,7 @@ async def _route_claude_autonomous(
             logger.error(f"Claude autonomous error (tier {tier}): {e}")
             yield f'data: {json.dumps({"choices": [{"delta": {"content": f"[Eroare CLI tier {tier}: {e}]"}, "index": 0}]})}\n\n'
         finally:
+            _unregister_proc(proc)
             _write_status_idle(tier, model or "gemini-pro")
             yield "data: [DONE]\n\n"
 

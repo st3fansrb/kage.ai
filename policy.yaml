@@ -1,0 +1,35 @@
+# Kage — politică de governance (WP-G1, §6.2)
+#
+# Sursă unică de adevăr pentru capabilitățile agenților, per tip de rulare.
+# Citită de toate punctele de spawn din orchestrator.py (_route_claude_autonomous,
+# _generate_cli_chunks, _background_task_exec). Modifică AICI, nu în cod.
+#
+# Principiul D7: capability MINIMĂ by default, nu maximă.
+#  - `chat`      = răspunsuri conversaționale (T3–T6). Read-only: fără Bash/Write/Edit.
+#                  Un mesaj normal de chat NU trebuie să poată executa comenzi shell.
+#  - `task`      = !run — agent autonom pe workspace, capabilitate completă.
+#  - `sysrun`    = !sysrun — auto-modificare (codul Kage), capabilitate completă.
+#  - `scheduled` = joburi cron — read-only by default (nesupravegheate).
+#
+# `tools: []` (listă goală) → nu se trimite deloc --allowedTools (zero unelte).
+# Pentru a bloca explicit unelte periculoase chiar dacă modelul le cere, folosește
+# `disallowed`. Hook-ul PreToolUse (risk_hook.py) rămâne al doilea strat de apărare.
+
+run_types:
+  chat:
+    tools: [Read, Glob, Grep, WebFetch, WebSearch]
+    disallowed: [Bash, Write, Edit]
+    permission_mode: auto
+
+  task:
+    tools: [Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch]
+    permission_mode: auto
+
+  sysrun:
+    tools: [Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch]
+    permission_mode: auto
+
+  scheduled:
+    tools: [Read, Glob, Grep, WebFetch, WebSearch]
+    disallowed: [Bash, Write, Edit]
+    permission_mode: auto
