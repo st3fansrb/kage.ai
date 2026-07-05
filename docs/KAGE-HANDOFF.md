@@ -588,7 +588,7 @@ Frontend Next.js + CopilotKit pe AG-UI: endpoint SSE `/agui` care traduce `runs`
 inbox aprobări (`/api/pending` există), briefing-uri de la agenții programați, tab Trading
 (read-only peste `trading.db` din WP-T: starea agenților, curba paper P&L, experimentele). `kage.html` se
 pensionează la paritate. Referințe de design în `KAGE-EVALUARE.md` §3.12.
-**Promptul de design e gata:** `PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
+**Promptul de design e gata:** `design/PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
 output-ul (direcție vizuală + layout-uri + componente) devine specul vizual al acestui WP.
 
 ### Restul (după WP10, ordine: #12 → #14 → #6 → #9; #7 a fost tras în față)

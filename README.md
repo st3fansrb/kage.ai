@@ -61,7 +61,7 @@ ollama pull qwen3.6:35b
 ollama pull nomic-embed-text
 ```
 
-Full setup instructions: [INSTALL.md](INSTALL.md)
+Full setup instructions: [INSTALL.md](docs/INSTALL.md)
 
 ---
 

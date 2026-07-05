@@ -1,7 +1,7 @@
 # Prompt pentru Claude Design — „Kage Mission Control"
 
 > Pregătit 04.07.2026. Copy-paste integral în Claude Design (sau orice tool de design AI).
-> E input-ul de design pentru WP10 (#15B) din KAGE-HANDOFF.md — design-ul se face ÎNAINTEA
+> E input-ul de design pentru WP10 (#15B) din docs/KAGE-HANDOFF.md — design-ul se face ÎNAINTEA
 > implementării, dar implementarea depinde de WP1 + WP8 (run ledger).
 >
 > **Stare 05.07.2026 — v1 livrat, direcția = implementare corectă.** Exportul din Claude
