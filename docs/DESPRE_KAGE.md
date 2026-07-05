@@ -78,7 +78,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 
 ### Canale & notificări
 - **Push ntfy.sh + Tailscale** — aprobări de risc și alerte pe telefon.
-- **Telegram Bot Gateway** — canal bidirecțional, aprobare risc inline din chat.
+- **Telegram Bot Gateway** — canal bidirecțional, aprobare risc inline din chat, mesaje vocale transcrise 100% local (whisper.cpp).
 - **Widget macOS** — buget și status în menubar (rumps).
 
 ### Interfață

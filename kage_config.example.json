@@ -110,6 +110,13 @@
     "vault_daily_dir": ""
   },
 
+  "_comment_whisper": "WP6: transcriere voce 100% LOCALĂ pentru voice memos pe Telegram (endpoint OpenAI-compatible POST /v1/audio/transcriptions). Trimiți un mesaj vocal botului → e transcris cu whisper.cpp pe mașină (zero cloud) → textul intră în pipeline-ul normal, cu reply '📝 Am înțeles: …'. Setup: `brew install whisper-cpp ffmpeg`, apoi descarcă un model GGML (ex. large-v3-turbo, ~1,6GB) și pune calea în `model`. `bin` = numele/calea binarului (brew: whisper-cli). `language` = 'auto' detectează limba per-clip (merge română ȘI engleză); pune un cod fix ('ro', 'en') doar dacă vorbești mereu o singură limbă (puțin mai precis, fără detecție). Fără bin/model, endpoint-ul dă 503 și Telegram anunță că nu e configurat. ffmpeg convertește OGG→WAV 16kHz (recomandat).",
+  "whisper": {
+    "bin": "whisper-cli",
+    "model": "",
+    "language": "auto"
+  },
+
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
   "models": {
     "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },

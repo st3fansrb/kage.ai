@@ -275,6 +275,20 @@ din vault; starea misiunilor apare când vine WP11.
   `vault_daily_dir`). Job APScheduler `__briefing__` la `0 8 * * *` (configurabil).
 - Teste: 122 → **142 verzi**.
 
+### WP6 — Voice memos pe Telegram ✅ (06.07.2026)
+
+Trimiți botului un mesaj vocal → e transcris 100% local (whisper.cpp, zero cloud) → textul
+intră în pipeline-ul normal de chat, cu reply `📝 Am înțeles: …`.
+
+- Endpoint OpenAI-compatible `POST /v1/audio/transcriptions` (multipart `file`) — subprocess
+  whisper.cpp cu `-nt -np`; ffmpeg convertește OGG→WAV 16kHz mono când e disponibil.
+- Gateway: ramură `voice`/`audio` → getFile → download OGG → transcriere → forward.
+- Config nou: bloc `whisper` (`bin`, `model`, `language`). Degradare grațioasă: fără
+  binar/model endpoint-ul dă 503 și Telegram anunță că nu e configurat.
+- **Setup opt-in** (nu e făcut încă): `brew install whisper-cpp ffmpeg` + model GGML
+  (large-v3-turbo ~1,6GB) → `whisper.model`.
+- Teste: 142 → **154 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)
