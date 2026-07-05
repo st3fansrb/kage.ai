@@ -42,6 +42,11 @@
   "backup_dir": "~/Documents/MyVault/backups/kage",
   "backup_keep": 7,
 
+  "_comment_backup_offmachine": "WP-B: backup off-machine. vault_git_remote = URL GitHub privat pentru vault (push în jobul nocturn de 03:00; folosește SSH sau credential helper — NU sincroniza .git prin iCloud). icloud_backup_dir = unde se copiază arhivele tar.gz (default iCloud Drive; gol/absent = fără copie; sare peste dacă iCloud e absent). backup_include_config include kage_config.json în arhivă → restore complet dintr-un fișier (token-urile ajung DOAR în arhivă, niciodată în git).",
+  "vault_git_remote": "",
+  "icloud_backup_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups",
+  "backup_include_config": true,
+
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
   "models": {
     "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },

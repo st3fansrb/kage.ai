@@ -66,6 +66,8 @@ LITELLM_URL  = _cfg.get("litellm_url",  "http://localhost:4000/v1")
 LITELLM_KEY  = _cfg.get("litellm_key",  "sk-orchestrator-local")
 OLLAMA_URL   = _cfg.get("ollama_url",   "http://localhost:11434")
 VAULT        = Path(_cfg.get("vault_path", str(Path.home() / "Documents" / "KageVault"))).expanduser()
+# WP-B: remote git pentru vault (GitHub privat). Gol = fără push (doar commit local).
+VAULT_GIT_REMOTE = str(_cfg.get("vault_git_remote", "")).strip()
 CLAUDE_CLI   = _find_cli("claude")
 GEMINI_CLI   = _find_cli("gemini")
 
@@ -203,7 +205,9 @@ def _vault_git_commit(vault_path: Optional[Path] = None) -> str:
         _git("add", "-A")
         status = _git("status", "--porcelain")
         if not status.stdout.strip():
-            return "[vault-git] nimic de comis"
+            # Nimic nou de comis, dar pot exista commit-uri locale ne-împinse.
+            push_msg = _vault_git_push(_git)
+            return f"[vault-git] nimic de comis{push_msg}"
 
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         res = _git("commit", "-m", f"kage auto-commit {ts}")
@@ -211,10 +215,37 @@ def _vault_git_commit(vault_path: Optional[Path] = None) -> str:
             logger.warning(f"[vault-git] commit eșuat: {res.stderr.strip()[:200]}")
             return f"[vault-git] commit eșuat: {res.stderr.strip()[:120]}"
         logger.info(f"[vault-git] commit ok pe {vault}")
-        return f"[vault-git] commit ok ({ts})"
+        push_msg = _vault_git_push(_git)
+        return f"[vault-git] commit ok ({ts}){push_msg}"
     except Exception as e:
         logger.error(f"[vault-git] eroare: {e}")
         return f"[vault-git] eroare: {e}"
+
+
+def _vault_git_push(git_fn) -> str:
+    """Push pe remote-ul configurat (WP-B — backup off-machine). No-op dacă
+    `vault_git_remote` e gol. Nu ridică excepții — un push eșuat (offline, auth)
+    nu trebuie să pice jobul nocturn. Returnează un sufix de stare (' · push …')."""
+    if not VAULT_GIT_REMOTE:
+        return ""
+    try:
+        # Sincronizează remote-ul 'origin' cu URL-ul din config (add sau set-url).
+        existing = git_fn("remote", "get-url", "origin")
+        if existing.returncode != 0:
+            git_fn("remote", "add", "origin", VAULT_GIT_REMOTE)
+        elif existing.stdout.strip() != VAULT_GIT_REMOTE:
+            git_fn("remote", "set-url", "origin", VAULT_GIT_REMOTE)
+
+        branch = git_fn("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+        res = git_fn("push", "-u", "origin", branch)
+        if res.returncode != 0:
+            logger.warning(f"[vault-git] push eșuat: {res.stderr.strip()[:200]}")
+            return " · push eșuat"
+        logger.info(f"[vault-git] push ok → origin/{branch}")
+        return " · push ok"
+    except Exception as e:
+        logger.warning(f"[vault-git] push eroare: {e}")
+        return " · push eroare"
 
 
 async def _vault_git_commit_job() -> None:
@@ -226,6 +257,10 @@ async def _vault_git_commit_job() -> None:
 # ── Backup cache_db (Faza 19) ─────────────────────────────────────────────────
 BACKUP_DIR  = Path(_cfg.get("backup_dir", str(VAULT / "backups" / "kage"))).expanduser()
 BACKUP_KEEP = int(_cfg.get("backup_keep", 7))
+# WP-B: copie off-machine a arhivelor în iCloud Drive (default) + config în arhivă.
+_icloud_raw = _cfg.get("icloud_backup_dir", "~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups")
+ICLOUD_BACKUP_DIR = Path(_icloud_raw).expanduser() if str(_icloud_raw).strip() else None
+BACKUP_INCLUDE_CONFIG = bool(_cfg.get("backup_include_config", True))
 
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
@@ -1813,19 +1848,52 @@ async def _backup_cache_db() -> str:
                     dest.close()
                 except Exception as e:
                     logger.warning(f"[Backup] SQLite online backup eșuat, folosesc copia brută: {e}")
+            # WP-B: include kage_config.json în arhivă → restore complet dintr-un singur
+            # fișier. Token-urile ajung DOAR în arhivă (iCloud), niciodată în git.
+            cfg_copy = Path(staging) / "kage_config.json"
+            if BACKUP_INCLUDE_CONFIG and KAGE_CONFIG_PATH.exists():
+                shutil.copy2(KAGE_CONFIG_PATH, cfg_copy)
             with tarfile.open(archive_path, "w:gz") as tar:
                 tar.add(staging_path, arcname="cache_db")
+                if cfg_copy.exists():
+                    tar.add(cfg_copy, arcname="kage_config.json")
         # Rotație: păstrează ultimele BACKUP_KEEP arhive
         if BACKUP_KEEP > 0:
             backups = sorted(BACKUP_DIR.glob("cache_db-*.tar.gz"))
             for old in backups[:-BACKUP_KEEP]:
                 old.unlink(missing_ok=True)
         logger.info(f"[Backup] cache_db → {archive_path} ({archive_path.stat().st_size} bytes)")
+        _copy_backup_to_icloud(archive_path)
         return str(archive_path)
     except Exception as e:
         logger.error(f"[Backup] eșuat: {e}")
         _notify("⚠️ Backup eșuat", str(e), priority="high")
         raise
+
+
+def _copy_backup_to_icloud(archive_path: Path) -> Optional[str]:
+    """Copiază arhiva off-machine în iCloud Drive (WP-B), cu aceeași rotație.
+    macOS sincronizează folderul singur. No-op dacă iCloud e dezactivat/absent
+    (nu creăm folderul dacă baza CloudDocs nu există). Nu ridică excepții."""
+    if ICLOUD_BACKUP_DIR is None:
+        return None
+    # Nu materializa un folder ne-sincronizat pe o mașină fără iCloud activ.
+    icloud_base = Path("~/Library/Mobile Documents/com~apple~CloudDocs").expanduser()
+    if str(ICLOUD_BACKUP_DIR).startswith(str(icloud_base)) and not icloud_base.exists():
+        logger.info("[Backup] iCloud indisponibil — sar peste copia off-machine")
+        return None
+    try:
+        ICLOUD_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        dest = ICLOUD_BACKUP_DIR / archive_path.name
+        shutil.copy2(archive_path, dest)
+        if BACKUP_KEEP > 0:
+            for old in sorted(ICLOUD_BACKUP_DIR.glob("cache_db-*.tar.gz"))[:-BACKUP_KEEP]:
+                old.unlink(missing_ok=True)
+        logger.info(f"[Backup] copiat off-machine → {dest}")
+        return str(dest)
+    except Exception as e:
+        logger.warning(f"[Backup] copie iCloud eșuată: {e}")
+        return None
 
 
 def _restore_cache_db(archive_path, dest=None) -> str:

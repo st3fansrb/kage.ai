@@ -355,7 +355,7 @@ funcțional după mutarea usage.
   Baseline 93 → **95 verzi**. Verificat runtime: backfill + aggregate + dashboard render.
   **Necesită restart** (`start_all.sh`) ca persona din config + tabelul usage să fie active.
 
-### WP-B — Backup off-machine · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
+### WP-B — Backup off-machine ✅ (05.07.2026) · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
 
 Tot sistemul trăiește pe un singur laptop — disc mort/furt = pierzi Kage + memoria +
 istoricul + vault-ul. Două destinații, pe naturi diferite de date:
@@ -373,6 +373,32 @@ istoricul + vault-ul. Două destinații, pe naturi diferite de date:
 
 **Acceptare:** commit-ul nocturn face push pe remote · arhiva apare în folderul iCloud după
 backup · restore testat dintr-o arhivă luată din iCloud · grep fără token în repo-ul remote.
+
+**Implementat (05.07.2026):**
+
+- **Vault → push (1):** `_vault_git_push(git_fn)` apelat din `_vault_git_commit` după commit
+  (și când „nimic de comis", pentru commit-uri locale ne-împinse). Sincronizează `origin` cu
+  `vault_git_remote` din config (add/set-url), `push -u origin <branch>`. No-op dacă remote gol;
+  push eșuat (offline/auth) e grațios — nu pică jobul nocturn. Sufix de stare (`· push ok/eșuat`).
+- **Arhive → iCloud (2):** `_copy_backup_to_icloud(archive)` apelat la finalul `_backup_cache_db`,
+  copiază în `icloud_backup_dir` (default `~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups`)
+  cu aceeași rotație `backup_keep`. Sare grațios dacă baza CloudDocs nu există (mașină fără iCloud);
+  gol/absent = dezactivat.
+- **Config în arhivă (3):** `_backup_cache_db` include `kage_config.json` la rădăcina tar.gz
+  (`backup_include_config`, default true) → restore complet dintr-un fișier. Token-urile ajung
+  DOAR în arhivă (iCloud), niciodată în git. `_restore_cache_db` restaurează doar `cache_db/`;
+  config-ul rămâne pas manual (RESTORE.md §2b).
+- Config nou (real + example): `vault_git_remote`, `icloud_backup_dir`, `backup_include_config`.
+  RESTORE.md: secțiune §0 (backup off-machine) + §2b (restore config din arhivă).
+- Teste: `test_vault_git.py` (+3: push pe bare repo, no-push fără remote, push eșuat grațios),
+  `test_backup.py` (+3: config în arhivă, copie iCloud, iCloud dezactivat), `test_restore.py`
+  (+1: arhiva cu config restaurează cache_db normal). **Plasă de siguranță în conftest:**
+  `ICLOUD_BACKUP_DIR=None` implicit — testele de backup nu scriu în iCloud-ul real (bug de
+  izolare prins la review runtime). Baseline 95 → **102 verzi**. Verificat runtime: backup real
+  → arhivă în iCloud cu config + restore din arhiva iCloud (primul backup off-machine creat).
+- **Pas rămas pentru Stefan:** completează `vault_git_remote` în `kage_config.json` cu URL-ul
+  repo-ului privat GitHub al vault-ului (SSH sau HTTPS cu credential helper) ca push-ul nocturn
+  să funcționeze. Vault-ul se `git init`-ează automat la jobul de 03:00 (WP-G1).
 
 ### WP-J — Job hunter multi-profil (career-ops + JobSpy) · efort: un weekend · după WP2, independent de restul
 

@@ -251,6 +251,17 @@ Curățenie de cod + externalizarea datelor personale:
   de endpoint-ul `/schedule`.
 - Teste: 93 → **95 verzi**.
 
+### WP-B — Backup off-machine ✅ (05.07.2026)
+
+Un singur laptop = un singur punct de eșec. Datele pleacă în două locuri:
+
+- **Vault → GitHub privat** (`vault_git_remote`): `git push` în jobul nocturn de commit (03:00).
+- **Arhive tar.gz → iCloud Drive** (`icloud_backup_dir`): copie off-machine cu rotația
+  `backup_keep`, macOS sincronizează singur; sare grațios dacă iCloud lipsește.
+- **Config în arhivă** (`backup_include_config`): `kage_config.json` inclus în tar.gz → restore
+  complet dintr-un fișier; token-urile ajung doar în iCloud, niciodată în git.
+- RESTORE.md extins (backup off-machine + restore config). Teste: 95 → **102 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)
