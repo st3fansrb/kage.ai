@@ -243,7 +243,7 @@ scrie către ntfy.sh · pytest verde.
 intră în flux de aprobare (mock), nu deny · keyword explicit → downgrade · `!run` din UI fără
 cwd explicit pornește (nu `[BLOCKED]`) · pytest verde.
 
-### WP3 (#3) — Router cu feedback loop · efort: o seară–un weekend
+### WP3 (#3) — Router cu feedback loop ✅ (05.07.2026) · efort: o seară–un weekend
 
 **Fișiere:** `orchestrator.py` (`decide_tier`, `_semantic_classify`), `tests/test_routing.py`.
 **Pași:** (1) la `!retry`/prefix forțat, adaugă mesajul cu tier-ul corectat în colecția
@@ -253,6 +253,28 @@ vot ponderat cu similaritatea (azi 1-NN); (3) plafonează colecția (vacuum la N
 pentru T4/T6 în `TIER_EXAMPLES`.
 **Acceptare:** teste: după un override `!best` pe un mesaj, un mesaj similar se rutează T5 cu
 metoda `sem` · `!opus`/`!gemini` forțează corect · colecția nu crește nelimitat · pytest verde.
+
+**Implementat (05.07.2026):**
+
+- (1) `_record_routing_feedback(msg, tier)` — curăță prefixele (`_strip_routing_prefixes`),
+  embed-uiește și stochează în `tier_routing` cu `{"tier":N,"source":"feedback","ts":...}`.
+  Declanșat non-blocant (`asyncio.create_task`) din `chat_completions` când
+  `forced and routing_method == "forced"` (deci `!fast/!best/!opus/!gemini/!retry/escaladează`,
+  NU `!plan` care păstrează tier-ul clasificatorului).
+- (2) `_semantic_classify` — k-NN cu `n_results=min(5, count)`, vot ponderat cu similaritatea
+  peste pragul 0.6; tier = argmax al sumei de similarități, confidence = cel mai bun vecin al
+  tier-ului câștigător. (Bătea 1-NN: 3 vecini slabi corecți înving 1 vecin puternic greșit.)
+- (3) `_routing_vacuum()` — plafon `MAX_FEEDBACK_PER_TIER` (default 50, config
+  `max_routing_feedback_per_tier`); păstrează cele mai noi per tier, seed-urile intacte.
+  Rulat după fiecare feedback.
+- (4) `!opus`→T6, `!gemini`→T4 în `decide_tier`; `!retry` acum `min(last+1, 6)`. Text `!help`
+  actualizat. (Chip-urile UI: doar în `_build_chat_html`, cod mort — kage.html e în afara
+  scope-ului WP3, neatins.)
+- (5) `TIER_EXAMPLES[4]` și `[6]` adăugate; seeding refăcut idempotent per-tier
+  (`_seed_routing_examples`) — T4/T6 se seamănă la restart chiar pe colecția existentă.
+
+Baseline teste: 69 → **79 verzi**. **Necesită restart** (`start_all.sh`) ca T4/T6 să fie
+seed-uite și codul nou să ruleze.
 
 ### WP4 (#8) — Cache v2 context-aware · efort: ~2 ore
 

@@ -251,6 +251,9 @@ TIER_SHORT  = _build_tier_short(_cfg)
 
 _TIER_CONFIDENCE = {1: 0.9, 2: 0.75, 3: 0.8, 4: 0.8, 5: 0.85, 6: 0.9}
 
+# Router feedback loop: cap learned examples per tier so tier_routing can't grow unbounded.
+MAX_FEEDBACK_PER_TIER = int(_cfg.get("max_routing_feedback_per_tier", 50))
+
 PERSONAL_KEYWORDS = _cfg.get("personal_keywords", [])
 
 UNCERTAINTY_PHRASES = [
@@ -659,11 +662,24 @@ TIER_EXAMPLES: dict[int, list[str]] = {
         "ajutor cu debugging", "scrie o funcție care",
         "cum funcționează REST API", "optimizează codul acesta",
     ],
+    4: [
+        "rezumă acest document lung", "analizează această imagine",
+        "extrage informațiile din PDF-ul atașat", "tradu și rezumă articolul acesta",
+        "compară aceste două texte lungi", "descrie ce se vede în poză",
+        "rezumă conținutul acestui fișier mare",
+    ],
     5: [
         "construiește o arhitectură pentru", "planifică implementarea",
         "implementează feature-ul complet", "scrie un sistem complex",
         "analizează în profunzime", "creează un plan detaliat",
         "proiectează baza de date", "refactorizează întregul modul",
+    ],
+    6: [
+        "demonstrează teorema", "rezolvă această problemă grea de algoritmică",
+        "proiectează un sistem distribuit complex de la zero",
+        "raționament matematic avansat pas cu pas",
+        "analiză juridică aprofundată a contractului",
+        "optimizează algoritmul la complexitatea minimă posibilă",
     ],
 }
 
@@ -707,30 +723,48 @@ async def startup_cache():
         if count > 0:
             asyncio.create_task(_cache_vacuum())
 
-        # Seed TIER_EXAMPLES if routing collection is empty
-        if _routing_collection.count() == 0:
-            logger.info("Seeding tier_routing collection with examples...")
-            seeded = 0
-            for tier_num, examples in TIER_EXAMPLES.items():
-                for ex in examples:
-                    emb = await _get_embedding(ex)
-                    if emb is None:
-                        continue
-                    try:
-                        _routing_collection.add(
-                            documents=[ex],
-                            embeddings=[emb],
-                            metadatas=[{"tier": tier_num}],
-                            ids=[uuid.uuid4().hex],
-                        )
-                        seeded += 1
-                    except Exception as e:
-                        logger.debug(f"Seed failed for '{ex}': {e}")
-            logger.info(f"Routing collection seeded with {seeded} examples")
-        else:
-            logger.info(f"Routing collection already has {_routing_collection.count()} examples")
+        # Seed TIER_EXAMPLES for any tier missing seed entries (idempotent — picks up
+        # newly added tiers like T4/T6 on an already-populated collection).
+        await _seed_routing_examples()
     except Exception as e:
         logger.error(f"ChromaDB startup failed: {e}")
+
+
+async def _seed_routing_examples() -> None:
+    """Seed TIER_EXAMPLES for tiers that have no seed entries yet. Idempotent."""
+    if _routing_collection is None:
+        return
+    try:
+        existing = _routing_collection.get(include=["metadatas"])
+        present = {
+            int(meta.get("tier", -1))
+            for meta in existing["metadatas"]
+            if meta.get("source") != "feedback"
+        }
+    except Exception:
+        present = set()
+    seeded = 0
+    for tier_num, examples in TIER_EXAMPLES.items():
+        if tier_num in present:
+            continue
+        for ex in examples:
+            emb = await _get_embedding(ex)
+            if emb is None:
+                continue
+            try:
+                _routing_collection.add(
+                    documents=[ex],
+                    embeddings=[emb],
+                    metadatas=[{"tier": tier_num, "source": "seed"}],
+                    ids=[uuid.uuid4().hex],
+                )
+                seeded += 1
+            except Exception as e:
+                logger.debug(f"Seed failed for '{ex}': {e}")
+    if seeded:
+        logger.info(f"Routing collection seeded {seeded} new examples")
+    else:
+        logger.info(f"Routing collection ready ({_routing_collection.count()} examples)")
 
 
 # ── Risk endpoints ────────────────────────────────────────────────────────────
@@ -1202,6 +1236,11 @@ async def _chat_dispatch(request: Request, body: dict):
 
     tier, forced, confidence, routing_method = await decide_tier(last_user)
 
+    # Feedback loop: an explicit tier override teaches the router (WP3). method=="forced"
+    # excludes !plan (keeps classifier tier) and un-prefixed classifications.
+    if forced and routing_method == "forced":
+        asyncio.create_task(_record_routing_feedback(last_user, tier))
+
     original_tier = tier
     budget_warning: Optional[str] = None
     if tier >= 3 and not forced:
@@ -1308,6 +1347,10 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
         return 1, True, 1.0, "forced"
     if "!best" in msg_lower:
         return 5, True, 1.0, "forced"
+    if "!opus" in msg_lower:
+        return 6, True, 1.0, "forced"
+    if "!gemini" in msg_lower:
+        return 4, True, 1.0, "forced"
     if "!retry" in msg_lower:
         last_tier = 1
         try:
@@ -1315,7 +1358,7 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
             last_tier = int(status.get("tier", 1))
         except Exception:
             pass
-        return min(last_tier + 1, 5), True, 1.0, "forced"
+        return min(last_tier + 1, 6), True, 1.0, "forced"
     if "!plan" in msg_lower:
         clean = msg_lower.replace("!plan", "").strip()
         tier, confidence, method = await _classify(clean or msg)
@@ -1342,24 +1385,36 @@ async def _classify(message: str) -> tuple[int, float, str]:
 
 
 async def _semantic_classify(message: str) -> tuple[int, float]:
-    """Classify via embedding similarity against TIER_EXAMPLES seeds."""
+    """Classify via k-NN (k=5) over TIER_EXAMPLES + learned feedback, weighted by similarity.
+
+    Tier = argmax of per-tier summed similarity among neighbors above the 0.6 floor.
+    Confidence = strength of the best matching neighbor of the winning tier.
+    """
     if _routing_collection is None or _routing_collection.count() == 0:
         raise RuntimeError("routing_collection not ready")
     embedding = await _get_embedding(message[:400])
     if embedding is None:
         raise RuntimeError("embedding unavailable")
+    n = min(5, _routing_collection.count())
     results = _routing_collection.query(
-        query_embeddings=[embedding], n_results=1,
+        query_embeddings=[embedding], n_results=n,
         include=["metadatas", "distances"],
     )
     if not results["distances"] or not results["distances"][0]:
         return 3, 0.6
-    distance = results["distances"][0][0]
-    similarity = 1.0 - distance
-    if similarity < 0.6:
+    votes: dict[int, float] = {}       # tier -> summed similarity weight
+    best_sim: dict[int, float] = {}    # tier -> strongest neighbor similarity
+    for distance, meta in zip(results["distances"][0], results["metadatas"][0]):
+        similarity = 1.0 - distance
+        if similarity < 0.6:
+            continue
+        t = int(meta.get("tier", 3))
+        votes[t] = votes.get(t, 0.0) + similarity
+        best_sim[t] = max(best_sim.get(t, 0.0), similarity)
+    if not votes:
         return 3, 0.6
-    tier = int(results["metadatas"][0][0].get("tier", 3))
-    return tier, round(similarity, 3)
+    tier = max(votes, key=votes.get)
+    return tier, round(best_sim[tier], 3)
 
 
 async def _qwen_classify(message: str) -> tuple[int, float, str]:
@@ -1418,6 +1473,75 @@ def _heuristic_classify(message: str) -> int:
     if len(message) > 200:
         return 2
     return 1
+
+
+# ── Router feedback loop (WP3) ────────────────────────────────────────────────
+
+# Prefixes stripped before storing a message as a routing example.
+_ROUTING_PREFIXES = (
+    "!fast", "!best", "!opus", "!gemini", "!plan", "!retry",
+    "!nocache", "!save", "!status", "!help",
+)
+
+
+def _strip_routing_prefixes(message: str) -> str:
+    """Remove command prefixes so the learned example is just the natural-language task."""
+    clean = message
+    for p in _ROUTING_PREFIXES:
+        clean = re.sub(re.escape(p), "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^\s*escaladează\s*", "", clean, flags=re.IGNORECASE)
+    return clean.strip()
+
+
+async def _record_routing_feedback(message: str, tier: int) -> None:
+    """Learn from an explicit tier override: store the cleaned message under the chosen tier.
+
+    Fired (non-blocking) whenever a forced prefix (!fast/!best/!opus/!gemini/!retry/escaladează)
+    picks a tier — a later semantically similar message then routes there via _semantic_classify.
+    """
+    if _routing_collection is None:
+        return
+    clean = _strip_routing_prefixes(message)
+    if len(clean) < 4:
+        return
+    try:
+        emb = await _get_embedding(clean[:400])
+        if emb is None:
+            return
+        _routing_collection.add(
+            documents=[clean[:400]],
+            embeddings=[emb],
+            metadatas=[{"tier": int(tier), "source": "feedback", "ts": _time.time()}],
+            ids=[uuid.uuid4().hex],
+        )
+        logger.info(f"Routing feedback: tier={tier} query={clean[:40]!r}")
+        await _routing_vacuum()
+    except Exception as e:
+        logger.warning(f"Routing feedback failed: {e}")
+
+
+async def _routing_vacuum() -> None:
+    """Cap feedback entries per tier — keep newest MAX_FEEDBACK_PER_TIER, drop oldest. Seeds kept."""
+    if _routing_collection is None:
+        return
+    try:
+        res = _routing_collection.get(include=["metadatas"])
+        by_tier: dict[int, list] = {}   # tier -> [(ts, id), ...]
+        for id_, meta in zip(res["ids"], res["metadatas"]):
+            if meta.get("source") != "feedback":
+                continue
+            by_tier.setdefault(int(meta.get("tier", -1)), []).append((float(meta.get("ts", 0)), id_))
+        to_delete: list[str] = []
+        for entries in by_tier.values():
+            excess = len(entries) - MAX_FEEDBACK_PER_TIER
+            if excess > 0:
+                entries.sort()  # oldest ts first
+                to_delete.extend(id_ for _, id_ in entries[:excess])
+        if to_delete:
+            _routing_collection.delete(ids=to_delete)
+            logger.info(f"Routing vacuum: removed {len(to_delete)} old feedback entries")
+    except Exception as e:
+        logger.warning(f"Routing vacuum failed: {e}")
 
 
 def _usage_counts_today() -> tuple[int, int]:
@@ -2292,8 +2416,10 @@ def _help_response() -> StreamingResponse:
         "",
         "  `!fast`     → Tier 1 (Qwen 8B local) — răspuns rapid",
         "  `!best`     → Tier 5 (Claude Sonnet) — calitate maximă",
+        "  `!opus`     → Tier 6 (Claude Opus) — dificultate maximă",
+        "  `!gemini`   → Tier 4 (Gemini) — alternativă cloud",
         "  `!plan`     → min Tier 2 — raționament + context personal",
-        "  `!retry`    → Tier + 1 față de ultimul răspuns",
+        "  `!retry`    → Tier + 1 față de ultimul răspuns (max T6)",
         "  `!nocache`  → Sare peste cache semantic",
         "  `!save`              → Salvează răspunsul în Obsidian AI_Outputs/{azi}.md",
         "  `!save plans/x.md`  → Salvează în Obsidian la path custom (ex: plans/features.md)",

@@ -206,6 +206,22 @@ containere:
 - Teste: `test_policy.py`, `test_stop.py`, `test_vault_git.py`, `test_restore.py` + e2e
   extins (46 → 69 verzi). `pyyaml` adăugat în `requirements.txt`.
 
+### WP3 — Router cu feedback loop ✅ (05.07.2026)
+
+Routerul de tier învață din override-urile explicite și devine mai robust:
+
+- **Feedback loop**: un prefix forțat (`!fast/!best/!opus/!gemini/!retry/escaladează`) stochează
+  mesajul (curățat de prefixe) în colecția `tier_routing` cu `source:"feedback"`. Un mesaj
+  ulterior similar se rutează la același tier prin clasificatorul semantic.
+- **Vot ponderat k-NN**: `_semantic_classify` interoghează 5 vecini și votează ponderat cu
+  similaritatea (înainte: 1-NN) — mai puțin sensibil la un singur exemplu prost.
+- **Plafon anti-creștere**: `_routing_vacuum()` limitează exemplele învățate per tier
+  (`max_routing_feedback_per_tier`, default 50); seed-urile rămân intacte.
+- **Prefixe noi**: `!opus`→T6, `!gemini`→T4; `!retry` acum urcă până la T6 (nu T5).
+- **Seed T4/T6**: `TIER_EXAMPLES` extins; seeding idempotent per-tier (se aplică la restart și
+  pe colecția existentă).
+- Teste: `tests/test_routing.py` extins (69 → 79 verzi).
+
 ---
 
 ## Viziune business (toamnă 2026)
