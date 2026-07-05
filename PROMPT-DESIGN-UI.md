@@ -3,6 +3,17 @@
 > Pregătit 04.07.2026. Copy-paste integral în Claude Design (sau orice tool de design AI).
 > E input-ul de design pentru WP10 (#15B) din KAGE-HANDOFF.md — design-ul se face ÎNAINTEA
 > implementării, dar implementarea depinde de WP1 + WP8 (run ledger).
+>
+> **Stare 05.07.2026 — v1 livrat, direcția = implementare corectă.** Exportul din Claude
+> Design (`design/kage-mission-control-handoff.zip`) e v1: design system (paletă dark caldă
+> `#0b0907`/`#14110d`, text `#ece9e4`→`#948d82`, accent cyan `#57c4bb` + orange `#ff6a30`;
+> Space Grotesk + JetBrains Mono) + **panourile 1–6 de mai jos**. **Neacoperite** (apărute în
+> plan după design): panoul de **trading** (WP-T), vederea de **misiuni** cu checklist +
+> puntea de decizii `type: question` (WP11), și **inbox-ul interactiv de joburi** multi-profil
+> (WP-J — acum doar card de briefing read-only). Nu se redesenează acum: se extind ca pasă
+> separată când backend-urile lor există (`trading.db`, formatul misiunilor, run ledger), ca
+> să nu proiectăm împotriva unor date inexistente. Extensia = prompt scurt DOAR pentru cele 3
+> suprafețe, refolosind explicit tokenii de mai sus.
 
 ---
 
