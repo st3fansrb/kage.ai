@@ -24,6 +24,3 @@ __pycache__/
 
 .DS_Store
 *.plist
-
-MEMORY.md
-MULTI_TENANT_ARCH.md

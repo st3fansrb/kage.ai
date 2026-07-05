@@ -206,6 +206,51 @@ containere:
 - Teste: `test_policy.py`, `test_stop.py`, `test_vault_git.py`, `test_restore.py` + e2e
   extins (46 → 69 verzi). `pyyaml` adăugat în `requirements.txt`.
 
+### WP3 — Router cu feedback loop ✅ (05.07.2026)
+
+Routerul de tier învață din override-urile explicite și devine mai robust:
+
+- **Feedback loop**: un prefix forțat (`!fast/!best/!opus/!gemini/!retry/escaladează`) stochează
+  mesajul (curățat de prefixe) în colecția `tier_routing` cu `source:"feedback"`. Un mesaj
+  ulterior similar se rutează la același tier prin clasificatorul semantic.
+- **Vot ponderat k-NN**: `_semantic_classify` interoghează 5 vecini și votează ponderat cu
+  similaritatea (înainte: 1-NN) — mai puțin sensibil la un singur exemplu prost.
+- **Plafon anti-creștere**: `_routing_vacuum()` limitează exemplele învățate per tier
+  (`max_routing_feedback_per_tier`, default 50); seed-urile rămân intacte.
+- **Prefixe noi**: `!opus`→T6, `!gemini`→T4; `!retry` acum urcă până la T6 (nu T5).
+- **Seed T4/T6**: `TIER_EXAMPLES` extins; seeding idempotent per-tier (se aplică la restart și
+  pe colecția existentă).
+- Teste: `tests/test_routing.py` extins (69 → 79 verzi).
+
+### WP4 — Cache v2 context-aware ✅ (05.07.2026)
+
+Cache-ul semantic devine conștient de context, eliminând răspunsurile greșite din capcana
+„cheia = doar ultimul mesaj":
+
+- **Follow-up-uri**: cache dezactivat (lookup + store) când conversația are >1 tură user — un
+  „continuă" nu mai poate primi răspunsul altei conversații.
+- **Referenți temporali**: mesajele cu `azi/acum/mâine/ieri/astăzi` nu se mai stochează
+  (răspunsul devine stale) — lookup rămâne permis.
+- **Prefixe curățate**: `!best explică X` și `explică X` produc aceeași cheie de cache.
+- Decizia trăiește într-un helper pur `_cache_policy` → testabilă direct.
+- Teste: `tests/test_cache.py` (79 → 93 verzi).
+
+### WP5 — Igienă de repo ✅ (05.07.2026)
+
+Curățenie de cod + externalizarea datelor personale:
+
+- **Persona externalizată** din `orchestrator.py` în `kage_config.json` (default generic în cod):
+  `persona_base`, `persona_tier3_extra`, `project_map`, `profile_files`, `tier_examples_extra`.
+  Fără date personale hardcodate în `.py`.
+- **Cod mort șters:** `_build_chat_html` (215 linii, UI vechi — `/chat` servește `kage.html`),
+  `UNCERTAINTY_PHRASES`.
+- **usage_log → SQLite** (tabel `usage` în `chat_history.db`, index pe `ts`): dashboard-ul,
+  `/health` și bugetul nu mai citesc fișierul `.jsonl` integral la fiecare poll de 10s; backfill
+  unic al datelor legacy.
+- **Scheduled task** unificat pe o cale unică (`_persist_new_task`) — folosită de `!schedule` și
+  de endpoint-ul `/schedule`.
+- Teste: 93 → **95 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)

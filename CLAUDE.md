@@ -2,15 +2,27 @@
 
 Kage = orchestrator personal de AI, single-user, self-hosted pe macOS (MacBook Pro M5 Pro, 48GB).
 FastAPI `:4001` (`orchestrator.py`, ~2750 linii) · LiteLLM `:4000` · Ollama `:11434`.
-Ce este și ce face: `DESPRE_KAGE.md`.
+Ce este și ce face: `docs/DESPRE_KAGE.md`.
+
+## Structura repo-ului
+
+- Rădăcină: cod (`.py`), UI (`kage.html`), config real+example (`*.json`/`*.yaml` — citite
+  de cod din `Path(__file__).parent`, NU le muta), și **doar** lanțul launchd de pornire
+  (`launch_kage.sh` → `start_all.sh`; plist-ul instalat le referă — NU le muta).
+- `scripts/` — restul scripturilor (`setup.sh`, `start_widget.sh`, `stop_all.sh`,
+  `start_litellm.sh`, `start_orchestrator.sh`, `start_all.command`, plist de referință).
+  Fiecare își repointează `SCRIPT_DIR`/`DIR` către rădăcină (`/..`).
+- `docs/` — toată documentația (planuri, evaluare, roadmap, install, restore, despre).
+- `design/` — input + export de design UI (`PROMPT-DESIGN-UI.md`, arhiva Claude Design).
+- `tests/` — suită pytest. `cache_db/` — date live (nu șterge).
 
 ## Documente de citit ÎNAINTE de a implementa ceva
 
-1. **`KAGE-HANDOFF.md`** — planul de execuție curent: pachete de lucru ordonate, criterii de
-   acceptare, capcane cunoscute. **Obligatoriu** pentru orice item din lista de îmbunătățiri.
-2. `KAGE-EVALUARE.md` — evaluarea tehnică completă (diagnostic D1–D15, gap agentic, cercetare,
-   priorități #1–#15). Handoff-ul o referă; nu re-deriva evaluarea.
-3. `ROADMAP.md` — istoricul fazelor 1–19 + decizii de scope.
+1. **`docs/KAGE-HANDOFF.md`** — planul de execuție curent: pachete de lucru ordonate, criterii
+   de acceptare, capcane cunoscute. **Obligatoriu** pentru orice item din lista de îmbunătățiri.
+2. `docs/KAGE-EVALUARE.md` — evaluarea tehnică completă (diagnostic D1–D15, gap agentic,
+   cercetare, priorități #1–#15). Handoff-ul o referă; nu re-deriva evaluarea.
+3. `docs/ROADMAP.md` — istoricul fazelor 1–19 + decizii de scope.
 
 ## Reguli
 

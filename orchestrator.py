@@ -251,13 +251,34 @@ TIER_SHORT  = _build_tier_short(_cfg)
 
 _TIER_CONFIDENCE = {1: 0.9, 2: 0.75, 3: 0.8, 4: 0.8, 5: 0.85, 6: 0.9}
 
+# Router feedback loop: cap learned examples per tier so tier_routing can't grow unbounded.
+MAX_FEEDBACK_PER_TIER = int(_cfg.get("max_routing_feedback_per_tier", 50))
+
 PERSONAL_KEYWORDS = _cfg.get("personal_keywords", [])
 
-UNCERTAINTY_PHRASES = [
-    "nu știu", "nu sunt sigur", "nu am informații", "nu pot",
-    "i don't know", "i'm not sure", "i cannot", "uncertain",
-    "nu am acces", "limita mea", "depășește",
-]
+# ── Persona / context personal (WP5: externalizat din cod) ────────────────────
+# Toate datele personale trăiesc în kage_config.json; codul are doar un default
+# generic. project_map și profile_files sunt căi relative la VAULT.
+_PERSONA_BASE = _cfg.get("persona_base") or (
+    "Ești Kage, un asistent AI personal.\n"
+    "Răspunde direct, fără ocolișuri. Fără tabele inutile. "
+    "Fără întrebări de clarificare când contextul e suficient. "
+    "Răspunde în română dacă întrebarea e în română.\n\n"
+    "## Capabilități orchestrator\n"
+    "Orchestratorul poate salva răspunsuri direct în vault (Obsidian).\n"
+    "Când ți se cere să salvezi un plan, o analiză sau orice conținut în vault, "
+    "informează utilizatorul că poate face asta adăugând `!save` sau "
+    "`!save plans/nume-fisier.md` la începutul mesajului. Exemplu: "
+    "`!save plans/features.md fă un plan...`\n"
+    "NU spune că nu poți scrie în vault — orchestratorul face asta automat cu !save."
+)
+_PERSONA_TIER3_EXTRA = _cfg.get("persona_tier3_extra") or (
+    "Mod: Autonom — poți executa comenzi Bash, citi și modifica fișiere în proiectele active.\n"
+    "Gândește înainte de a executa. Acțiunile cu risc ridicat sunt blocate automat de orchestrator.\n"
+    "Dacă o acțiune e blocată, explică ce ai încercat și cere autorizare explicită."
+)
+PROFILE_FILES = _cfg.get("profile_files", ["profile/about-me.md", "profile/stack.md", "profile/goals.md"])
+PROJECT_MAP   = _cfg.get("project_map", {})
 
 # ── Circuit breaker state ─────────────────────────────────────────────────────
 _ollama_failures: int = 0
@@ -468,6 +489,36 @@ def _parse_cron(cron_str: str) -> dict:
     return dict(zip(["minute", "hour", "day", "month", "day_of_week"], parts))
 
 
+def _persist_new_task(cron_str: str, message: str, tier_override=None) -> dict:
+    """Cale unică de creare a unui task programat (folosită de `!schedule` și de
+    endpoint-ul /api/schedule): validează cronul, persistă în scheduled_tasks.json
+    și înregistrează jobul în scheduler. Ridică ValueError la cron invalid."""
+    cron_kwargs = _parse_cron(cron_str)  # ValueError → propagat la apelant
+    new_task = {
+        "id": uuid.uuid4().hex[:12],
+        "cron": cron_str,
+        "message": message,
+        "tier_override": tier_override,
+        "enabled": True,
+    }
+    lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
+    with lock.acquire(timeout=2):
+        tasks: list = []
+        if SCHEDULED_TASKS_FILE.exists():
+            try:
+                tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        tasks.append(new_task)
+        SCHEDULED_TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
+    if _scheduler:
+        _scheduler.add_job(
+            _run_scheduled_task, "cron",
+            id=new_task["id"], kwargs={"task": new_task}, **cron_kwargs
+        )
+    return new_task
+
+
 async def _run_scheduled_task(task: dict) -> None:
     msg = task.get("message", "")
     tier_override = task.get("tier_override")
@@ -553,35 +604,9 @@ async def _handle_schedule_command(message: str) -> StreamingResponse:
     task_message = m.group(2).strip()
 
     try:
-        _parse_cron(cron_str)
+        new_task = _persist_new_task(cron_str, task_message)
     except ValueError as e:
         return StreamingResponse(respond(f"Cron invalid: {e}"), media_type="text/event-stream")
-
-    new_task = {
-        "id": uuid.uuid4().hex[:12],
-        "cron": cron_str,
-        "message": task_message,
-        "tier_override": None,
-        "enabled": True,
-    }
-
-    tasks: list = []
-    lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
-    with lock.acquire(timeout=2):
-        if SCHEDULED_TASKS_FILE.exists():
-            try:
-                tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        tasks.append(new_task)
-        SCHEDULED_TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    if _scheduler:
-        cron_kwargs = _parse_cron(cron_str)
-        _scheduler.add_job(
-            _run_scheduled_task, "cron",
-            id=new_task["id"], kwargs={"task": new_task}, **cron_kwargs
-        )
 
     confirm = f"✅ Task programat (ID: {new_task['id']})\nCron: `{cron_str}`\nMesaj: {task_message[:80]}"
     return StreamingResponse(respond(confirm), media_type="text/event-stream")
@@ -648,10 +673,10 @@ TIER_EXAMPLES: dict[int, list[str]] = {
         "cât fac 10*5", "care e capitala Franței",
     ],
     2: [
-        "explică-mi proiectul orchestrator", "ce am lucrat la aumovio",
+        "explică-mi proiectul meu", "ce am lucrat săptămâna asta",
         "cum merg proiectele mele", "rezumă activitatea din ultimele zile",
-        "status internship", "ce face litellm", "ajutor cu flutter",
-        "ce am de făcut la facultate",
+        "status la muncă", "recapitulează ce am de făcut",
+        "ajutor cu framework-ul meu", "ce am de făcut azi",
     ],
     3: [
         "scrie un email formal", "analizează acest cod Python",
@@ -659,13 +684,35 @@ TIER_EXAMPLES: dict[int, list[str]] = {
         "ajutor cu debugging", "scrie o funcție care",
         "cum funcționează REST API", "optimizează codul acesta",
     ],
+    4: [
+        "rezumă acest document lung", "analizează această imagine",
+        "extrage informațiile din PDF-ul atașat", "tradu și rezumă articolul acesta",
+        "compară aceste două texte lungi", "descrie ce se vede în poză",
+        "rezumă conținutul acestui fișier mare",
+    ],
     5: [
         "construiește o arhitectură pentru", "planifică implementarea",
         "implementează feature-ul complet", "scrie un sistem complex",
         "analizează în profunzime", "creează un plan detaliat",
         "proiectează baza de date", "refactorizează întregul modul",
     ],
+    6: [
+        "demonstrează teorema", "rezolvă această problemă grea de algoritmică",
+        "proiectează un sistem distribuit complex de la zero",
+        "raționament matematic avansat pas cu pas",
+        "analiză juridică aprofundată a contractului",
+        "optimizează algoritmul la complexitatea minimă posibilă",
+    ],
 }
+
+# WP5: exemple personale de rutare se adaugă din config (kage_config.json), nu hardcodate.
+for _t_key, _t_examples in (_cfg.get("tier_examples_extra") or {}).items():
+    try:
+        TIER_EXAMPLES.setdefault(int(_t_key), []).extend(
+            e for e in _t_examples if isinstance(e, str) and e.strip()
+        )
+    except (ValueError, TypeError):
+        pass
 
 
 @app.on_event("startup")
@@ -690,6 +737,10 @@ async def startup_cache():
         if "session_id" not in existing_cols:
             _db_conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT 'default'")
         _db_conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id)")
+        # Usage log (WP5): mutat din usage_log.jsonl în SQLite ca să nu mai citim
+        # fișierul integral la fiecare poll de 10s al dashboard-ului.
+        _ensure_usage_table(_db_conn)
+        _backfill_usage_from_jsonl(_db_conn)
         _db_conn.commit()
 
         _chroma_client = chromadb.PersistentClient(path=str(CACHE_DB_PATH))
@@ -707,30 +758,48 @@ async def startup_cache():
         if count > 0:
             asyncio.create_task(_cache_vacuum())
 
-        # Seed TIER_EXAMPLES if routing collection is empty
-        if _routing_collection.count() == 0:
-            logger.info("Seeding tier_routing collection with examples...")
-            seeded = 0
-            for tier_num, examples in TIER_EXAMPLES.items():
-                for ex in examples:
-                    emb = await _get_embedding(ex)
-                    if emb is None:
-                        continue
-                    try:
-                        _routing_collection.add(
-                            documents=[ex],
-                            embeddings=[emb],
-                            metadatas=[{"tier": tier_num}],
-                            ids=[uuid.uuid4().hex],
-                        )
-                        seeded += 1
-                    except Exception as e:
-                        logger.debug(f"Seed failed for '{ex}': {e}")
-            logger.info(f"Routing collection seeded with {seeded} examples")
-        else:
-            logger.info(f"Routing collection already has {_routing_collection.count()} examples")
+        # Seed TIER_EXAMPLES for any tier missing seed entries (idempotent — picks up
+        # newly added tiers like T4/T6 on an already-populated collection).
+        await _seed_routing_examples()
     except Exception as e:
         logger.error(f"ChromaDB startup failed: {e}")
+
+
+async def _seed_routing_examples() -> None:
+    """Seed TIER_EXAMPLES for tiers that have no seed entries yet. Idempotent."""
+    if _routing_collection is None:
+        return
+    try:
+        existing = _routing_collection.get(include=["metadatas"])
+        present = {
+            int(meta.get("tier", -1))
+            for meta in existing["metadatas"]
+            if meta.get("source") != "feedback"
+        }
+    except Exception:
+        present = set()
+    seeded = 0
+    for tier_num, examples in TIER_EXAMPLES.items():
+        if tier_num in present:
+            continue
+        for ex in examples:
+            emb = await _get_embedding(ex)
+            if emb is None:
+                continue
+            try:
+                _routing_collection.add(
+                    documents=[ex],
+                    embeddings=[emb],
+                    metadatas=[{"tier": tier_num, "source": "seed"}],
+                    ids=[uuid.uuid4().hex],
+                )
+                seeded += 1
+            except Exception as e:
+                logger.debug(f"Seed failed for '{ex}': {e}")
+    if seeded:
+        logger.info(f"Routing collection seeded {seeded} new examples")
+    else:
+        logger.info(f"Routing collection ready ({_routing_collection.count()} examples)")
 
 
 # ── Risk endpoints ────────────────────────────────────────────────────────────
@@ -794,27 +863,19 @@ async def list_models():
 
 @app.get("/health")
 async def health():
-    today = datetime.date.today().isoformat()
+    today, tomorrow = _usage_day_bounds()
     requests_today = cloud_today = 0
     last_request = None
-    try:
-        lock = FileLock(str(USAGE_LOG) + ".lock")
-        with lock.acquire(timeout=2):
-            if USAGE_LOG.exists():
-                for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        if entry.get("ts", "").startswith(today):
-                            requests_today += 1
-                            if entry.get("cloud"):
-                                cloud_today += 1
-                            last_request = entry.get("ts")
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    if _db_conn is not None:
+        try:
+            row = _db_conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(cloud), 0), MAX(ts) "
+                "FROM usage WHERE ts >= ? AND ts < ?",
+                (today, tomorrow),
+            ).fetchone()
+            requests_today, cloud_today, last_request = int(row[0]), int(row[1]), row[2]
+        except Exception:
+            pass
     return {
         "ollama": "up" if _port_up(11434) else "down",
         "litellm": "up" if _port_up(4000) else "down",
@@ -889,6 +950,19 @@ async def schedule_endpoint(request: Request):
     body = await request.json()
     action = body.get("action", "list")
 
+    # "add" folosește calea unică _persist_new_task (are propriul lock) — în afara
+    # blocului de lock de mai jos ca să nu achiziționeze lock-ul de două ori.
+    if action == "add":
+        try:
+            new_task = _persist_new_task(
+                body.get("cron", "0 8 * * *"),
+                body.get("message", ""),
+                body.get("tier_override"),
+            )
+        except ValueError as e:
+            return {"error": str(e)}
+        return {"ok": True, "task": new_task}
+
     lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
     with lock.acquire(timeout=2):
         tasks: list = []
@@ -900,24 +974,6 @@ async def schedule_endpoint(request: Request):
 
         if action == "list":
             return {"tasks": tasks}
-
-        if action == "add":
-            new_task = {
-                "id": uuid.uuid4().hex[:12],
-                "cron": body.get("cron", "0 8 * * *"),
-                "message": body.get("message", ""),
-                "tier_override": body.get("tier_override"),
-                "enabled": True,
-            }
-            try:
-                cron_kwargs = _parse_cron(new_task["cron"])
-            except ValueError as e:
-                return {"error": str(e)}
-            tasks.append(new_task)
-            SCHEDULED_TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
-            if _scheduler:
-                _scheduler.add_job(_run_scheduled_task, "cron", id=new_task["id"], kwargs={"task": new_task}, **cron_kwargs)
-            return {"ok": True, "task": new_task}
 
         if action == "remove":
             task_id = body.get("id")
@@ -1183,9 +1239,9 @@ async def _chat_dispatch(request: Request, body: dict):
     if last_user.strip().lower().startswith("!schedule "):
         return await _handle_schedule_command(last_user.strip())
 
-    # Semantic cache lookup (skip for !nocache and !retry)
-    use_cache = "!nocache" not in last_user.lower() and "!retry" not in last_user.lower()
-    cache_query = last_user.lower().replace("!nocache", "").strip()
+    # Semantic cache — context-aware (WP4/#8): sări peste follow-up-uri, nu stoca temporale,
+    # curăță prefixele din cheie. Vezi _cache_policy.
+    use_cache, store_ok, cache_query = _cache_policy(messages, last_user)
     cache_embedding: Optional[list] = None
 
     if use_cache:
@@ -1198,9 +1254,15 @@ async def _chat_dispatch(request: Request, body: dict):
         else:
             global _cache_misses
             _cache_misses += 1
-            cache_embedding = await _get_embedding(cache_query)
+            if store_ok:
+                cache_embedding = await _get_embedding(cache_query)
 
     tier, forced, confidence, routing_method = await decide_tier(last_user)
+
+    # Feedback loop: an explicit tier override teaches the router (WP3). method=="forced"
+    # excludes !plan (keeps classifier tier) and un-prefixed classifications.
+    if forced and routing_method == "forced":
+        asyncio.create_task(_record_routing_feedback(last_user, tier))
 
     original_tier = tier
     budget_warning: Optional[str] = None
@@ -1264,8 +1326,8 @@ async def _chat_dispatch(request: Request, body: dict):
             # Strip leading badge (e.g. **[T3·haiku·sem:0.97]** )
             clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
             if clean_text:
-                # Cache store
-                if use_cache and cache_embedding is not None:
+                # Cache store (skip pentru temporale/follow-up — store_ok, WP4/#8)
+                if store_ok and cache_embedding is not None:
                     asyncio.create_task(_cache_store_async(cache_query, clean_text, tier, cache_embedding))
                 # Memory store — fire-and-forget
                 asyncio.create_task(_memory_store(session_id, last_user, clean_text))
@@ -1308,6 +1370,10 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
         return 1, True, 1.0, "forced"
     if "!best" in msg_lower:
         return 5, True, 1.0, "forced"
+    if "!opus" in msg_lower:
+        return 6, True, 1.0, "forced"
+    if "!gemini" in msg_lower:
+        return 4, True, 1.0, "forced"
     if "!retry" in msg_lower:
         last_tier = 1
         try:
@@ -1315,7 +1381,7 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
             last_tier = int(status.get("tier", 1))
         except Exception:
             pass
-        return min(last_tier + 1, 5), True, 1.0, "forced"
+        return min(last_tier + 1, 6), True, 1.0, "forced"
     if "!plan" in msg_lower:
         clean = msg_lower.replace("!plan", "").strip()
         tier, confidence, method = await _classify(clean or msg)
@@ -1342,24 +1408,36 @@ async def _classify(message: str) -> tuple[int, float, str]:
 
 
 async def _semantic_classify(message: str) -> tuple[int, float]:
-    """Classify via embedding similarity against TIER_EXAMPLES seeds."""
+    """Classify via k-NN (k=5) over TIER_EXAMPLES + learned feedback, weighted by similarity.
+
+    Tier = argmax of per-tier summed similarity among neighbors above the 0.6 floor.
+    Confidence = strength of the best matching neighbor of the winning tier.
+    """
     if _routing_collection is None or _routing_collection.count() == 0:
         raise RuntimeError("routing_collection not ready")
     embedding = await _get_embedding(message[:400])
     if embedding is None:
         raise RuntimeError("embedding unavailable")
+    n = min(5, _routing_collection.count())
     results = _routing_collection.query(
-        query_embeddings=[embedding], n_results=1,
+        query_embeddings=[embedding], n_results=n,
         include=["metadatas", "distances"],
     )
     if not results["distances"] or not results["distances"][0]:
         return 3, 0.6
-    distance = results["distances"][0][0]
-    similarity = 1.0 - distance
-    if similarity < 0.6:
+    votes: dict[int, float] = {}       # tier -> summed similarity weight
+    best_sim: dict[int, float] = {}    # tier -> strongest neighbor similarity
+    for distance, meta in zip(results["distances"][0], results["metadatas"][0]):
+        similarity = 1.0 - distance
+        if similarity < 0.6:
+            continue
+        t = int(meta.get("tier", 3))
+        votes[t] = votes.get(t, 0.0) + similarity
+        best_sim[t] = max(best_sim.get(t, 0.0), similarity)
+    if not votes:
         return 3, 0.6
-    tier = int(results["metadatas"][0][0].get("tier", 3))
-    return tier, round(similarity, 3)
+    tier = max(votes, key=votes.get)
+    return tier, round(best_sim[tier], 3)
 
 
 async def _qwen_classify(message: str) -> tuple[int, float, str]:
@@ -1420,30 +1498,146 @@ def _heuristic_classify(message: str) -> int:
     return 1
 
 
+# ── Router feedback loop (WP3) ────────────────────────────────────────────────
+
+# Prefixes stripped before storing a message as a routing example.
+_ROUTING_PREFIXES = (
+    "!fast", "!best", "!opus", "!gemini", "!plan", "!retry",
+    "!nocache", "!save", "!status", "!help",
+)
+
+
+def _strip_routing_prefixes(message: str) -> str:
+    """Remove command prefixes so the learned example is just the natural-language task."""
+    clean = message
+    for p in _ROUTING_PREFIXES:
+        clean = re.sub(re.escape(p), "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"^\s*escaladează\s*", "", clean, flags=re.IGNORECASE)
+    return clean.strip()
+
+
+async def _record_routing_feedback(message: str, tier: int) -> None:
+    """Learn from an explicit tier override: store the cleaned message under the chosen tier.
+
+    Fired (non-blocking) whenever a forced prefix (!fast/!best/!opus/!gemini/!retry/escaladează)
+    picks a tier — a later semantically similar message then routes there via _semantic_classify.
+    """
+    if _routing_collection is None:
+        return
+    clean = _strip_routing_prefixes(message)
+    if len(clean) < 4:
+        return
+    try:
+        emb = await _get_embedding(clean[:400])
+        if emb is None:
+            return
+        _routing_collection.add(
+            documents=[clean[:400]],
+            embeddings=[emb],
+            metadatas=[{"tier": int(tier), "source": "feedback", "ts": _time.time()}],
+            ids=[uuid.uuid4().hex],
+        )
+        logger.info(f"Routing feedback: tier={tier} query={clean[:40]!r}")
+        await _routing_vacuum()
+    except Exception as e:
+        logger.warning(f"Routing feedback failed: {e}")
+
+
+async def _routing_vacuum() -> None:
+    """Cap feedback entries per tier — keep newest MAX_FEEDBACK_PER_TIER, drop oldest. Seeds kept."""
+    if _routing_collection is None:
+        return
+    try:
+        res = _routing_collection.get(include=["metadatas"])
+        by_tier: dict[int, list] = {}   # tier -> [(ts, id), ...]
+        for id_, meta in zip(res["ids"], res["metadatas"]):
+            if meta.get("source") != "feedback":
+                continue
+            by_tier.setdefault(int(meta.get("tier", -1)), []).append((float(meta.get("ts", 0)), id_))
+        to_delete: list[str] = []
+        for entries in by_tier.values():
+            excess = len(entries) - MAX_FEEDBACK_PER_TIER
+            if excess > 0:
+                entries.sort()  # oldest ts first
+                to_delete.extend(id_ for _, id_ in entries[:excess])
+        if to_delete:
+            _routing_collection.delete(ids=to_delete)
+            logger.info(f"Routing vacuum: removed {len(to_delete)} old feedback entries")
+    except Exception as e:
+        logger.warning(f"Routing vacuum failed: {e}")
+
+
+def _ensure_usage_table(conn) -> None:
+    """Creează tabelul `usage` + index pe ts (idempotent)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            tier INTEGER,
+            model TEXT,
+            cloud INTEGER NOT NULL DEFAULT 0,
+            agent TEXT,
+            duration_ms INTEGER,
+            preview TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)")
+
+
+def _backfill_usage_from_jsonl(conn) -> None:
+    """Import unic al usage_log.jsonl legacy în tabelul `usage`, dacă tabelul e gol.
+    Fișierul .jsonl rămâne pe disc ca arhivă istorică; scrierile noi merg în SQLite."""
+    try:
+        if conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] > 0:
+            return
+        if not USAGE_LOG.exists():
+            return
+        imported = 0
+        for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            conn.execute(
+                "INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (e.get("ts", ""), e.get("tier"), e.get("model"),
+                 1 if e.get("cloud") else 0, e.get("agent"),
+                 e.get("duration_ms"), e.get("preview") or e.get("task_preview", "")),
+            )
+            imported += 1
+        conn.commit()
+        if imported:
+            logger.info(f"Usage backfill: imported {imported} legacy entries from usage_log.jsonl")
+    except Exception as e:
+        logger.warning(f"Usage backfill failed: {e}")
+
+
+def _usage_day_bounds() -> tuple[str, str]:
+    """(today_iso, tomorrow_iso) — margini lexicografice pentru filtrarea pe ziua curentă."""
+    today = datetime.date.today()
+    return today.isoformat(), (today + datetime.timedelta(days=1)).isoformat()
+
+
 def _usage_counts_today() -> tuple[int, int]:
     """Return (requests_today, cloud_today). Uses in-memory cache, rebuilt once per day."""
-    today = datetime.date.today().isoformat()
+    today, tomorrow = _usage_day_bounds()
     if _usage_cache["date"] == today:
         return _usage_cache["total"], _usage_cache["cloud"]
-    # Day changed — rebuild from file
+    # Day changed — rebuild from SQLite (index pe ts → interogare ieftină).
     total = cloud = 0
-    try:
-        lock = FileLock(str(USAGE_LOG) + ".lock")
-        with lock.acquire(timeout=2):
-            if USAGE_LOG.exists():
-                for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        if entry.get("ts", "").startswith(today):
-                            total += 1
-                            if entry.get("cloud"):
-                                cloud += 1
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    if _db_conn is not None:
+        try:
+            row = _db_conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(cloud), 0) FROM usage WHERE ts >= ? AND ts < ?",
+                (today, tomorrow),
+            ).fetchone()
+            total, cloud = int(row[0]), int(row[1])
+        except Exception:
+            pass
     _usage_cache.update({"date": today, "total": total, "cloud": cloud})
     return total, cloud
 
@@ -1499,6 +1693,37 @@ async def _get_embedding(text: str) -> Optional[list]:
     except Exception as e:
         logger.debug(f"Embedding failed: {e}")
         return None
+
+
+# Prefixe care nu schimbă intenția semantică — scoase din cheia de cache (WP4/#8).
+_CACHE_PREFIX_RE = re.compile(
+    r"!(fast|best|opus|gemini|plan|retry|nocache|save|status|help)\b", re.IGNORECASE
+)
+# Referenți temporali — un răspuns cache-uit devine stale (WP4/#8).
+_TEMPORAL_RE = re.compile(r"\b(azi|acum|m[âa]ine|ieri|ast[ăa]zi)\b", re.IGNORECASE)
+
+
+def _clean_cache_query(message: str) -> str:
+    """Normalizează cheia de cache: scoate prefixele de comandă, lowercase, spații colapsate."""
+    q = _CACHE_PREFIX_RE.sub("", message)
+    q = re.sub(r"^\s*escaladează\s*", "", q, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", q).lower().strip()
+
+
+def _cache_policy(messages: list, last_user: str) -> tuple[bool, bool, str]:
+    """Politica de cache context-aware (WP4/#8). Returnează (use_cache, store_ok, cache_query).
+
+    · use_cache=False pentru follow-up-uri (>1 tură user): cheia e doar ultimul mesaj, deci un
+      „continuă" ar putea primi răspunsul altei conversații.
+    · store_ok=False dacă mesajul are referenți temporali (azi/acum/…): răspunsul devine stale.
+    · cache_query = ultimul mesaj fără prefixe (deci „!best explică X" == „explică X").
+    """
+    lu = last_user.lower()
+    user_turns = sum(1 for m in messages if m.get("role") == "user")
+    is_followup = user_turns > 1
+    use_cache = "!nocache" not in lu and "!retry" not in lu and not is_followup
+    store_ok = use_cache and not _TEMPORAL_RE.search(last_user)
+    return use_cache, store_ok, _clean_cache_query(last_user)
 
 
 async def _cache_lookup(query: str) -> tuple[Optional[str], Optional[int]]:
@@ -1700,24 +1925,25 @@ def _make_cache_hit_response(response_text: str, tier: int) -> StreamingResponse
 
 
 def _aggregate_usage() -> dict:
-    """Aggregate usage_log.jsonl into dashboard data."""
-    today = datetime.date.today().isoformat()
-    all_entries: list[dict] = []
-    try:
-        lock = FileLock(str(USAGE_LOG) + ".lock")
-        with lock.acquire(timeout=2):
-            if USAGE_LOG.exists():
-                for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
-                    if not line.strip():
-                        continue
-                    try:
-                        all_entries.append(json.loads(line))
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    """Aggregate today's usage (SQLite) into dashboard data."""
+    today, tomorrow = _usage_day_bounds()
+    today_entries: list[dict] = []
+    if _db_conn is not None:
+        try:
+            cur = _db_conn.execute(
+                "SELECT ts, tier, model, cloud, agent, duration_ms, preview "
+                "FROM usage WHERE ts >= ? AND ts < ? ORDER BY ts",
+                (today, tomorrow),
+            )
+            for ts, tier, model, cloud, agent, duration_ms, preview in cur.fetchall():
+                today_entries.append({
+                    "ts": ts, "tier": tier, "model": model,
+                    "cloud": bool(cloud), "agent": agent,
+                    "duration_ms": duration_ms, "preview": preview,
+                })
+        except Exception:
+            pass
 
-    today_entries = [e for e in all_entries if e.get("ts", "").startswith(today)]
     total = len(today_entries)
     cloud = sum(1 for e in today_entries if e.get("cloud"))
     claude_count = sum(1 for e in today_entries if e.get("agent") == "claude")
@@ -1763,222 +1989,6 @@ def _aggregate_usage() -> dict:
         "task_count": task_count,
         "memory_count": _memory_collection.count() if _memory_collection else 0,
     }
-
-
-def _build_chat_html() -> str:
-    return """<!DOCTYPE html>
-<html lang="ro"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AI Orchestrator — Chat</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;color:#333;height:100vh;display:flex;flex-direction:column}
-.topbar{background:#fff;border-bottom:1px solid #e8e8e8;padding:12px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0}
-.topbar h1{font-size:16px;font-weight:600;color:#222}
-.topbar a{font-size:13px;color:#2196F3;text-decoration:none;padding:5px 12px;border:1px solid #2196F3;border-radius:5px}
-.topbar a:hover{background:#2196F3;color:#fff}
-.topbar .status{font-size:12px;color:#999;margin-left:auto}
-#messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px}
-.msg{max-width:80%;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.5;word-wrap:break-word}
-.msg.user{align-self:flex-end;background:#2196F3;color:#fff;border-bottom-right-radius:4px}
-.msg.assistant{align-self:flex-start;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.1);border-bottom-left-radius:4px}
-.msg.assistant code{background:#f0f0f0;padding:1px 4px;border-radius:3px;font-size:13px;font-family:monospace}
-.msg.assistant pre{background:#1e1e1e;color:#d4d4d4;padding:10px 12px;border-radius:6px;overflow-x:auto;font-size:12px;margin:6px 0}
-.msg.assistant pre code{background:transparent;padding:0;color:inherit}
-.msg.assistant strong{color:#111}
-.msg.assistant .badge{display:inline-block;font-size:11px;font-family:monospace;background:#e8f4fd;color:#1565C0;padding:2px 7px;border-radius:10px;margin-bottom:5px;font-weight:600}
-.msg.typing{color:#999;font-style:italic}
-.msg.error{background:#fff3f3;border:1px solid #ffcdd2;color:#c62828}
-.bottom{background:#fff;border-top:1px solid #e8e8e8;padding:12px 20px;flex-shrink:0}
-.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
-.chip{font-size:12px;padding:3px 10px;border-radius:12px;border:1px solid #ddd;background:#fafafa;cursor:pointer;color:#555;transition:all .15s}
-.chip:hover{background:#e3f2fd;border-color:#2196F3;color:#1565C0}
-.input-row{display:flex;gap:8px;align-items:flex-end}
-#input{flex:1;border:1px solid #ddd;border-radius:8px;padding:10px 14px;font-size:14px;font-family:inherit;resize:none;outline:none;max-height:120px;min-height:44px}
-#input:focus{border-color:#2196F3}
-#send-btn{background:#2196F3;color:#fff;border:none;border-radius:8px;padding:10px 20px;font-size:14px;cursor:pointer;white-space:nowrap;height:44px}
-#send-btn:hover{background:#1976D2}
-#send-btn:disabled{background:#b0bec5;cursor:default}
-.empty-state{text-align:center;color:#bbb;margin:auto;padding:40px 20px}
-.empty-state h2{font-size:20px;margin-bottom:8px;color:#ccc}
-.empty-state p{font-size:13px;line-height:1.6}
-</style></head>
-<body>
-<div class="topbar">
-  <h1>AI Orchestrator</h1>
-  <a href="/dashboard">📊 Dashboard</a>
-  <span class="status" id="status-label">gata</span>
-</div>
-<div id="messages">
-  <div class="empty-state">
-    <h2>Ce ai de gând azi?</h2>
-    <p>Scrie un mesaj sau alege un prefix din bara de jos.<br>
-    <code>!help</code> pentru lista completă de comenzi.</p>
-  </div>
-</div>
-<div class="bottom">
-  <div class="chips">
-    <button class="chip" data-prefix="!fast">⚡ fast</button>
-    <button class="chip" data-prefix="!best">🌟 best</button>
-    <button class="chip" data-prefix="!plan">🗺 plan</button>
-    <button class="chip" data-prefix="!nocache">🔄 nocache</button>
-    <button class="chip" data-prefix="!save">💾 save</button>
-    <button class="chip" data-prefix="!retry">🔁 retry</button>
-    <button class="chip" data-prefix="!status">📊 status</button>
-    <button class="chip" data-prefix="!help">❓ help</button>
-  </div>
-  <div class="input-row">
-    <textarea id="input" placeholder="Scrie un mesaj... (Ctrl+Enter pentru trimite)" rows="1"></textarea>
-    <button id="send-btn">Trimite</button>
-  </div>
-</div>
-<script>
-var history = [];
-var maxHistory = 20;
-
-// ── Chips ─────────────────────────────────────────────────────────────────────
-document.querySelectorAll('.chip').forEach(function(chip) {
-  chip.addEventListener('click', function() {
-    var prefix = chip.dataset.prefix + ' ';
-    var inp = document.getElementById('input');
-    if (!inp.value.includes(chip.dataset.prefix)) {
-      inp.value = prefix + inp.value;
-    }
-    inp.focus();
-  });
-});
-
-// ── Auto-resize textarea ──────────────────────────────────────────────────────
-var inp = document.getElementById('input');
-inp.addEventListener('input', function() {
-  this.style.height = 'auto';
-  this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-});
-
-// ── Submit ────────────────────────────────────────────────────────────────────
-inp.addEventListener('keydown', function(e) {
-  if (e.key === 'Enter' && e.ctrlKey) { e.preventDefault(); doSend(); }
-});
-document.getElementById('send-btn').addEventListener('click', doSend);
-
-function doSend() {
-  var text = inp.value.trim();
-  if (!text) return;
-  inp.value = '';
-  inp.style.height = 'auto';
-  sendMessage(text);
-}
-
-// ── Markdown render ───────────────────────────────────────────────────────────
-function renderMarkdown(raw) {
-  // Escape HTML
-  var s = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // Code blocks
-  s = s.replace(/```[\\w]*\\n?([\\s\\S]*?)```/g, '<pre><code>$1</code></pre>');
-  // Inline code
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  // Bold
-  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-  // Italic
-  s = s.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
-  // Newlines (outside pre)
-  s = s.replace(/\\n/g, '<br>');
-  // Extract badge from start and style it
-  s = s.replace(/^&lt;br&gt;/, '');
-  // Replace **[badge]** style with styled span
-  s = s.replace(/&lt;strong&gt;\\[([^\\]]+)\\]&lt;\\/strong&gt;/g, '<span class="badge">[$1]</span>');
-  // Also handle already-escaped badge: <strong>[...]</strong>
-  s = s.replace(/<strong>\\[([^\\]]+)\\]<\\/strong>/g, '<span class="badge">[$1]</span>');
-  return s;
-}
-
-// ── DOM helpers ───────────────────────────────────────────────────────────────
-function clearEmpty() {
-  var e = document.querySelector('.empty-state');
-  if (e) e.remove();
-}
-
-function appendMessage(role, html) {
-  var div = document.createElement('div');
-  div.className = 'msg ' + role;
-  div.innerHTML = html;
-  document.getElementById('messages').appendChild(div);
-  div.scrollIntoView({behavior:'smooth', block:'end'});
-  return div;
-}
-
-// ── Send & stream ─────────────────────────────────────────────────────────────
-var isSending = false;
-
-async function sendMessage(text) {
-  if (isSending) return;
-  isSending = true;
-  clearEmpty();
-
-  document.getElementById('send-btn').disabled = true;
-  document.getElementById('status-label').textContent = 'procesează...';
-
-  appendMessage('user', escapeHtml(text));
-  history.push({role:'user', content:text});
-
-  var assistantEl = appendMessage('assistant', '<span class="typing">...</span>');
-  var content = '';
-
-  try {
-    var body = JSON.stringify({messages: history.slice(-maxHistory)});
-    var resp = await fetch('/v1/chat/completions', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: body
-    });
-
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-
-    var reader = resp.body.getReader();
-    var decoder = new TextDecoder();
-    var buf = '';
-
-    while (true) {
-      var result = await reader.read();
-      if (result.done) break;
-      buf += decoder.decode(result.value, {stream:true});
-      var lines = buf.split('\\n');
-      buf = lines.pop() || '';
-      for (var i = 0; i < lines.length; i++) {
-        var line = lines[i];
-        if (line.startsWith('data: ') && line.indexOf('[DONE]') === -1) {
-          try {
-            var data = JSON.parse(line.slice(6));
-            var chunk = (data.choices && data.choices[0] && data.choices[0].delta && data.choices[0].delta.content) || '';
-            content += chunk;
-            assistantEl.innerHTML = renderMarkdown(content);
-            assistantEl.scrollIntoView({behavior:'smooth', block:'end'});
-          } catch(ex) {}
-        }
-      }
-    }
-
-    history.push({role:'assistant', content:content});
-    document.getElementById('status-label').textContent = 'gata';
-
-  } catch(err) {
-    assistantEl.className = 'msg error';
-    assistantEl.textContent = 'Eroare: ' + err.message;
-    document.getElementById('status-label').textContent = 'eroare';
-  }
-
-  document.getElementById('send-btn').disabled = false;
-  isSending = false;
-  document.getElementById('input').focus();
-}
-
-function escapeHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-document.getElementById('input').focus();
-</script>
-</body></html>"""
 
 
 def _build_dashboard_html(data: dict) -> str:
@@ -2119,7 +2129,7 @@ tr:hover td{{background:#fafafa}}
 <h2>Ultimele 10 request-uri</h2>
 <table><thead><tr><th>Ora</th><th>Tier</th><th>Model</th><th>Tip</th><th style="text-align:right">Durată</th><th>Preview</th></tr></thead>
 <tbody id="req-tbody">{req_rows_init}</tbody></table>
-<div class="footer">Date din usage_log.jsonl · actualizat <span id="footer-updated">{now_str}</span></div>
+<div class="footer">Date din cache_db/chat_history.db · actualizat <span id="footer-updated">{now_str}</span></div>
 </div>
 
 <div id="tab-tasks" class="tab-content">
@@ -2292,8 +2302,10 @@ def _help_response() -> StreamingResponse:
         "",
         "  `!fast`     → Tier 1 (Qwen 8B local) — răspuns rapid",
         "  `!best`     → Tier 5 (Claude Sonnet) — calitate maximă",
+        "  `!opus`     → Tier 6 (Claude Opus) — dificultate maximă",
+        "  `!gemini`   → Tier 4 (Gemini) — alternativă cloud",
         "  `!plan`     → min Tier 2 — raționament + context personal",
-        "  `!retry`    → Tier + 1 față de ultimul răspuns",
+        "  `!retry`    → Tier + 1 față de ultimul răspuns (max T6)",
         "  `!nocache`  → Sare peste cache semantic",
         "  `!save`              → Salvează răspunsul în Obsidian AI_Outputs/{azi}.md",
         "  `!save plans/x.md`  → Salvează în Obsidian la path custom (ex: plans/features.md)",
@@ -2429,24 +2441,21 @@ def _stop_snapshot() -> StreamingResponse:
 
 
 def _log_usage(tier: int, model: str, task_preview: str, duration_ms: Optional[int], agent: Optional[str] = None) -> None:
+    if _db_conn is None:
+        return
+    is_cloud = tier >= 3 or agent is not None
     try:
-        entry = {
-            "ts": datetime.datetime.now().isoformat(),
-            "tier": tier,
-            "model": model,
-            "cloud": tier >= 3 or agent is not None,
-            "agent": agent,
-            "duration_ms": duration_ms,
-            "preview": task_preview[:40],
-        }
-        lock = FileLock(str(USAGE_LOG) + ".lock")
-        with lock.acquire(timeout=5):
-            with open(USAGE_LOG, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry) + "\n")
+        _db_conn.execute(
+            "INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (datetime.datetime.now().isoformat(), tier, model,
+             1 if is_cloud else 0, agent, duration_ms, task_preview[:40]),
+        )
+        _db_conn.commit()
         today = datetime.date.today().isoformat()
         if _usage_cache["date"] == today:
             _usage_cache["total"] += 1
-            if tier >= 3 or agent is not None:
+            if is_cloud:
                 _usage_cache["cloud"] += 1
     except Exception as e:
         logger.debug(f"Usage log failed: {e}")
@@ -2489,47 +2498,25 @@ def _get_obsidian_context(message: str) -> Optional[str]:
         return None
 
     parts: list[str] = []
-    for path in [
-        VAULT / "profile" / "about-me.md",
-        VAULT / "profile" / "stack.md",
-        VAULT / "profile" / "goals.md",
-    ]:
+    for rel in PROFILE_FILES:
+        path = VAULT / rel
         if path.exists():
             parts.append(path.read_text(encoding="utf-8"))
 
-    project_map = {
-        "frigo": VAULT / "projects" / "frigo.md",
-        "aumovio": VAULT / "projects" / "aumovio.md",
-        "internship": VAULT / "projects" / "aumovio.md",
-        "orchestrator": VAULT / "projects" / "ai-orchestrator.md",
-        "litellm": VAULT / "projects" / "ai-orchestrator.md",
-        "odysseus": VAULT / "projects" / "ai-orchestrator.md",
-    }
     seen: set[Path] = set()
-    for kw, path in project_map.items():
-        if kw in msg_lower and path not in seen and path.exists():
-            parts.append(path.read_text(encoding="utf-8"))
-            seen.add(path)
+    for kw, rel in PROJECT_MAP.items():
+        if kw in msg_lower:
+            path = VAULT / rel
+            if path not in seen and path.exists():
+                parts.append(path.read_text(encoding="utf-8"))
+                seen.add(path)
 
     return "\n\n---\n\n".join(parts) if parts else None
 
 
 # ── System prompt ─────────────────────────────────────────────────────────────
-
-_STEFAN_BASE = (
-    "Ești un asistent AI pentru Stefan Sârbu — student CS an 2 la UPT Timișoara, "
-    "internship QA Automation la Aumovio (4h/zi). Proiecte: Frigo (Flutter+Firebase), "
-    "Aumovio (NFC/automotive testing), iTECify (IDE colaborativ).\n"
-    "Răspunde direct, fără ocolișuri. Fără tabele inutile. "
-    "Fără întrebări de clarificare când contextul e suficient. "
-    "Răspunde în română dacă întrebarea e în română.\n\n"
-    "## Capabilități orchestrator\n"
-    "Orchestratorul poate salva răspunsuri direct în Obsidian (vault: StefanBrain).\n"
-    "Când Stefan cere să salvezi un plan, o analiză sau orice conținut în Obsidian, "
-    "informează-l că poate face asta adăugând `!save` sau `!save plans/nume-fisier.md` "
-    "la începutul mesajului. Exemplu: `!save plans/orchestrator-features.md fă un plan...`\n"
-    "NU spune că nu poți scrie în Obsidian — orchestratorul face asta automat cu !save."
-)
+# Persona externalizată în config (WP5): _PERSONA_BASE / _PERSONA_TIER3_EXTRA
+# se încarcă în secțiunea Config, cu default generic dacă lipsesc din kage_config.json.
 
 
 async def _compact_messages(messages_out: list, max_messages: int) -> list:
@@ -2583,21 +2570,14 @@ async def _compact_messages(messages_out: list, max_messages: int) -> list:
 
 def _build_system_prompt(tier: int, obs_context: Optional[str], memory_ctx: Optional[str] = None) -> str:
     if tier == 1:
-        base = _STEFAN_BASE + "\nFii concis — acesta e un task simplu."
+        base = _PERSONA_BASE + "\nFii concis — acesta e un task simplu."
     elif tier == 2:
-        base = _STEFAN_BASE + "\nAnaliza profund — acesta e un task complex sau cu context personal."
+        base = _PERSONA_BASE + "\nAnaliza profund — acesta e un task complex sau cu context personal."
     else:
-        base = (
-            _STEFAN_BASE + "\n\n"
-            "Hardware: MacBook Pro M5 Pro 48GB. Abonamente: Claude Pro, Gemini Pro (facultate).\n"
-            "Stil: delegare execuție > scriere manuală. Corecteaz-l dacă greșește.\n\n"
-            "Mod: Autonom — poți executa comenzi Bash, citi și modifica fișiere în proiectele active.\n"
-            "Gândește înainte de a executa. Acțiunile cu risc ridicat sunt blocate automat de orchestrator.\n"
-            "Dacă o acțiune e blocată, explică ce ai încercat și cere autorizare explicită."
-        )
+        base = _PERSONA_BASE + "\n\n" + _PERSONA_TIER3_EXTRA
 
     if obs_context:
-        base += f"\n\n## Context personal (Obsidian StefanBrain)\n{obs_context}"
+        base += f"\n\n## Context personal (vault)\n{obs_context}"
     if memory_ctx:
         base += f"\n\n## Memorie relevantă\n{memory_ctx}"
 

@@ -3,7 +3,7 @@
 # Idempotent: dacă un serviciu e deja pornit pe portul lui, îl sare.
 set -uo pipefail
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 LOGS="$DIR/.logs"
 mkdir -p "$LOGS"
 

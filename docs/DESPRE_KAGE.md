@@ -47,7 +47,9 @@ mesaj → [prefix?] → clasificare tier → [cache hit?] → [budget ok?]
 | **T5** | Claude Sonnet | analiză complexă, scriere, planificare |
 | **T6** | Claude Opus | decizii critice, calitate maximă |
 
-Tier-ul se poate forța din prefixe (vezi mai jos).
+Tier-ul se poate forța din prefixe (vezi mai jos). Clasificarea semantică **învață** din
+forțări: un prefix explicit devine exemplu în colecția de routing, iar un mesaj similar
+ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 
 ---
 
@@ -96,9 +98,11 @@ Tier-ul se poate forța din prefixe (vezi mai jos).
 |--------|-------|
 | `!fast` | forțează T1 (local, rapid) |
 | `!best` | forțează T5 (Sonnet) |
+| `!opus` | forțează T6 (Opus) |
+| `!gemini` | forțează T4 (Gemini) |
 | `escaladează` | forțează T5 |
 | `!plan` | minim T2, mod planificare |
-| `!retry` | reîncearcă pe tier +1 |
+| `!retry` | reîncearcă pe tier +1 (până la T6) |
 | `!save <path> <msg>` | scrie output-ul în Obsidian |
 | `!nocache` | ignoră cache-ul semantic |
 | `!schedule "CRON" <msg>` | programează task recurent |

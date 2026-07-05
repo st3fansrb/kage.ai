@@ -16,17 +16,17 @@ Kage is a personal AI orchestration system: smart routing between local (Ollama)
 ```bash
 git clone https://github.com/YOUR_USERNAME/kage.git
 cd kage
-bash setup.sh
+bash scripts/setup.sh
 ```
 
-`setup.sh` will:
+`scripts/setup.sh` will:
 1. Check Python version and dependencies
 2. Create a `.venv` and install Python packages
 3. Create `kage_config.json` from the example template
 
 ## Configuration
 
-Edit `kage_config.json` (created by setup.sh):
+Edit `kage_config.json` (created by scripts/setup.sh):
 
 ```json
 {
@@ -58,7 +58,7 @@ bash start_all.sh
 This starts Ollama, LiteLLM (port 4000), and the Orchestrator (port 4001), then opens Kage in your browser at `http://localhost:4001/chat`.
 
 ```bash
-bash stop_all.sh
+bash scripts/stop_all.sh
 ```
 
 Stops LiteLLM and the Orchestrator (Ollama keeps running as a shared service).

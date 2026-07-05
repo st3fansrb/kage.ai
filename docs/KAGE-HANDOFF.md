@@ -115,8 +115,9 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
 
 - **Cache hit iese devreme** (~909), ÎNAINTE de INSERT-ul în SQLite (~946) → schimburile din
   cache nu ajung în istoric. Orice refactor al `chat_completions` trebuie să nu perpetueze asta.
-- **Cheia de cache = doar ultimul mesaj user**, fără context de conversație și cu prefixele
-  incluse — follow-up-uri („continuă") pot primi răspunsul altei conversații.
+- ~~**Cheia de cache = doar ultimul mesaj user**, fără context de conversație și cu prefixele
+  incluse — follow-up-uri („continuă") pot primi răspunsul altei conversații.~~ **Rezolvat în
+  WP4:** cache dezactivat pentru >1 tură user + prefixe curățate din cheie.
 - `_background_task_exec` **hardcodează** `_log_usage(5, agent, ...)` și nu trimite `--model`
   — toate taskurile apar ca T5 în statistici, indiferent de agent.
 - **Bugetul are trei ocoliri**: prefixe forțate, tot `/task/run`, și fallback-ul
@@ -166,14 +167,37 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
   `--include-partial-messages` + `--resume` + parsarea tool events din stream-json.
 - Single-user by design: fără multi-tenant, fără enterprise features. Buget = feature de
   produs, nu de securitate.
+- **Job hunter = career-ops + JobSpy, digest + draft la cerere, FĂRĂ auto-apply**
+  (05.07.2026, decizia lui Stefan; auto-apply = risc de ban pe LinkedIn). Multi-profil
+  (Stefan + tatăl lui) în **aceeași instanță** — nu contrazice single-user: tatăl nu e user
+  al sistemului, e un profil de căutare; Stefan operează tot. Vezi WP-J.
+- **Limite Claude Code: FĂRĂ rotație de conturi** (05.07.2026) — încalcă ToS Anthropic și
+  riscă suspendarea tuturor conturilor. Strategia: auto-resume la ora de reset (parsată din
+  mesajul de eroare) + retry periodic ca fallback + failover opțional pe API prin LiteLLM cu
+  plafon de cost. Vezi WP11.
+- **Modul handoff (plan → execuție nonstop) = WP11**, construit pe WP8 (run ledger) + WP9
+  (Agent SDK) — NU executor paralel improvizat pe CLI; WP8/WP9 urcă în prioritate din cauza
+  lui.
+- **Trading agents (05.07.2026): paper-only, local-first, freqtrade + sports betting
+  analitic + Manifold + OANDA practice** — promovarea pe bani reali e exclusiv manuală;
+  la sports betting agentul nu plasează pariuri nici atunci (doar găsește, Stefan decide). **Polymarket real prin VPN =
+  refuzat definitiv** (lista neagră ONJN, amenzi utilizatori, ToS → fonduri înghețabile);
+  echivalentul legal de testare a edge-ului = Manifold play-money. Vezi WP-T.
+- **Bugetul se afișează în EUR** (05.07.2026) — intern USD, conversie doar la afișare,
+  `eur_usd_rate` static în config. Vezi #7.
 
 ---
 
 ## 5. Pachetele de lucru, în ordinea execuției
 
 Ordinea (din `KAGE-EVALUARE.md` §4, raționamentul acolo):
-**WP1(#1) → WP1b(canale) → WP2(#2) → WP-G1(§6) → WP3(#3) → WP4(#8) → WP5(#11) → WP6(#13) →
-WP7(#15A) → WP8(#5) → WP9(#4) → WP-G2(§6) → WP10(#15B)** → apoi #12, #14, #7, #6, #9.
+**WP1(#1) → WP1b(canale) → WP2(#2) → WP-G1(§6) → WP3(#3) → WP4(#8) → WP5(#11) →
+WP-B(backup) → WP-J(jobs) → WP-D(briefing) → WP6(#13) → WP8(#5) → #7(buget EUR) →
+WP9(#4) → WP11(handoff) → WP-T(trading) → WP-G2(§6) → WP10(#15B) + WP7(Phoenix)** →
+apoi #12, #14, #6, #9.
+(WP-B/WP-J/WP-D sunt independente — pot fi trase oricând după WP2. Reordonări
+05.07.2026: #7 tras între WP8 și WP9 — agenții WP-J/WP11 ard bani nesupravegheați,
+failover-ul API din WP11 nu are sens fără plafon; WP7 Phoenix amânat lângă WP10.)
 
 Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > Citește CLAUDE.md și KAGE-HANDOFF.md (§0–§4 integral + secțiunea pachetului: §5 pentru
@@ -243,7 +267,7 @@ scrie către ntfy.sh · pytest verde.
 intră în flux de aprobare (mock), nu deny · keyword explicit → downgrade · `!run` din UI fără
 cwd explicit pornește (nu `[BLOCKED]`) · pytest verde.
 
-### WP3 (#3) — Router cu feedback loop · efort: o seară–un weekend
+### WP3 (#3) — Router cu feedback loop ✅ (05.07.2026) · efort: o seară–un weekend
 
 **Fișiere:** `orchestrator.py` (`decide_tier`, `_semantic_classify`), `tests/test_routing.py`.
 **Pași:** (1) la `!retry`/prefix forțat, adaugă mesajul cu tier-ul corectat în colecția
@@ -254,7 +278,29 @@ pentru T4/T6 în `TIER_EXAMPLES`.
 **Acceptare:** teste: după un override `!best` pe un mesaj, un mesaj similar se rutează T5 cu
 metoda `sem` · `!opus`/`!gemini` forțează corect · colecția nu crește nelimitat · pytest verde.
 
-### WP4 (#8) — Cache v2 context-aware · efort: ~2 ore
+**Implementat (05.07.2026):**
+
+- (1) `_record_routing_feedback(msg, tier)` — curăță prefixele (`_strip_routing_prefixes`),
+  embed-uiește și stochează în `tier_routing` cu `{"tier":N,"source":"feedback","ts":...}`.
+  Declanșat non-blocant (`asyncio.create_task`) din `chat_completions` când
+  `forced and routing_method == "forced"` (deci `!fast/!best/!opus/!gemini/!retry/escaladează`,
+  NU `!plan` care păstrează tier-ul clasificatorului).
+- (2) `_semantic_classify` — k-NN cu `n_results=min(5, count)`, vot ponderat cu similaritatea
+  peste pragul 0.6; tier = argmax al sumei de similarități, confidence = cel mai bun vecin al
+  tier-ului câștigător. (Bătea 1-NN: 3 vecini slabi corecți înving 1 vecin puternic greșit.)
+- (3) `_routing_vacuum()` — plafon `MAX_FEEDBACK_PER_TIER` (default 50, config
+  `max_routing_feedback_per_tier`); păstrează cele mai noi per tier, seed-urile intacte.
+  Rulat după fiecare feedback.
+- (4) `!opus`→T6, `!gemini`→T4 în `decide_tier`; `!retry` acum `min(last+1, 6)`. Text `!help`
+  actualizat. (Chip-urile UI: doar în `_build_chat_html`, cod mort — kage.html e în afara
+  scope-ului WP3, neatins.)
+- (5) `TIER_EXAMPLES[4]` și `[6]` adăugate; seeding refăcut idempotent per-tier
+  (`_seed_routing_examples`) — T4/T6 se seamănă la restart chiar pe colecția existentă.
+
+Baseline teste: 69 → **79 verzi**. **Necesită restart** (`start_all.sh`) ca T4/T6 să fie
+seed-uite și codul nou să ruleze.
+
+### WP4 (#8) — Cache v2 context-aware ✅ (05.07.2026) · efort: ~2 ore
 
 **Fișiere:** `orchestrator.py` (`chat_completions`), teste noi.
 **Pași:** (1) sari peste cache (lookup ȘI store) dacă conversația are >1 tură de user;
@@ -262,7 +308,20 @@ metoda `sem` · `!opus`/`!gemini` forțează corect · colecția nu crește neli
 (3) curăță prefixele (`!best` etc.) din `cache_query` înainte de embedding.
 **Acceptare:** teste pentru fiecare din cele 3 comportamente; pytest verde.
 
-### WP5 (#11) — Igienă de repo · efort: o seară
+**Implementat (05.07.2026):**
+
+- `_cache_policy(messages, last_user)` → `(use_cache, store_ok, cache_query)`, apelat în
+  `_chat_dispatch`. Un singur punct de decizie, pur → testabil fără stratul HTTP.
+- (1) `use_cache=False` când `sum(role=="user") > 1` — follow-up-uri sar și lookup și store
+  (rezolvă capcana §3: cheia = doar ultimul mesaj → „continuă" putea primi alt răspuns).
+- (2) `store_ok=False` dacă `_TEMPORAL_RE` (`azi|acum|mâine|ieri|astăzi` + variante fără
+  diacritice) prinde în mesaj — lookup încă permis, dar nu se creează intrări noi stale.
+- (3) `_clean_cache_query` scoate prefixele (`_CACHE_PREFIX_RE`) + `escaladează`, lowercase,
+  colapsează spațiile → `!best explică X` și `explică X` au aceeași cheie.
+- Store în `history_caching_gen` gated pe `store_ok` (era `use_cache`).
+- Teste: `tests/test_cache.py` (14 teste, câte ≥1 per comportament). Baseline 79 → **93 verzi**.
+
+### WP5 (#11) — Igienă de repo ✅ (05.07.2026) · efort: o seară
 
 **Pași:** persona (`_STEFAN_BASE`, `project_map` din `_get_obsidian_context`,
 `TIER_EXAMPLES` personale) → `kage_config.json`/vault cu default generic; șterge
@@ -271,6 +330,97 @@ metoda `sem` · `!opus`/`!gemini` forțează corect · colecția nu crește neli
 fiecare poll de 10s).
 **Acceptare:** grep fără date personale hardcodate în `.py` · pytest verde · dashboard
 funcțional după mutarea usage.
+
+**Implementat (05.07.2026):**
+
+- **Persona externalizată** din cod în `kage_config.json` (real, gitignored) cu default
+  generic în cod: `_PERSONA_BASE`/`_PERSONA_TIER3_EXTRA` (`persona_base`/`persona_tier3_extra`),
+  `PROFILE_FILES` (`profile_files`), `PROJECT_MAP` (`project_map` — căi relative la vault),
+  `TIER_EXAMPLES` tier-2 genericizat + `tier_examples_extra` merge-uit din config. `_STEFAN_BASE`
+  eliminat. Label context „Obsidian StefanBrain" → „vault". Chei documentate în
+  `kage_config.example.json` (`_comment_persona`).
+- **Cod mort șters:** `_build_chat_html` (215 linii), `UNCERTAINTY_PHRASES`. `MULTI_TENANT_ARCH.md`
+  fusese deja șters la reorganizarea repo.
+- **Scheduled task unificat:** `_persist_new_task(cron, message, tier_override)` — cale unică
+  (validare cron + persistă + `add_job`), folosită de `!schedule` (`_handle_schedule_command`)
+  și de `POST /schedule` action=add. Ramura add scoasă din blocul de `FileLock` ca să nu
+  achiziționeze lock-ul de două ori.
+- **usage_log → SQLite:** tabel `usage` în `chat_history.db` (index pe `ts`).
+  `_log_usage` face INSERT; `_usage_counts_today`/`_aggregate_usage`/`/health` interoghează doar
+  ziua curentă (`ts >= today AND ts < tomorrow`) în loc să citească fișierul integral la fiecare
+  poll de 10s. `_backfill_usage_from_jsonl` importă o singură dată `usage_log.jsonl` legacy
+  (idempotent — doar dacă tabelul e gol); fișierul rămâne pe disc ca arhivă. Footer dashboard
+  actualizat.
+- Teste: `test_budget.py` rescris pe SQLite (`_usage_db` in-memory) + test nou `_log_usage`.
+  Baseline 93 → **95 verzi**. Verificat runtime: backfill + aggregate + dashboard render.
+  **Necesită restart** (`start_all.sh`) ca persona din config + tabelul usage să fie active.
+
+### WP-B — Backup off-machine · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
+
+Tot sistemul trăiește pe un singur laptop — disc mort/furt = pierzi Kage + memoria +
+istoricul + vault-ul. Două destinații, pe naturi diferite de date:
+
+1. **Vault StefanBrain (git, WP-G1) → GitHub privat:** adaugă remote + `git push` în jobul
+   nocturn de commit (03:00). **NU** sincroniza repo-uri git prin iCloud/Drive — sync-ul de
+   fișiere corupe `.git`.
+2. **Arhivele de backup (tar.gz din `_backup_cache_db()`) → iCloud Drive:** după creare,
+   copiază arhiva în `~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups/` cu
+   aceeași rotație `backup_keep`. Zero configurare (macOS sincronizează singur), iar
+   arhivele binare nu au ce căuta pe GitHub. Echivalent acceptat: rclone → Google Drive
+   (15GB pe contul gmail) — doar dacă iCloud-ul e plin.
+3. **Config complet în arhivă:** include `kage_config.json` în tar.gz (restore complet
+   dintr-un singur fișier). Token-urile ajung astfel DOAR în iCloud, niciodată în git.
+
+**Acceptare:** commit-ul nocturn face push pe remote · arhiva apare în folderul iCloud după
+backup · restore testat dintr-o arhivă luată din iCloud · grep fără token în repo-ul remote.
+
+### WP-J — Job hunter multi-profil (career-ops + JobSpy) · efort: un weekend · după WP2, independent de restul
+
+**Decizie (05.07.2026):** digest + draft la cerere, FĂRĂ auto-apply (§4). Două profiluri:
+Stefan (student CS, QA intern) + tatăl lui (project manager, non-tech — Stefan operează tot,
+el primește doar anunțurile relevante).
+
+**Componente:**
+
+1. **career-ops** ([santifer/career-ops](https://github.com/santifer/career-ops), MIT,
+   activ) = stația de evaluare + CV tailoring. Rulează în Claude Code CLI → se spawnează cu
+   infrastructura `!run` existentă, zero integrare nouă de executor. Un workspace per profil
+   (`~/career-ops/{stefan,tata}/`) cu CV + context + criterii; workspace-urile intră în
+   `allowed_task_roots`.
+2. **Discovery: `python-jobspy`** (LinkedIn/Indeed/Glassdoor/Google Jobs). **Cere Python
+   ≥3.10** → script separat `job_scan.py` într-un venv 3.12 (patternul `.widget-venv`),
+   apelat prin subprocess dintr-un job APScheduler (2×/zi). career-ops aduce în plus
+   watchlist-ul lui de companii + provideri ATS (Greenhouse/Lever/Ashby). Piața RO
+   (eJobs/BestJobs) NU e în JobSpy — LinkedIn acoperă ambele profiluri la start; scraper
+   dedicat = extensie ulterioară, nu în scope.
+3. **Prompt injection (obligatoriu):** descrierile de joburi = conținut web complet
+   ne-de-încredere care intră într-un agent cu tools — un anunț malițios poate conține
+   instrucțiuni pentru agent (amenințarea din §6). Mitigare: rulările career-ops sunt
+   confinate la workspace-ul profilului (`allowed_task_roots`) cu policy read-only în rest
+   (WP-G1) și fără acces la rețea în afara pașilor de scan; textul scanat e tratat ca date,
+   niciodată concatenat ca instrucțiuni de sistem.
+4. **Pipeline:** scan → dedup (tabel `jobs` în `chat_history.db`, cheie hash
+   titlu+companie) → **pre-filtru ieftin pe T2 local** (scor 1–10 față de profil; doar top-N
+   merg mai departe — evaluarea career-ops arde budget cloud, gate pe budgetul existent) →
+   evaluare career-ops → digest Telegram per profil, prefixat (`👔 Stefan:` /
+   `👨‍💼 Tata:`), cu butoane inline: 🔖 salvează · ✍️ pregătește aplicația (career-ops
+   generează CV-ul adaptat în workspace) · 🗑 ignoră (intră în dedup permanent).
+
+**Acceptare:** un scan manual produce digest pe Telegram cu joburi reale scorate pentru
+fiecare profil · al doilea scan consecutiv nu re-trimite aceleași joburi · ✍️ produce un
+draft de CV adaptat în workspace-ul corect · pre-filtrul local nu consumă budget cloud ·
+pytest verde.
+
+### WP-D — Briefing zilnic pe Telegram · efort: o seară · după WP-J
+
+Job APScheduler la 08:00 → un singur mesaj compus: joburile noi de peste noapte (WP-J, per
+profil), starea misiunilor (după WP11), budgetul zilei, taskurile programate azi; opțional o
+secțiune „azi din vault". Compunere pe T2 local — **zero cost cloud**. Fiecare secțiune
+degradează grațios dacă sursa ei nu există încă (briefing-ul merge și înainte de WP11).
+Comandă manuală: `!briefing`.
+
+**Acceptare:** briefing-ul sosește la 08:00 cu secțiunile disponibile · `!briefing` îl
+generează la cerere · zero apeluri cloud la compunere · pytest verde.
 
 ### WP6 (#13) — Voice memos pe Telegram · efort: o seară–un weekend · depinde de WP1
 
@@ -283,7 +433,10 @@ cu reply „📝 Am înțeles: …"; (3) test cu fixture audio scurt.
 **Acceptare:** voice memo în română pe Telegram → răspuns text corect (test manual) · endpoint
 testat cu fixture · transcrierea rulează 100% local.
 
-### WP7 (#15A) — Phoenix peste LiteLLM · efort: câteva seri
+### WP7 (#15A) — Phoenix peste LiteLLM · efort: câteva seri · AMÂNAT (05.07.2026): se face împreună cu WP10
+
+Motiv: observabilitatea de zi cu zi vine din run ledger (WP8); Phoenix devine valoros abia
+cu trafic serios de agenți + Mission Control.
 
 **Pași:** `pip install arize-phoenix` (venv separat dacă 3.9 face probleme — Phoenix poate
 cere 3.10+; atunci rulează-l standalone: `phoenix serve`); callback Phoenix în
@@ -346,30 +499,143 @@ dacă da, decide împreună cu userul: venv nou 3.12 pentru orchestrator vs vari
 conversația anterioară (resume) · tool calls vizibile în run ledger · fără timeout fals la
 taskuri >120s active.
 
+### WP11 — Mission Runner: handoff → execuție nonstop · efort: 1–2 săptămâni de seri · după WP8+WP9
+
+Modul „îi dau planul și lucrează singur": automatizarea buclei pe care Stefan o face azi
+manual cu acest fișier (plan cu WP-uri → sesiune per WP → verificare criterii → următorul).
+
+**Componente:**
+
+1. **Formatul misiunii:** `missions/<slug>/mission.md` — WP-uri cu pași + criterii de
+   acceptare, exact formatul acestui fișier (deja validat pe WP1–WP4). Checklist viu:
+   runner-ul marchează ✅.
+2. **Runner-ul:** buclă peste `AgentRunner` (WP9) — ia următorul WP nemarcat, spawnează o
+   sesiune, rulează criteriile verificabile (pytest, curl-uri), marchează ✅ + commit, trece
+   mai departe. Poziția și starea trăiesc în run ledger (WP8) — restart nu pierde misiunea.
+3. **Puntea de decizii:** extinde fluxul `/risk/register` cu `type: question` — agentul
+   blocat pe o decizie trimite întrebarea + opțiunile pe Telegram (butoane inline sau reply
+   text); răspunsul e injectat înapoi în sesiune. Timeout → misiunea trece în `paused`
+   (NU deny — o decizie de design nu e o aprobare de risc).
+4. **Auto-resume la limită:** mesajul de rate limit al Claude Code conține ora de reset —
+   runner-ul o parsează, programează un one-shot APScheduler la reset + `--resume
+   <session_id>`, notifică pe Telegram („⏸ limită atinsă, reiau la 18:00"). Fallback dacă
+   parsarea eșuează: retry la 15 min. Opțional per misiune: failover pe API prin LiteLLM cu
+   plafon $ (leagă de budget v2, #7). **Fără rotație de conturi** — vezi §4.
+5. **Anti-sleep:** runner-ul ține un `caffeinate -s` (subprocess) cât timp există o misiune
+   activă și îl eliberează la final/`paused`/`!stop` — fără el, capacul închis îngheață
+   sesiunea și „nonstop" e fals la prima plecare de acasă.
+6. **Kill switch:** `!stop` (WP-G1) oprește și misiunile; `!mission status/pause/resume`
+   comenzi noi pe Telegram.
+
+**Acceptare:** o misiune de test cu 2 WP-uri mici rulează cap-coadă fără intervenție · o
+întrebare `type: question` ajunge pe Telegram și răspunsul deblochează sesiunea · kill pe
+orchestrator mid-mission → la restart reia din WP-ul corect · limită simulată → resume
+programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde.
+
+### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
+
+**Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
+reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:
+backtest + hyperopt + dry-run + live prin ccxt; proiectul incipient al lui Stefan = sursă
+de idei de strategii, nu de infrastructură). Prediction markets pe **Manifold** (bani virtuali „mana",
+API oficial, boții permiși). Forex: faza 1 backtest local pe date istorice
+(Dukascopy/HistData); faza 2 **OANDA practice** (conectarea a eșuat la prima încercare —
+de depanat: token practice vs live, endpoint `api-fxpractice.oanda.com`); puntea MT5 de pe
+laptopul Windows = plan C, fragilă (două mașini pornite non-stop).
+**Polymarket real prin VPN = refuzat definitiv** — pe lista neagră ONJN (amenzi pentru
+utilizatori până la 10.000 RON; decizia menținută de instanță 04.2026) + încălcare ToS →
+fonduri înghețabile fără recurs. Se rediscută doar dacă apare cale licențiată.
+
+**Arhitectură:** agenții = daemoni separați, 100% pe modele locale (NU taskuri Kage —
+sunt procese long-running), stare + metrici în SQLite (`trading.db`: `experiments`,
+`paper_trades`, `agent_status`). **Kage = supervizor:** health check, notificări Telegram
+(semnal / drawdown / eroare), `!stop` îi oprește, secțiune în briefing (WP-D), tab Trading
+în Mission Control (WP10) — read-only pe aceleași tabele.
+
+**Bucla de îmbunătățire (miezul):** misiune nocturnă WP11 pe modele locale — rulează N
+variante de strategie în backtest, scrie rezultatele în experiment ledger, Qwen local
+analizează și propune mutațiile pentru noaptea următoare. **Reguli nenegociabile
+anti-overfitting** (hyperopt „găsește" cu entuziasm strategii care mor pe date noi):
+validare walk-forward + out-of-sample la orice promovare; fees + slippage modelate mereu;
+o strategie intră în paper doar cu OOS pozitiv; discuția de bani reali abia după ~3 luni de
+paper profitabil. Consiliere cloud: o sinteză săptămânală pe Sonnet, gated pe buget (#7).
+
+**Faze:** T1 crypto lab (freqtrade dry-run + ledger + buclă nocturnă) → **T2 sports
+betting** (detalii mai jos; tras înaintea Manifold: testul de edge cel mai măsurabil — CLV —
+și cele mai bune date istorice gratuite) → T3 agent Manifold (predicții pe mana + scor de
+calibrare) → T4 forex (date istorice → OANDA practice) → T5 tab-ul din Mission Control.
+
+**T2 — sports betting (design decis 05.07.2026):** legal — pariurile sportive sunt permise
+în RO prin operatori licențiați ONJN; agentul DOAR analizează și ține pariuri virtuale.
+**Nu plasează pariuri automat, niciodată, nici pe bani reali în viitor** (operatorii RO nu
+au API public de plasare; botting-ul pe site-urile lor = încălcare ToS): agentul găsește,
+Stefan decide.
+
+- **Două fluxuri de cote, cu roluri diferite:** *referință* = Pinnacle prin The Odds API
+  (linia sharp — etalonul pentru CLV; acolo NU se pariază, nici nu e licențiat RO);
+  *acționabil* = casele lui Stefan: bet365/Unibet/Betfair sunt și licențiate ONJN și în
+  The Odds API (verificare punctuală la început: cote API vs site-urile .ro pe 10–20
+  meciuri), iar Superbet/Betano doar prin scraping pe endpoint-urile JSON interne ale
+  propriilor frontend-uri (fără cont, fără login). Pariul virtual se înregistrează la cota
+  acționabilă REALĂ din momentul semnalului, nu la una teoretică.
+- **Provider per casă** în spatele aceleiași interfețe + circuit breaker (pattern-ul
+  Ollama): un scraper căzut marchează casa indisponibilă, nu omoară pipeline-ul.
+  Rate-limiting politicos (o citire la câteva minute, nu hammering). **Apify = plan B per
+  provider, NU default** — local e gratis pe mașina always-on și nu e nevoie de browser
+  (JSON simplu); nu există actori gata făcuți pentru casele RO (verificat 05.07.2026).
+  Trigger-e pentru mutarea unei case pe Apify: IP-ul de acasă blocat → proxy rotativ; sau
+  anti-bot serios (challenge Cloudflare) → browserele lor gestionate. Swap = config, nu
+  rescriere.
+- **Model:** probabilitățile vin din statistică clasică (Elo, Poisson/Dixon-Coles pe
+  fotbal), NU din LLM; Qwen-ul local face doar extracție structurată din știri/RSS
+  (accidentări, suspendări, rotații, oboseală de program) ca feature-uri. Semnal = prob.
+  proprie + linia Pinnacle vs cotele caselor soft RO (clasicul value betting — casele soft
+  sunt lente și des greșite); pariu virtual doar peste un prag de diferență.
+- **Backtest din prima zi:** CSV-urile gratuite football-data.co.uk — cote bet365
+  (deschidere + închidere) pe ani întregi de fotbal european, adică o casă la care Stefan
+  chiar poate paria. **Metrica de edge: CLV susținut pe eșantion mare** (+ ROI) — nu „pe
+  profit luna asta", care poate fi noroc.
+
+**Acceptare (T1):** un ciclu nocturn complet fără intervenție (N backtests → ledger →
+propuneri noi) · dry-run-ul freqtrade raportează pe Telegram · nicio cale de cod nu poate
+plasa un ordin real (fără chei live în config, verificat cu test) · pytest verde.
+
+**Acceptare (T2):** cote live din ≥3 case în `trading.db`, dintre care min. una prin
+provider-scraper · un provider oprit nu blochează restul (test) · pariul virtual se
+înregistrează la cota acționabilă reală · raport CLV rulat pe backtest-ul football-data ·
+nicio cale de cod nu poate plasa un pariu real · pytest verde.
+
 ### WP10 (#15B) — Kage Mission Control · efort: o lună+ de seri · depinde de WP1+WP8
 
 Frontend Next.js + CopilotKit pe AG-UI: endpoint SSE `/agui` care traduce `runs`/`run_events`
 în evenimente AG-UI; panouri: agent cards live, activity feed, buget/cost, cache/memorie,
-inbox aprobări (`/api/pending` există), briefing-uri de la agenții programați. `kage.html` se
+inbox aprobări (`/api/pending` există), briefing-uri de la agenții programați, tab Trading
+(read-only peste `trading.db` din WP-T: starea agenților, curba paper P&L, experimentele). `kage.html` se
 pensionează la paritate. Referințe de design în `KAGE-EVALUARE.md` §3.12.
-**Promptul de design e gata:** `PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
+**Promptul de design e gata:** `design/PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
 output-ul (direcție vizuală + layout-uri + componente) devine specul vizual al acestui WP.
 
-### Restul (după WP10, ordine: #12 → #14 → #7 → #6 → #9)
+### Restul (după WP10, ordine: #12 → #14 → #6 → #9; #7 a fost tras în față)
 
 - **#12 Skills**: folder `skills/` cu 3–5 SKILL.md scrise de mână; symlink în `.claude/skills`
   la cwd-ul rulărilor; `!skill list/new`; auto-distilare abia după WP8/WP9, draft + aprobare.
 - **#14 Push-to-talk Mac → „Hey Jarvis"**: etapa 1 hotkey în widget (pynput + sounddevice →
   `/v1/audio/transcriptions` → TTS Piper ro_RO/`say -v Ioana`); etapa 2 `voice_daemon.py` cu
   RealtimeSTT + openWakeWord.
-- **#7 Budget v2**: parsează `total_cost_usd` din evenimentul `result` → buget în $/zi;
-  gate pe `task_run` și pe fallback-ul LiteLLM→cloud. (Trage-l mai devreme dacă agenții încep
-  să fie folosiți intens — vezi capcana bugetului din §3.)
+- **#7 Budget v2 — TRAS ÎN FAȚĂ (05.07.2026): între WP8 și WP9** (exact scenariul „agenții
+  încep să fie folosiți intens" — WP-J/WP11): parsează `total_cost_usd` din evenimentul
+  `result` → buget în bani/zi; gate pe `task_run` și pe fallback-ul LiteLLM→cloud.
+  **Afișare în EUR** (decizia lui Stefan — plătește în EUR): intern totul rămâne USD (așa
+  raportează API-urile), conversia doar la afișare, curs configurabil `eur_usd_rate` în
+  `kage_config.json` (default static, ex. 0.92; nu chema API de curs valutar pentru asta).
 - **#6 Memorie v2**: extracție de fapte pe T2 la final de conversație + job de consolidare la
   03:00 (dedup global, fuziune, bloc `user_profile` injectat mereu) — pipeline nocturn coerent
   cu vacuum 04:00 / backup 05:00.
 - **#9 Tools locale pentru T2**: `local_tools.py` (vault read/write, status, schedule) prin
   function calling LiteLLM, buclă max 5 iterații, gate prin `evaluate_risk` importat.
+- **RAG pe documente/cursuri** (idee 05.07.2026, acceptată ca „ulterior"): `!index <folder>`
+  → colecție ChromaDB per subiect + retrieve în context. Țintă de calendar: înainte de
+  sesiunea din ianuarie 2027 — nu are sens mai devreme.
 
 ---
 
