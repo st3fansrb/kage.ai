@@ -450,7 +450,7 @@ fiecare profil · al doilea scan consecutiv nu re-trimite aceleași joburi · �
 draft de CV adaptat în workspace-ul corect · pre-filtrul local nu consumă budget cloud ·
 pytest verde.
 
-### WP-D — Briefing zilnic pe Telegram · efort: o seară · după WP-J
+### WP-D — Briefing zilnic pe Telegram ✅ (06.07.2026) · efort: o seară · după WP-J
 
 Job APScheduler la 08:00 → un singur mesaj compus: joburile noi de peste noapte (WP-J, per
 profil), starea misiunilor (după WP11), budgetul zilei, taskurile programate azi; opțional o
@@ -460,6 +460,33 @@ Comandă manuală: `!briefing`.
 
 **Acceptare:** briefing-ul sosește la 08:00 cu secțiunile disponibile · `!briefing` îl
 generează la cerere · zero apeluri cloud la compunere · pytest verde.
+
+**Implementat (06.07.2026):**
+
+- **Fapte asamblate determinist, intro pe T2 local.** Interpretarea lui „compunere pe T2":
+  faptele (joburi, buget, taskuri, vault) sunt culese determinist în `_briefing_gather()` (pur,
+  fără LLM/rețea — testabil izolat) ca modelul să nu stâlcească titluri/URL-uri/cifre; T2 local
+  (`TIER_MODELS[2]`) scrie DOAR propoziția de intro (`_briefing_intro`). Zero apeluri cloud —
+  santinelă în test (`_route_claude_autonomous` aruncă dacă e atins). `intro_llm:false` în config
+  → intro static, fără niciun apel de model.
+- **Secțiuni, fiecare cu degradare grațioasă:** `_briefing_new_jobs()` (joburi status
+  sent/saved/applied din ultimele 24h, grupate pe profil — `{}` fără tabel/db), missions
+  (`_briefing_missions()` → `None` până la WP11), buget (mereu prezent, din `_usage_counts_today`),
+  `_briefing_scheduled_today()` (taskuri care se declanșează azi, calculat cu
+  `CronTrigger.from_crontab` + `get_next_fire_time`), `_briefing_vault_today()` (extras din nota
+  zilnică `{YYYY-MM-DD}.md` din vault, dacă există).
+- **Două randări din aceleași date** (`_briefing_render(data, intro, html=)`): HTML pentru push-ul
+  proactiv (`_send_briefing` → `_tg_gateway.send`, parse_mode HTML, dinamicele escape-uite) și
+  markdown/plain pentru răspunsul comenzii `!briefing` (`_handle_briefing_command` → SSE), care e
+  trecut prin `_escape` de gateway exact ca `!status`/`!help`.
+- **Scheduler:** job `__briefing__` la `BRIEFING_CRON` (default `0 8 * * *`), gated pe
+  `BRIEFING_ENABLED` (default true; no-op fără gateway Telegram). Config nou (real + example):
+  bloc `briefing` (`enabled`, `cron`, `intro_llm`, `vault_section`, `vault_daily_dir`).
+- Timeout intro T2 = 90s (35B rece la 08:00 ia ~50s la primul token — verificat runtime:
+  „Bună dimineața, sunt Kage și îți doresc o zi liniștită și plină de realizări.").
+- Teste: `tests/test_briefing.py` (20 teste — secțiuni, degradare, intro T2/fallback,
+  randare md/HTML+escaping, zero-cloud, comandă + push). Baseline 122 → **142 verzi**.
+  **Necesită restart** (`start_all.sh`) ca jobul de briefing + comanda `!briefing` să fie active.
 
 ### WP6 (#13) — Voice memos pe Telegram · efort: o seară–un weekend · depinde de WP1
 

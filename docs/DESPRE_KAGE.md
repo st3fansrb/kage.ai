@@ -106,6 +106,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 | `!save <path> <msg>` | scrie output-ul în Obsidian |
 | `!nocache` | ignoră cache-ul semantic |
 | `!schedule "CRON" <msg>` | programează task recurent |
+| `!briefing` | briefingul zilei acum (joburi, buget, taskuri, vault) — compus pe T2 local, fără cost cloud |
 | `!run` / `!swarm` / `!sysrun` | agent de fundal (vezi mai sus) |
 | `!status` | snapshot instant (buget, cache, servicii) — fără LLM |
 | `!help` | lista prefixelor |

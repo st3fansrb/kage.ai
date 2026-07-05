@@ -29,6 +29,7 @@ import chromadb
 import sqlite3
 from filelock import FileLock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 import telegram_gateway as _tg_module
@@ -272,6 +273,14 @@ JOBS_TOP_N         = int(_jobs_cfg.get("prefilter_top_n", 5))
 JOBS_PROFILES      = _jobs_cfg.get("profiles", []) if isinstance(_jobs_cfg.get("profiles"), list) else []
 JOBS_VENV_PYTHON   = PROJECT_ROOT / ".jobs-venv" / "bin" / "python3.12"
 JOB_SCAN_SCRIPT    = PROJECT_ROOT / "job_scan.py"
+
+# WP-D: briefing zilnic pe Telegram. Compunere pe T2 LOCAL (zero cost cloud).
+_briefing_cfg = _cfg.get("briefing", {}) if isinstance(_cfg.get("briefing"), dict) else {}
+BRIEFING_ENABLED       = bool(_briefing_cfg.get("enabled", True))
+BRIEFING_CRON          = _briefing_cfg.get("cron", "0 8 * * *")
+BRIEFING_INTRO_LLM     = bool(_briefing_cfg.get("intro_llm", True))
+BRIEFING_VAULT_SECTION = bool(_briefing_cfg.get("vault_section", True))
+BRIEFING_VAULT_DAILY_DIR = str(_briefing_cfg.get("vault_daily_dir", "")).strip()
 
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
@@ -711,6 +720,15 @@ async def startup_scheduler():
                 logger.info(f"[Jobs] scan programat: {JOBS_SCAN_CRON}")
             except Exception as e:
                 logger.warning(f"[Jobs] scan cron invalid ({JOBS_SCAN_CRON!r}): {e}")
+        # Briefing zilnic (WP-D): un mesaj compus la ora din config (default 08:00).
+        if BRIEFING_ENABLED:
+            try:
+                _scheduler.add_job(
+                    _send_briefing, "cron", id="__briefing__", **_parse_cron(BRIEFING_CRON)
+                )
+                logger.info(f"[Briefing] programat: {BRIEFING_CRON}")
+            except Exception as e:
+                logger.warning(f"[Briefing] cron invalid ({BRIEFING_CRON!r}): {e}")
         _scheduler.start()
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
@@ -1315,6 +1333,9 @@ async def _chat_dispatch(request: Request, body: dict):
 
     if re.match(r"^!scan\b", last_user.strip(), re.IGNORECASE):
         return await _handle_scan_command(last_user.strip())
+
+    if last_user.strip().lower() == "!briefing":
+        return await _handle_briefing_command()
 
     # Semantic cache — context-aware (WP4/#8): sări peste follow-up-uri, nu stoca temporale,
     # curăță prefixele din cheie. Vezi _cache_policy.
@@ -2248,6 +2269,251 @@ async def _send_job_digest(profile: dict, jobs: list) -> None:
         logger.warning(f"[Jobs] trimitere digest eșuată: {e}")
 
 
+# ── Briefing zilnic (WP-D) ────────────────────────────────────────────────────
+# Un singur mesaj compus la 08:00 (+ comanda `!briefing`): joburi noi peste noapte,
+# starea misiunilor (WP11), bugetul zilei, taskuri programate azi, opțional „azi din
+# vault". Compunerea folosește DOAR T2 local pentru o propoziție de intro (zero cost
+# cloud); faptele sunt asamblate determinist ca să nu fie stâlcite de model. Fiecare
+# secțiune degradează grațios dacă sursa ei nu există încă.
+
+_BRIEFING_FALLBACK_INTRO = "Bună dimineața! Iată briefingul zilei."
+_BRIEFING_INTRO_SYS = (
+    "Ești Kage, asistentul personal al utilizatorului. Scrie O SINGURĂ propoziție "
+    "scurtă și caldă de introducere pentru briefingul de dimineață, în română. "
+    "Fără emoji, fără liste, fără markdown — doar propoziția, maxim 20 de cuvinte."
+)
+
+
+def _briefing_new_jobs(since_hours: int = 24) -> dict:
+    """Joburi noi (status relevant) apărute în ultimele `since_hours`, grupate pe profil.
+    Degradează la {} dacă tabelul `jobs` nu există sau e gol."""
+    if _db_conn is None:
+        return {}
+    cutoff = (datetime.datetime.now() - datetime.timedelta(hours=since_hours)).isoformat()
+    out: dict = {}
+    try:
+        rows = _db_conn.execute(
+            "SELECT profile, title, company, score, status FROM jobs "
+            "WHERE first_seen >= ? AND status IN (?, ?, ?) "
+            "ORDER BY score DESC, first_seen DESC",
+            (cutoff, _JOB_STATUS_SENT, _JOB_STATUS_SAVED, _JOB_STATUS_APPLIED),
+        ).fetchall()
+    except Exception:
+        return {}
+    for prof, title, company, score, status in rows:
+        out.setdefault(str(prof), []).append(
+            {"title": title, "company": company, "score": score, "status": status}
+        )
+    return out
+
+
+def _briefing_scheduled_today() -> list:
+    """Taskurile programate (scheduled_tasks.json) care se declanșează AZI, după cron.
+    Degradează la [] dacă fișierul lipsește/e corupt sau cronul e invalid."""
+    try:
+        if not SCHEDULED_TASKS_FILE.exists():
+            return []
+        tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    out: list = []
+    for task in tasks if isinstance(tasks, list) else []:
+        if not task.get("enabled", True):
+            continue
+        try:
+            trig = CronTrigger.from_crontab(task.get("cron", ""))
+            now = datetime.datetime.now(trig.timezone)
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            nxt = trig.get_next_fire_time(None, start)
+        except Exception:
+            continue
+        if nxt is not None and nxt.date() == now.date():
+            out.append({
+                "at": nxt.strftime("%H:%M"),
+                "message": str(task.get("message", "")),
+            })
+    out.sort(key=lambda t: t["at"])
+    return out
+
+
+def _briefing_missions() -> Optional[list]:
+    """Starea misiunilor Mission Runner (WP11). Nu există încă → None (secțiune omisă).
+    Punct de extindere: când WP11 aduce tabelul/directorul de misiuni, întoarce lista lor."""
+    return None
+
+
+def _briefing_vault_today() -> Optional[str]:
+    """Extras scurt din nota zilnică de azi din vault (`{YYYY-MM-DD}.md`), dacă există.
+    Caută în directoare uzuale de daily notes; degradează la None fără să arunce."""
+    if not BRIEFING_VAULT_SECTION:
+        return None
+    today = datetime.date.today().isoformat()
+    candidates = []
+    if BRIEFING_VAULT_DAILY_DIR:
+        candidates.append(VAULT / BRIEFING_VAULT_DAILY_DIR / f"{today}.md")
+    candidates += [
+        VAULT / f"{today}.md",
+        VAULT / "Daily" / f"{today}.md",
+        VAULT / "daily" / f"{today}.md",
+        VAULT / "Daily Notes" / f"{today}.md",
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                lines = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()]
+                body = [ln for ln in lines if ln and not ln.startswith("#")]
+                if body:
+                    return " ".join(body)[:400]
+        except Exception:
+            continue
+    return None
+
+
+def _briefing_gather() -> dict:
+    """Adună TOATE datele briefingului — pur, fără LLM, fără rețea. Testabil izolat."""
+    total, cloud = _usage_counts_today()
+    try:
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
+        max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
+    except Exception:
+        max_cloud = 20
+    return {
+        "date": datetime.date.today(),
+        "jobs": _briefing_new_jobs(),
+        "tasks": _briefing_scheduled_today(),
+        "budget": {"total": total, "cloud": cloud, "max": max_cloud},
+        "missions": _briefing_missions(),
+        "vault": _briefing_vault_today(),
+    }
+
+
+async def _briefing_intro(data: dict) -> str:
+    """O propoziție de intro compusă pe T2 LOCAL (zero cost cloud). Fallback static la
+    eșec sau dacă intro_llm e dezactivat în config."""
+    if not BRIEFING_INTRO_LLM:
+        return _BRIEFING_FALLBACK_INTRO
+    n_jobs = sum(len(v) for v in data.get("jobs", {}).values())
+    n_tasks = len(data.get("tasks", []))
+    b = data.get("budget", {})
+    facts = (
+        f"Joburi noi peste noapte: {n_jobs}. "
+        f"Taskuri programate azi: {n_tasks}. "
+        f"Buget cloud folosit: {b.get('cloud', 0)}/{b.get('max', 0)}."
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{LITELLM_URL}/chat/completions",
+                json={
+                    "model": TIER_MODELS[2],
+                    "messages": [
+                        {"role": "system", "content": _BRIEFING_INTRO_SYS},
+                        {"role": "user", "content": facts},
+                    ],
+                    "stream": False,
+                    "temperature": 0.4,
+                },
+                headers={"Authorization": f"Bearer {LITELLM_KEY}"},
+                timeout=90,  # 35B rece la 08:00 poate lua ~50s la primul token
+            )
+        text = str(r.json()["choices"][0]["message"]["content"]).strip()
+        line = text.split("\n")[0].strip()
+        return line[:200] if line else _BRIEFING_FALLBACK_INTRO
+    except Exception as e:
+        logger.warning(f"[Briefing] intro T2 eșuat: {e}")
+        return _BRIEFING_FALLBACK_INTRO
+
+
+def _briefing_render(data: dict, intro: str, *, html: bool) -> str:
+    """Randează briefingul din datele adunate. `html=True` pentru push-ul proactiv pe
+    Telegram (parse_mode HTML); `html=False` (markdown/plain) pentru răspunsul comenzii
+    `!briefing`, care e trecut prin `_escape` de gateway (ca `!status`/`!help`)."""
+    esc = _tg_module._escape if html else (lambda s: str(s))
+    b = (lambda s: f"<b>{s}</b>") if html else (lambda s: f"**{s}**")
+    date_str = data["date"].strftime("%d.%m.%Y")
+
+    lines: list = [f"☀️ {b('Briefing — ' + date_str)}", "", esc(intro)]
+    labels = {str(p.get("id")): p.get("label", p.get("id")) for p in JOBS_PROFILES}
+
+    # 1. Joburi noi peste noapte (WP-J), per profil.
+    jobs = data.get("jobs") or {}
+    if jobs:
+        total_new = sum(len(v) for v in jobs.values())
+        lines += ["", f"🔎 {b('Joburi noi')} ({total_new})"]
+        for pid, items in jobs.items():
+            label = str(labels.get(pid, pid))
+            lines.append(f"  {esc(label)}: {len(items)}")
+            for j in items[:3]:
+                sc = f" · scor {j['score']}" if j.get("score") is not None else ""
+                title = esc(str(j.get("title", "?")))
+                company = esc(str(j.get("company", "")))
+                sep = " — " if company else ""
+                lines.append(f"    • {title}{sep}{company}{sc}")
+
+    # 2. Misiuni (WP11) — omis grațios cât timp nu există.
+    missions = data.get("missions")
+    if missions:
+        lines += ["", f"🎯 {b('Misiuni active')} ({len(missions)})"]
+        for m in missions[:5]:
+            lines.append(f"  • {esc(str(m.get('name', m)))} — {esc(str(m.get('status', '')))}")
+
+    # 3. Buget cloud azi.
+    bud = data.get("budget", {})
+    used, cap = bud.get("cloud", 0), bud.get("max", 0)
+    pct = int(used / cap * 100) if cap else 0
+    icon = "🟢" if pct < 80 else ("🟠" if pct < 100 else "🔴")
+    lines += ["", f"💰 {b('Buget')}: {icon} {used}/{cap} apeluri cloud azi ({pct}%)"]
+
+    # 4. Taskuri programate azi.
+    tasks = data.get("tasks") or []
+    if tasks:
+        lines += ["", f"⏰ {b('Programate azi')} ({len(tasks)})"]
+        for t in tasks[:8]:
+            msg = esc(str(t.get("message", ""))[:60])
+            lines.append(f"  • {t.get('at', '--:--')} — {msg}")
+
+    # 5. Azi din vault (opțional).
+    vault = data.get("vault")
+    if vault:
+        lines += ["", f"📓 {b('Azi din vault')}", f"  {esc(vault)}"]
+
+    return "\n".join(lines)
+
+
+async def _compose_briefing(*, html: bool) -> str:
+    """Compune briefingul complet (gather + intro T2 local + render). Channel-agnostic."""
+    data = _briefing_gather()
+    intro = await _briefing_intro(data)
+    return _briefing_render(data, intro, html=html)
+
+
+async def _send_briefing() -> None:
+    """Job APScheduler (default 08:00): compune + push pe Telegram. No-op fără gateway."""
+    try:
+        text = await _compose_briefing(html=True)
+    except Exception as e:
+        logger.error(f"[Briefing] compunere eșuată: {e}")
+        return
+    if _tg_gateway is None:
+        logger.info("[Briefing] gateway Telegram absent — nimic de trimis")
+        return
+    try:
+        await _tg_gateway.send(text)
+        logger.info("[Briefing] trimis pe Telegram")
+    except Exception as e:
+        logger.warning(f"[Briefing] trimitere eșuată: {e}")
+
+
+async def _handle_briefing_command() -> StreamingResponse:
+    """`!briefing` — generează briefingul la cerere și îl întoarce în chat (SSE)."""
+    try:
+        text = await _compose_briefing(html=False)
+    except Exception as e:
+        logger.error(f"[Briefing] `!briefing` eșuat: {e}")
+        text = "⚠️ Nu am putut genera briefingul acum."
+    return _instant_sse(text)
+
+
 def _set_job_status(jhash: str, status: str) -> Optional[dict]:
     """Actualizează statusul unui job și returnează rândul (sau None dacă lipsește)."""
     if _db_conn is None:
@@ -2939,6 +3205,7 @@ def _help_response() -> StreamingResponse:
         "  `!sysrun`   → Task autonom cu context orchestrator",
         "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!scan [profil]` → Caută joburi noi (WP-J) — digest pe Telegram",
+        "  `!briefing` → Briefing zilnic acum (joburi, buget, taskuri, vault)",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
         "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",

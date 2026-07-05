@@ -101,6 +101,15 @@
     ]
   },
 
+  "_comment_briefing": "WP-D: briefing zilnic pe Telegram. enabled=true → un mesaj compus la ora din cron (default 08:00) cu: joburi noi peste noapte (WP-J), starea misiunilor (WP11), bugetul zilei, taskurile programate azi, opțional o secțiune 'azi din vault'. Fiecare secțiune degradează grațios dacă sursa ei lipsește. Compunerea folosește DOAR T2 local (o propoziție de intro) — zero cost cloud; faptele sunt asamblate determinist. Comandă manuală: !briefing. intro_llm=false → intro static, fără niciun apel de model. vault_section=false dezactivează extrasul din nota zilnică; vault_daily_dir = subdirector RELATIV la vault_path unde stau notele zilnice ({YYYY-MM-DD}.md) dacă nu-s în rădăcină.",
+  "briefing": {
+    "enabled": true,
+    "cron": "0 8 * * *",
+    "intro_llm": true,
+    "vault_section": true,
+    "vault_daily_dir": ""
+  },
+
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
   "models": {
     "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },

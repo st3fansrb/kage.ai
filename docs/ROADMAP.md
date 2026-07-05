@@ -262,6 +262,19 @@ Un singur laptop = un singur punct de eșec. Datele pleacă în două locuri:
   complet dintr-un fișier; token-urile ajung doar în iCloud, niciodată în git.
 - RESTORE.md extins (backup off-machine + restore config). Teste: 95 → **102 verzi**.
 
+### WP-D — Briefing zilnic pe Telegram ✅ (06.07.2026)
+
+Un singur mesaj la 08:00 (comandă manuală `!briefing`) cu joburile noi peste noapte (WP-J,
+per profil), bugetul zilei, taskurile programate azi și, opțional, un extras din nota zilnică
+din vault; starea misiunilor apare când vine WP11.
+
+- **Zero cost cloud:** faptele sunt asamblate determinist; T2 local scrie doar propoziția de
+  intro (`intro_llm:false` → intro static, fără niciun apel de model). Fiecare secțiune
+  degradează grațios dacă sursa ei nu există încă.
+- Config nou: bloc `briefing` (`enabled`, `cron`, `intro_llm`, `vault_section`,
+  `vault_daily_dir`). Job APScheduler `__briefing__` la `0 8 * * *` (configurabil).
+- Teste: 122 → **142 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)
