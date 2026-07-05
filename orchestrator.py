@@ -1217,9 +1217,9 @@ async def _chat_dispatch(request: Request, body: dict):
     if last_user.strip().lower().startswith("!schedule "):
         return await _handle_schedule_command(last_user.strip())
 
-    # Semantic cache lookup (skip for !nocache and !retry)
-    use_cache = "!nocache" not in last_user.lower() and "!retry" not in last_user.lower()
-    cache_query = last_user.lower().replace("!nocache", "").strip()
+    # Semantic cache — context-aware (WP4/#8): sări peste follow-up-uri, nu stoca temporale,
+    # curăță prefixele din cheie. Vezi _cache_policy.
+    use_cache, store_ok, cache_query = _cache_policy(messages, last_user)
     cache_embedding: Optional[list] = None
 
     if use_cache:
@@ -1232,7 +1232,8 @@ async def _chat_dispatch(request: Request, body: dict):
         else:
             global _cache_misses
             _cache_misses += 1
-            cache_embedding = await _get_embedding(cache_query)
+            if store_ok:
+                cache_embedding = await _get_embedding(cache_query)
 
     tier, forced, confidence, routing_method = await decide_tier(last_user)
 
@@ -1303,8 +1304,8 @@ async def _chat_dispatch(request: Request, body: dict):
             # Strip leading badge (e.g. **[T3·haiku·sem:0.97]** )
             clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
             if clean_text:
-                # Cache store
-                if use_cache and cache_embedding is not None:
+                # Cache store (skip pentru temporale/follow-up — store_ok, WP4/#8)
+                if store_ok and cache_embedding is not None:
                     asyncio.create_task(_cache_store_async(cache_query, clean_text, tier, cache_embedding))
                 # Memory store — fire-and-forget
                 asyncio.create_task(_memory_store(session_id, last_user, clean_text))
@@ -1623,6 +1624,37 @@ async def _get_embedding(text: str) -> Optional[list]:
     except Exception as e:
         logger.debug(f"Embedding failed: {e}")
         return None
+
+
+# Prefixe care nu schimbă intenția semantică — scoase din cheia de cache (WP4/#8).
+_CACHE_PREFIX_RE = re.compile(
+    r"!(fast|best|opus|gemini|plan|retry|nocache|save|status|help)\b", re.IGNORECASE
+)
+# Referenți temporali — un răspuns cache-uit devine stale (WP4/#8).
+_TEMPORAL_RE = re.compile(r"\b(azi|acum|m[âa]ine|ieri|ast[ăa]zi)\b", re.IGNORECASE)
+
+
+def _clean_cache_query(message: str) -> str:
+    """Normalizează cheia de cache: scoate prefixele de comandă, lowercase, spații colapsate."""
+    q = _CACHE_PREFIX_RE.sub("", message)
+    q = re.sub(r"^\s*escaladează\s*", "", q, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", q).lower().strip()
+
+
+def _cache_policy(messages: list, last_user: str) -> tuple[bool, bool, str]:
+    """Politica de cache context-aware (WP4/#8). Returnează (use_cache, store_ok, cache_query).
+
+    · use_cache=False pentru follow-up-uri (>1 tură user): cheia e doar ultimul mesaj, deci un
+      „continuă" ar putea primi răspunsul altei conversații.
+    · store_ok=False dacă mesajul are referenți temporali (azi/acum/…): răspunsul devine stale.
+    · cache_query = ultimul mesaj fără prefixe (deci „!best explică X" == „explică X").
+    """
+    lu = last_user.lower()
+    user_turns = sum(1 for m in messages if m.get("role") == "user")
+    is_followup = user_turns > 1
+    use_cache = "!nocache" not in lu and "!retry" not in lu and not is_followup
+    store_ok = use_cache and not _TEMPORAL_RE.search(last_user)
+    return use_cache, store_ok, _clean_cache_query(last_user)
 
 
 async def _cache_lookup(query: str) -> tuple[Optional[str], Optional[int]]:

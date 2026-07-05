@@ -222,6 +222,19 @@ Routerul de tier învață din override-urile explicite și devine mai robust:
   pe colecția existentă).
 - Teste: `tests/test_routing.py` extins (69 → 79 verzi).
 
+### WP4 — Cache v2 context-aware ✅ (05.07.2026)
+
+Cache-ul semantic devine conștient de context, eliminând răspunsurile greșite din capcana
+„cheia = doar ultimul mesaj":
+
+- **Follow-up-uri**: cache dezactivat (lookup + store) când conversația are >1 tură user — un
+  „continuă" nu mai poate primi răspunsul altei conversații.
+- **Referenți temporali**: mesajele cu `azi/acum/mâine/ieri/astăzi` nu se mai stochează
+  (răspunsul devine stale) — lookup rămâne permis.
+- **Prefixe curățate**: `!best explică X` și `explică X` produc aceeași cheie de cache.
+- Decizia trăiește într-un helper pur `_cache_policy` → testabilă direct.
+- Teste: `tests/test_cache.py` (79 → 93 verzi).
+
 ---
 
 ## Viziune business (toamnă 2026)

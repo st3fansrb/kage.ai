@@ -115,8 +115,9 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
 
 - **Cache hit iese devreme** (~909), ÎNAINTE de INSERT-ul în SQLite (~946) → schimburile din
   cache nu ajung în istoric. Orice refactor al `chat_completions` trebuie să nu perpetueze asta.
-- **Cheia de cache = doar ultimul mesaj user**, fără context de conversație și cu prefixele
-  incluse — follow-up-uri („continuă") pot primi răspunsul altei conversații.
+- ~~**Cheia de cache = doar ultimul mesaj user**, fără context de conversație și cu prefixele
+  incluse — follow-up-uri („continuă") pot primi răspunsul altei conversații.~~ **Rezolvat în
+  WP4:** cache dezactivat pentru >1 tură user + prefixe curățate din cheie.
 - `_background_task_exec` **hardcodează** `_log_usage(5, agent, ...)` și nu trimite `--model`
   — toate taskurile apar ca T5 în statistici, indiferent de agent.
 - **Bugetul are trei ocoliri**: prefixe forțate, tot `/task/run`, și fallback-ul
@@ -276,13 +277,26 @@ metoda `sem` · `!opus`/`!gemini` forțează corect · colecția nu crește neli
 Baseline teste: 69 → **79 verzi**. **Necesită restart** (`start_all.sh`) ca T4/T6 să fie
 seed-uite și codul nou să ruleze.
 
-### WP4 (#8) — Cache v2 context-aware · efort: ~2 ore
+### WP4 (#8) — Cache v2 context-aware ✅ (05.07.2026) · efort: ~2 ore
 
 **Fișiere:** `orchestrator.py` (`chat_completions`), teste noi.
 **Pași:** (1) sari peste cache (lookup ȘI store) dacă conversația are >1 tură de user;
 (2) nu stoca răspunsuri la mesaje cu referenți temporali (regex `azi|acum|mâine|ieri|astăzi`);
 (3) curăță prefixele (`!best` etc.) din `cache_query` înainte de embedding.
 **Acceptare:** teste pentru fiecare din cele 3 comportamente; pytest verde.
+
+**Implementat (05.07.2026):**
+
+- `_cache_policy(messages, last_user)` → `(use_cache, store_ok, cache_query)`, apelat în
+  `_chat_dispatch`. Un singur punct de decizie, pur → testabil fără stratul HTTP.
+- (1) `use_cache=False` când `sum(role=="user") > 1` — follow-up-uri sar și lookup și store
+  (rezolvă capcana §3: cheia = doar ultimul mesaj → „continuă" putea primi alt răspuns).
+- (2) `store_ok=False` dacă `_TEMPORAL_RE` (`azi|acum|mâine|ieri|astăzi` + variante fără
+  diacritice) prinde în mesaj — lookup încă permis, dar nu se creează intrări noi stale.
+- (3) `_clean_cache_query` scoate prefixele (`_CACHE_PREFIX_RE`) + `escaladează`, lowercase,
+  colapsează spațiile → `!best explică X` și `explică X` au aceeași cheie.
+- Store în `history_caching_gen` gated pe `store_ok` (era `use_cache`).
+- Teste: `tests/test_cache.py` (14 teste, câte ≥1 per comportament). Baseline 79 → **93 verzi**.
 
 ### WP5 (#11) — Igienă de repo · efort: o seară
 
