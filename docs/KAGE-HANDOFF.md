@@ -355,7 +355,7 @@ funcțional după mutarea usage.
   Baseline 93 → **95 verzi**. Verificat runtime: backfill + aggregate + dashboard render.
   **Necesită restart** (`start_all.sh`) ca persona din config + tabelul usage să fie active.
 
-### WP-B — Backup off-machine · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
+### WP-B — Backup off-machine ✅ (05.07.2026) · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
 
 Tot sistemul trăiește pe un singur laptop — disc mort/furt = pierzi Kage + memoria +
 istoricul + vault-ul. Două destinații, pe naturi diferite de date:
@@ -374,7 +374,46 @@ istoricul + vault-ul. Două destinații, pe naturi diferite de date:
 **Acceptare:** commit-ul nocturn face push pe remote · arhiva apare în folderul iCloud după
 backup · restore testat dintr-o arhivă luată din iCloud · grep fără token în repo-ul remote.
 
-### WP-J — Job hunter multi-profil (career-ops + JobSpy) · efort: un weekend · după WP2, independent de restul
+**Implementat (05.07.2026):**
+
+- **Vault → push (1):** `_vault_git_push(git_fn)` apelat din `_vault_git_commit` după commit
+  (și când „nimic de comis", pentru commit-uri locale ne-împinse). Sincronizează `origin` cu
+  `vault_git_remote` din config (add/set-url), `push -u origin <branch>`. No-op dacă remote gol;
+  push eșuat (offline/auth) e grațios — nu pică jobul nocturn. Sufix de stare (`· push ok/eșuat`).
+- **Arhive → iCloud (2):** `_copy_backup_to_icloud(archive)` apelat la finalul `_backup_cache_db`,
+  copiază în `icloud_backup_dir` (default `~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups`)
+  cu aceeași rotație `backup_keep`. Sare grațios dacă baza CloudDocs nu există (mașină fără iCloud);
+  gol/absent = dezactivat.
+- **Config în arhivă (3):** `_backup_cache_db` include `kage_config.json` la rădăcina tar.gz
+  (`backup_include_config`, default true) → restore complet dintr-un fișier. Token-urile ajung
+  DOAR în arhivă (iCloud), niciodată în git. `_restore_cache_db` restaurează doar `cache_db/`;
+  config-ul rămâne pas manual (RESTORE.md §2b).
+- Config nou (real + example): `vault_git_remote`, `icloud_backup_dir`, `backup_include_config`.
+  RESTORE.md: secțiune §0 (backup off-machine) + §2b (restore config din arhivă).
+- Teste: `test_vault_git.py` (+3: push pe bare repo, no-push fără remote, push eșuat grațios),
+  `test_backup.py` (+3: config în arhivă, copie iCloud, iCloud dezactivat), `test_restore.py`
+  (+1: arhiva cu config restaurează cache_db normal). **Plasă de siguranță în conftest:**
+  `ICLOUD_BACKUP_DIR=None` implicit — testele de backup nu scriu în iCloud-ul real (bug de
+  izolare prins la review runtime). Baseline 95 → **102 verzi**. Verificat runtime: backup real
+  → arhivă în iCloud cu config + restore din arhiva iCloud (primul backup off-machine creat).
+- **Pas rămas pentru Stefan:** completează `vault_git_remote` în `kage_config.json` cu URL-ul
+  repo-ului privat GitHub al vault-ului (SSH sau HTTPS cu credential helper) ca push-ul nocturn
+  să funcționeze. Vault-ul se `git init`-ează automat la jobul de 03:00 (WP-G1).
+
+### WP-J — Job hunter multi-profil (career-ops + JobSpy) ✅ (05.07.2026) · efort: un weekend · după WP2, independent de restul
+
+**Implementat (05.07.2026):** pipeline complet în cod. Rafinare față de plan: career-ops
+NU rulează în scanul automat (ar arde budget cloud la fiecare scan de 2×/zi) — scanul face
+DOAR scan→dedup→pre-filtru T2 local→digest (cost cloud zero, cum cere acceptarea). Evaluarea
+career-ops + CV tailoring pornește la butonul ✍️, on-demand, confinată la workspace-ul
+profilului. Piese: `job_scan.py` (standalone, `.jobs-venv` 3.12) · tabel `jobs` în
+`chat_history.db` · secțiunea „Job hunter" din `orchestrator.py` (pipeline + endpoint-uri
+`/jobs/scan|action|apply`) · `send_job_card`/callback `job:` în `telegram_gateway.py` ·
+comanda `!scan [profil]` · config `jobs` (opt-in, `enabled:false` implicit) · `tests/test_jobs.py`
+(13 teste). **Setup necesar înainte de folosire:** `scripts/setup.sh` creează `.jobs-venv` +
+jobspy; clonează [santifer/career-ops](https://github.com/santifer/career-ops) în
+`~/career-ops/{stefan,tata}/` cu CV+context; adaugă acele workspace-uri în `allowed_task_roots`;
+pune `jobs.enabled:true` + token Telegram. Fără setup, `!scan` degradează grațios (mesaj clar).
 
 **Decizie (05.07.2026):** digest + draft la cerere, FĂRĂ auto-apply (§4). Două profiluri:
 Stefan (student CS, QA intern) + tatăl lui (project manager, non-tech — Stefan operează tot,
@@ -411,7 +450,7 @@ fiecare profil · al doilea scan consecutiv nu re-trimite aceleași joburi · �
 draft de CV adaptat în workspace-ul corect · pre-filtrul local nu consumă budget cloud ·
 pytest verde.
 
-### WP-D — Briefing zilnic pe Telegram · efort: o seară · după WP-J
+### WP-D — Briefing zilnic pe Telegram ✅ (06.07.2026) · efort: o seară · după WP-J
 
 Job APScheduler la 08:00 → un singur mesaj compus: joburile noi de peste noapte (WP-J, per
 profil), starea misiunilor (după WP11), budgetul zilei, taskurile programate azi; opțional o
@@ -421,6 +460,33 @@ Comandă manuală: `!briefing`.
 
 **Acceptare:** briefing-ul sosește la 08:00 cu secțiunile disponibile · `!briefing` îl
 generează la cerere · zero apeluri cloud la compunere · pytest verde.
+
+**Implementat (06.07.2026):**
+
+- **Fapte asamblate determinist, intro pe T2 local.** Interpretarea lui „compunere pe T2":
+  faptele (joburi, buget, taskuri, vault) sunt culese determinist în `_briefing_gather()` (pur,
+  fără LLM/rețea — testabil izolat) ca modelul să nu stâlcească titluri/URL-uri/cifre; T2 local
+  (`TIER_MODELS[2]`) scrie DOAR propoziția de intro (`_briefing_intro`). Zero apeluri cloud —
+  santinelă în test (`_route_claude_autonomous` aruncă dacă e atins). `intro_llm:false` în config
+  → intro static, fără niciun apel de model.
+- **Secțiuni, fiecare cu degradare grațioasă:** `_briefing_new_jobs()` (joburi status
+  sent/saved/applied din ultimele 24h, grupate pe profil — `{}` fără tabel/db), missions
+  (`_briefing_missions()` → `None` până la WP11), buget (mereu prezent, din `_usage_counts_today`),
+  `_briefing_scheduled_today()` (taskuri care se declanșează azi, calculat cu
+  `CronTrigger.from_crontab` + `get_next_fire_time`), `_briefing_vault_today()` (extras din nota
+  zilnică `{YYYY-MM-DD}.md` din vault, dacă există).
+- **Două randări din aceleași date** (`_briefing_render(data, intro, html=)`): HTML pentru push-ul
+  proactiv (`_send_briefing` → `_tg_gateway.send`, parse_mode HTML, dinamicele escape-uite) și
+  markdown/plain pentru răspunsul comenzii `!briefing` (`_handle_briefing_command` → SSE), care e
+  trecut prin `_escape` de gateway exact ca `!status`/`!help`.
+- **Scheduler:** job `__briefing__` la `BRIEFING_CRON` (default `0 8 * * *`), gated pe
+  `BRIEFING_ENABLED` (default true; no-op fără gateway Telegram). Config nou (real + example):
+  bloc `briefing` (`enabled`, `cron`, `intro_llm`, `vault_section`, `vault_daily_dir`).
+- Timeout intro T2 = 90s (35B rece la 08:00 ia ~50s la primul token — verificat runtime:
+  „Bună dimineața, sunt Kage și îți doresc o zi liniștită și plină de realizări.").
+- Teste: `tests/test_briefing.py` (20 teste — secțiuni, degradare, intro T2/fallback,
+  randare md/HTML+escaping, zero-cloud, comandă + push). Baseline 122 → **142 verzi**.
+  **Necesită restart** (`start_all.sh`) ca jobul de briefing + comanda `!briefing` să fie active.
 
 ### WP6 (#13) — Voice memos pe Telegram · efort: o seară–un weekend · depinde de WP1
 

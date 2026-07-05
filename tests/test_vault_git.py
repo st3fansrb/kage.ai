@@ -43,3 +43,40 @@ def test_save_is_revertible(tmp_path):
 def test_missing_vault_is_noop(tmp_path):
     msg = o._vault_git_commit(tmp_path / "nu-exista")
     assert "skip" in msg
+
+
+# ── WP-B: push off-machine pe remote ──────────────────────────────────────────
+
+def test_no_push_when_remote_unset(tmp_path, monkeypatch):
+    monkeypatch.setattr(o, "VAULT_GIT_REMOTE", "")
+    (tmp_path / "note.md").write_text("x", encoding="utf-8")
+    msg = o._vault_git_commit(tmp_path)
+    assert "commit ok" in msg and "push" not in msg
+
+
+def test_push_to_remote_on_commit(tmp_path, monkeypatch):
+    """Commit-ul nocturn împinge pe remote-ul configurat (acceptare WP-B)."""
+    remote = tmp_path / "remote.git"
+    _git(tmp_path, "init", "--bare", str(remote))  # bare repo local ca 'GitHub'
+    monkeypatch.setattr(o, "VAULT_GIT_REMOTE", str(remote))
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "note.md").write_text("hello", encoding="utf-8")
+    msg = o._vault_git_commit(vault)
+    assert "commit ok" in msg and "push ok" in msg
+
+    # remote-ul (bare repo) chiar are commit-ul
+    ls = subprocess.run(["git", "--git-dir", str(remote), "log", "--oneline"],
+                        capture_output=True, text=True)
+    assert "kage auto-commit" in ls.stdout
+
+
+def test_push_failure_does_not_crash_commit(tmp_path, monkeypatch):
+    monkeypatch.setattr(o, "VAULT_GIT_REMOTE", str(tmp_path / "nonexistent.git"))
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "a.md").write_text("x", encoding="utf-8")
+    msg = o._vault_git_commit(vault)
+    # commit-ul reușește local; push-ul eșuează grațios, fără excepție
+    assert "commit ok" in msg and "push eșuat" in msg

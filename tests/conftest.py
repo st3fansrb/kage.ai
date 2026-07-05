@@ -22,4 +22,7 @@ def reset_global_state():
     orchestrator._ollama_dead = False
     orchestrator._budget_alert_80_sent = ""
     orchestrator._usage_cache = {"date": "", "total": 0, "cloud": 0}
+    # Plasă de siguranță WP-B: niciun test de backup nu trebuie să scrie în iCloud-ul
+    # REAL. Testele care verifică copia off-machine monkeypatchează la un tmp_path.
+    orchestrator.ICLOUD_BACKUP_DIR = None
     yield

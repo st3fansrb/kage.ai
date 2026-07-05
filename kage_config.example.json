@@ -42,6 +42,74 @@
   "backup_dir": "~/Documents/MyVault/backups/kage",
   "backup_keep": 7,
 
+  "_comment_backup_offmachine": "WP-B: backup off-machine. vault_git_remote = URL GitHub privat pentru vault (push în jobul nocturn de 03:00; folosește SSH sau credential helper — NU sincroniza .git prin iCloud). icloud_backup_dir = unde se copiază arhivele tar.gz (default iCloud Drive; gol/absent = fără copie; sare peste dacă iCloud e absent). backup_include_config include kage_config.json în arhivă → restore complet dintr-un fișier (token-urile ajung DOAR în arhivă, niciodată în git).",
+  "vault_git_remote": "",
+  "icloud_backup_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups",
+  "backup_include_config": true,
+
+  "_comment_jobs": "WP-J: job hunter multi-profil. enabled=false → scanner oprit. scan_cron = când rulează scanul automat (default 2×/zi). search_terms = keywords date platformei (LinkedIn caută și în descriere, nu doar titlu → folosește keywords, nu titluri exacte). exclude_keywords/include_keywords = screen IEFTIN pe titlu+descriere ÎNAINTE de LLM (word-boundary): exclude taie ex. 'senior'/'5+ years' fără cost; include (dacă e ne-gol) cere măcar un keyword relevant. notify (push|silent, default push) per profil: 'silent' = scanat+stocat, FĂRĂ push automat pe Telegram (se vede în /jobs sau se cere cu `!scan <profil>`) — util pentru joburi de contract. Tracker vizual: localhost:4001/jobs. prefilter_min_score/top_n = gate pe T2 LOCAL (scor 1-10 vs criterii, ZERO cost cloud); doar joburile ≥ min_score, top_n, intră în digest. career-ops rulează DOAR la butonul ✍️ (evaluare + CV tailoring, arde budget cloud). Fiecare profil are un workspace career-ops (adaugă-l în allowed_task_roots) + criteria (text liber, prompt de scor). Piața RO acoperită prin LinkedIn; eJobs/BestJobs nu-s în JobSpy.",
+  "jobs": {
+    "enabled": false,
+    "scan_cron": "0 7,19 * * *",
+    "prefilter_min_score": 6,
+    "prefilter_top_n": 5,
+    "profiles": [
+      {
+        "id": "stefan",
+        "label": "👔 Stefan",
+        "workspace": "~/career-ops/stefan",
+        "search_terms": ["software engineer", "machine learning", "test automation", "internship software"],
+        "sites": ["linkedin", "indeed"],
+        "location": "Timișoara, Romania",
+        "results_wanted": 25,
+        "hours_old": 168,
+        "is_remote": true,
+        "country_indeed": "romania",
+        "exclude_keywords": ["senior", "lead", "principal", "staff", "manager", "5+ years", "7+ years", "10+ years"],
+        "include_keywords": [],
+        "criteria": "Student anul 2 Computer Science, direcție AI/ML, intern QA. Caută: internship/junior/working-student în AI/ML, software junior, QA/test automation, cybersecurity entry-level. Preferă Timișoara sau remote. Evită: senior, 5+ ani experiență, management."
+      },
+      {
+        "id": "tata",
+        "label": "👨‍💼 Tata",
+        "workspace": "~/career-ops/tata",
+        "search_terms": ["project manager"],
+        "sites": ["linkedin"],
+        "location": "Romania",
+        "results_wanted": 20,
+        "hours_old": 72,
+        "is_remote": false,
+        "country_indeed": "romania",
+        "criteria": "Project manager senior, non-tehnic, 15+ ani experiență. Caută: PM, program manager, delivery manager. Preferă Romania. Evită: roluri pur tehnice/developer, entry-level."
+      },
+      {
+        "id": "contract-ai",
+        "label": "🤝 Contract AI",
+        "workspace": "~/career-ops/stefan",
+        "notify": "silent",
+        "search_terms": ["AI training", "data annotation", "LLM evaluation"],
+        "sites": ["linkedin", "indeed"],
+        "location": "Romania",
+        "results_wanted": 25,
+        "hours_old": 168,
+        "is_remote": true,
+        "country_indeed": "romania",
+        "exclude_keywords": ["senior", "lead", "manager", "5+ years"],
+        "include_keywords": [],
+        "criteria": "Freelance/contract AI training, data annotation, RLHF, LLM evaluation (Alignerr, DataAnnotation, Mindrift, Outlier). Remote, part-time, per task/oră. Evită: full-time senior, management."
+      }
+    ]
+  },
+
+  "_comment_briefing": "WP-D: briefing zilnic pe Telegram. enabled=true → un mesaj compus la ora din cron (default 08:00) cu: joburi noi peste noapte (WP-J), starea misiunilor (WP11), bugetul zilei, taskurile programate azi, opțional o secțiune 'azi din vault'. Fiecare secțiune degradează grațios dacă sursa ei lipsește. Compunerea folosește DOAR T2 local (o propoziție de intro) — zero cost cloud; faptele sunt asamblate determinist. Comandă manuală: !briefing. intro_llm=false → intro static, fără niciun apel de model. vault_section=false dezactivează extrasul din nota zilnică; vault_daily_dir = subdirector RELATIV la vault_path unde stau notele zilnice ({YYYY-MM-DD}.md) dacă nu-s în rădăcină.",
+  "briefing": {
+    "enabled": true,
+    "cron": "0 8 * * *",
+    "intro_llm": true,
+    "vault_section": true,
+    "vault_daily_dir": ""
+  },
+
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
   "models": {
     "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },

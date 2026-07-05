@@ -1,16 +1,33 @@
 # RESTORE — recuperarea datelor Kage
 
 Kage face zilnic (05:00) un backup al `cache_db/` (SQLite `chat_history.db` +
-ChromaDB) în arhive `cache_db-YYYYMMDD-HHMMSS.tar.gz`. În plus, vault-ul
+ChromaDB) în arhive `cache_db-YYYYMMDD-HHMMSS.tar.gz`. Arhiva include și
+`kage_config.json` (restore complet dintr-un singur fișier). În plus, vault-ul
 `StefanBrain` e sub git (commit automat zilnic la 03:00), deci fiecare `!save`
 al unui agent e reversibil. Acest document e procedura de restore — **testată**
 în `tests/test_restore.py`.
 
+## 0. Backup off-machine (WP-B)
+
+Un singur laptop = un singur punct de eșec. Kage duce datele în două locuri, pe
+naturi diferite (config: `kage_config.json`):
+
+- **Vault → GitHub privat:** setează `vault_git_remote` (URL SSH sau HTTPS cu
+  credential helper — **nu** sincroniza `.git` prin iCloud, corupe repo-ul).
+  Jobul de 03:00 face `git push` după commit. `.git/config` (cu eventualul token
+  din URL) rămâne local — nu ajunge niciodată în arborele împins.
+- **Arhive tar.gz → iCloud Drive:** `icloud_backup_dir` (default
+  `~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups`). După fiecare
+  backup, arhiva se copiază acolo cu aceeași rotație `backup_keep`; macOS
+  sincronizează singur. Pe o mașină fără iCloud activ, pasul se sare grațios.
+  Token-urile (în `kage_config.json` din arhivă) ajung astfel DOAR în iCloud.
+
 ## 1. Unde sunt backup-urile
 
 - **cache_db**: `backup_dir` din `kage_config.json` (implicit
-  `<vault>/backups/kage/`). Se păstrează ultimele `backup_keep` arhive (7).
-- **vault** (`StefanBrain`): istoricul git din directorul vault-ului însuși.
+  `<vault>/backups/kage/`) + copie în `icloud_backup_dir`. Se păstrează ultimele
+  `backup_keep` arhive (7) în ambele locuri.
+- **vault** (`StefanBrain`): istoricul git local + remote-ul `vault_git_remote`.
 
 Listează backup-urile de cache_db:
 
@@ -47,6 +64,18 @@ Verificare rapidă după restore:
 curl -s localhost:4001/health
 sqlite3 cache_db/chat_history.db 'SELECT COUNT(*) FROM messages;'
 ```
+
+## 2b. Restore config din arhivă (dezastru complet)
+
+Arhiva conține `kage_config.json` la rădăcină (token-uri, remote, chei). Restore-ul
+de cache_db **nu** îl suprascrie automat — extrage-l manual:
+
+```bash
+tar -xzf cache_db-YYYYMMDD-HHMMSS.tar.gz -C /destinatie kage_config.json
+```
+
+Pe o mașină nouă: instalează Kage (vezi INSTALL.md), extrage `kage_config.json`
+din cea mai recentă arhivă din iCloud, apoi restaurează `cache_db/` (pasul 2).
 
 ## 3. Restore vault (un `!save` greșit al unui agent)
 

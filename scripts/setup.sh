@@ -63,6 +63,23 @@ echo "  → Installing Python dependencies..."
 "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
 ok "Dependencies installed"
 
+# Job hunter venv (WP-J) — python-jobspy cere Python ≥3.10, nucleul Kage e pe 3.9.
+# Opțional: doar dacă vrei job hunter-ul. Sare peste dacă python3.12 lipsește.
+if command -v python3.12 >/dev/null 2>&1; then
+    if [ ! -d "$DIR/.jobs-venv" ]; then
+        echo "  → Creating .jobs-venv (Python 3.12) pentru job hunter..."
+        python3.12 -m venv "$DIR/.jobs-venv"
+        ok ".jobs-venv created"
+    else
+        ok ".jobs-venv exists"
+    fi
+    "$DIR/.jobs-venv/bin/pip" install -q --upgrade pip
+    "$DIR/.jobs-venv/bin/pip" install -q -r "$DIR/requirements-jobs.txt"
+    ok "Job hunter dependencies installed (jobspy)"
+else
+    warn "python3.12 not found — job hunter (WP-J) skipped (optional)"
+fi
+
 # risk_settings.json (generated with correct absolute paths)
 if [ ! -f "$DIR/risk_settings.json" ]; then
     sed "s|KAGE_DIR|$DIR|g" "$DIR/risk_settings.example.json" > "$DIR/risk_settings.json"
