@@ -2,7 +2,7 @@
 # AI Orchestration System v2 — oprește toate serviciile.
 set -uo pipefail
 
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 kill_port() {
   local name="$1" port="$2"

@@ -2,7 +2,7 @@
 # Faza 4 — pornește status widget în menubar
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PYTHON="$SCRIPT_DIR/.widget-venv/bin/python3.12"
 WIDGET="$SCRIPT_DIR/status_widget.py"
 PIDFILE="$SCRIPT_DIR/.widget.pid"

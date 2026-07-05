@@ -6,8 +6,12 @@ Ce este și ce face: `docs/DESPRE_KAGE.md`.
 
 ## Structura repo-ului
 
-- Rădăcină: cod (`.py`), UI (`kage.html`), config (`*.json`/`*.yaml`), scripturi de
-  pornire (`start_all.sh`, `launch_kage.sh` etc. — lanț launchd, NU le muta).
+- Rădăcină: cod (`.py`), UI (`kage.html`), config real+example (`*.json`/`*.yaml` — citite
+  de cod din `Path(__file__).parent`, NU le muta), și **doar** lanțul launchd de pornire
+  (`launch_kage.sh` → `start_all.sh`; plist-ul instalat le referă — NU le muta).
+- `scripts/` — restul scripturilor (`setup.sh`, `start_widget.sh`, `stop_all.sh`,
+  `start_litellm.sh`, `start_orchestrator.sh`, `start_all.command`, plist de referință).
+  Fiecare își repointează `SCRIPT_DIR`/`DIR` către rădăcină (`/..`).
 - `docs/` — toată documentația (planuri, evaluare, roadmap, install, restore, despre).
 - `design/` — input + export de design UI (`PROMPT-DESIGN-UI.md`, arhiva Claude Design).
 - `tests/` — suită pytest. `cache_db/` — date live (nu șterge).

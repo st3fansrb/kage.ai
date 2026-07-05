@@ -43,7 +43,7 @@ Most AI tools force a choice: fast-but-dumb local models, or slow-but-capable cl
 ```bash
 git clone https://github.com/YOUR_USERNAME/kage.git
 cd kage
-bash setup.sh
+bash scripts/setup.sh
 ```
 
 Edit `kage_config.json`, then:
@@ -67,7 +67,7 @@ Full setup instructions: [INSTALL.md](docs/INSTALL.md)
 
 ## Configuration
 
-`setup.sh` creates `kage_config.json` from the example. Key fields:
+`scripts/setup.sh` creates `kage_config.json` from the example. Key fields:
 
 ```json
 {

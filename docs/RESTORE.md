@@ -25,7 +25,7 @@ ls -lt "$(python -c "import orchestrator as o; print(o.BACKUP_DIR)")"/cache_db-*
 
 ```bash
 # 1. oprește serviciile
-./stop_all.sh          # sau: pkill -f orchestrator.py
+./scripts/stop_all.sh  # sau: pkill -f orchestrator.py
 
 # 2. restaurează din cea mai recentă (sau o arhivă anume)
 source .venv/bin/activate
