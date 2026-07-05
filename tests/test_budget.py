@@ -1,5 +1,7 @@
 """Teste pentru bugetul cloud — _usage_counts_today + _budget_check."""
+import datetime
 import json
+import sqlite3
 
 import orchestrator
 
@@ -10,26 +12,51 @@ def _set_max_cloud(monkeypatch, tmp_path, value):
     monkeypatch.setattr(orchestrator, "KAGE_CONFIG_PATH", cfg)
 
 
+def _usage_db(monkeypatch, rows):
+    """In-memory SQLite cu tabelul `usage` populat; monkeypatch pe _db_conn."""
+    conn = sqlite3.connect(":memory:")
+    orchestrator._ensure_usage_table(conn)
+    for ts, cloud in rows:
+        conn.execute("INSERT INTO usage (ts, cloud) VALUES (?, ?)", (ts, 1 if cloud else 0))
+    conn.commit()
+    monkeypatch.setattr(orchestrator, "_db_conn", conn)
+    return conn
+
+
 # ── _usage_counts_today ───────────────────────────────────────────────────────
 
-def test_usage_counts_today_from_log(monkeypatch, tmp_path):
-    import datetime
+def test_usage_counts_today_from_db(monkeypatch):
     today = datetime.date.today().isoformat()
-    log = tmp_path / "usage_log.jsonl"
-    log.write_text(
-        json.dumps({"ts": f"{today}T10:00:00", "cloud": True}) + "\n"
-        + json.dumps({"ts": f"{today}T11:00:00", "cloud": False}) + "\n"
-        + json.dumps({"ts": "2000-01-01T00:00:00", "cloud": True}) + "\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(orchestrator, "USAGE_LOG", log)
+    _usage_db(monkeypatch, [
+        (f"{today}T10:00:00", True),
+        (f"{today}T11:00:00", False),
+        ("2000-01-01T00:00:00", True),  # altă zi — nu se numără
+    ])
     total, cloud = orchestrator._usage_counts_today()
     assert (total, cloud) == (2, 1)
 
 
-def test_usage_counts_today_no_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(orchestrator, "USAGE_LOG", tmp_path / "missing.jsonl")
+def test_usage_counts_today_empty(monkeypatch):
+    _usage_db(monkeypatch, [])
     assert orchestrator._usage_counts_today() == (0, 0)
+
+
+def test_usage_counts_today_no_db(monkeypatch):
+    monkeypatch.setattr(orchestrator, "_db_conn", None)
+    assert orchestrator._usage_counts_today() == (0, 0)
+
+
+def test_log_usage_inserts_and_updates_cache(monkeypatch):
+    today = datetime.date.today().isoformat()
+    conn = _usage_db(monkeypatch, [])
+    # cache pe ziua curentă → _log_usage incrementează in-place
+    orchestrator._usage_cache = {"date": today, "total": 0, "cloud": 0}
+    orchestrator._log_usage(5, "sonnet", "task", 120, agent=None)   # cloud (tier>=3)
+    orchestrator._log_usage(1, "qwen8b", "chat", 30, agent=None)    # local
+    n = conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
+    assert n == 2
+    assert orchestrator._usage_cache["total"] == 2
+    assert orchestrator._usage_cache["cloud"] == 1
 
 
 # ── _budget_check ─────────────────────────────────────────────────────────────

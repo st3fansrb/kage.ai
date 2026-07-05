@@ -17,7 +17,14 @@
   "vault_path": "~/Documents/MyVault",
   "claude_cli": "",
   "gemini_cli": "",
+
+  "_comment_persona": "WP5: persona + context personal externalizate din cod. Lasă gol/absent pentru un default generic. personal_keywords declanșează injectarea contextului din vault. project_map/profile_files = căi RELATIVE la vault_path. tier_examples_extra adaugă exemple de rutare personale (cheie = numărul tier-ului).",
   "personal_keywords": [],
+  "persona_base": "",
+  "persona_tier3_extra": "",
+  "profile_files": ["profile/about-me.md", "profile/stack.md", "profile/goals.md"],
+  "project_map": {},
+  "tier_examples_extra": {},
 
   "_comment_context": "Context compaction — sliding window pentru LiteLLM (tiers 1-2). Summarization necesită Ollama activ.",
   "max_context_messages": 20,

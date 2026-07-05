@@ -235,6 +235,22 @@ Cache-ul semantic devine conștient de context, eliminând răspunsurile greșit
 - Decizia trăiește într-un helper pur `_cache_policy` → testabilă direct.
 - Teste: `tests/test_cache.py` (79 → 93 verzi).
 
+### WP5 — Igienă de repo ✅ (05.07.2026)
+
+Curățenie de cod + externalizarea datelor personale:
+
+- **Persona externalizată** din `orchestrator.py` în `kage_config.json` (default generic în cod):
+  `persona_base`, `persona_tier3_extra`, `project_map`, `profile_files`, `tier_examples_extra`.
+  Fără date personale hardcodate în `.py`.
+- **Cod mort șters:** `_build_chat_html` (215 linii, UI vechi — `/chat` servește `kage.html`),
+  `UNCERTAINTY_PHRASES`.
+- **usage_log → SQLite** (tabel `usage` în `chat_history.db`, index pe `ts`): dashboard-ul,
+  `/health` și bugetul nu mai citesc fișierul `.jsonl` integral la fiecare poll de 10s; backfill
+  unic al datelor legacy.
+- **Scheduled task** unificat pe o cale unică (`_persist_new_task`) — folosită de `!schedule` și
+  de endpoint-ul `/schedule`.
+- Teste: 93 → **95 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)

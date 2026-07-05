@@ -321,7 +321,7 @@ seed-uite și codul nou să ruleze.
 - Store în `history_caching_gen` gated pe `store_ok` (era `use_cache`).
 - Teste: `tests/test_cache.py` (14 teste, câte ≥1 per comportament). Baseline 79 → **93 verzi**.
 
-### WP5 (#11) — Igienă de repo · efort: o seară
+### WP5 (#11) — Igienă de repo ✅ (05.07.2026) · efort: o seară
 
 **Pași:** persona (`_STEFAN_BASE`, `project_map` din `_get_obsidian_context`,
 `TIER_EXAMPLES` personale) → `kage_config.json`/vault cu default generic; șterge
@@ -330,6 +330,30 @@ seed-uite și codul nou să ruleze.
 fiecare poll de 10s).
 **Acceptare:** grep fără date personale hardcodate în `.py` · pytest verde · dashboard
 funcțional după mutarea usage.
+
+**Implementat (05.07.2026):**
+
+- **Persona externalizată** din cod în `kage_config.json` (real, gitignored) cu default
+  generic în cod: `_PERSONA_BASE`/`_PERSONA_TIER3_EXTRA` (`persona_base`/`persona_tier3_extra`),
+  `PROFILE_FILES` (`profile_files`), `PROJECT_MAP` (`project_map` — căi relative la vault),
+  `TIER_EXAMPLES` tier-2 genericizat + `tier_examples_extra` merge-uit din config. `_STEFAN_BASE`
+  eliminat. Label context „Obsidian StefanBrain" → „vault". Chei documentate în
+  `kage_config.example.json` (`_comment_persona`).
+- **Cod mort șters:** `_build_chat_html` (215 linii), `UNCERTAINTY_PHRASES`. `MULTI_TENANT_ARCH.md`
+  fusese deja șters la reorganizarea repo.
+- **Scheduled task unificat:** `_persist_new_task(cron, message, tier_override)` — cale unică
+  (validare cron + persistă + `add_job`), folosită de `!schedule` (`_handle_schedule_command`)
+  și de `POST /schedule` action=add. Ramura add scoasă din blocul de `FileLock` ca să nu
+  achiziționeze lock-ul de două ori.
+- **usage_log → SQLite:** tabel `usage` în `chat_history.db` (index pe `ts`).
+  `_log_usage` face INSERT; `_usage_counts_today`/`_aggregate_usage`/`/health` interoghează doar
+  ziua curentă (`ts >= today AND ts < tomorrow`) în loc să citească fișierul integral la fiecare
+  poll de 10s. `_backfill_usage_from_jsonl` importă o singură dată `usage_log.jsonl` legacy
+  (idempotent — doar dacă tabelul e gol); fișierul rămâne pe disc ca arhivă. Footer dashboard
+  actualizat.
+- Teste: `test_budget.py` rescris pe SQLite (`_usage_db` in-memory) + test nou `_log_usage`.
+  Baseline 93 → **95 verzi**. Verificat runtime: backfill + aggregate + dashboard render.
+  **Necesită restart** (`start_all.sh`) ca persona din config + tabelul usage să fie active.
 
 ### WP-B — Backup off-machine · efort: o seară · oricând după WP-G1 (recomandat cât mai devreme)
 
