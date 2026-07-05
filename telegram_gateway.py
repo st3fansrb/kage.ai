@@ -99,6 +99,33 @@ class TelegramGateway:
         }
         await self.send(text, reply_markup=keyboard)
 
+    async def send_job_card(self, job: dict) -> None:
+        """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
+        `job` are cheile: hash, title, company, location, url, score."""
+        jhash = job.get("hash", "")
+        score = job.get("score")
+        score_str = f" · scor {score}/10" if score is not None else ""
+        title = _escape(str(job.get("title", "(fără titlu)")))
+        company = _escape(str(job.get("company", "")))
+        location = _escape(str(job.get("location", "")))
+        url = str(job.get("url", ""))
+        header = f"💼 <b>{title}</b>{score_str}"
+        lines = [header]
+        if company:
+            lines.append(f"🏢 {company}")
+        if location:
+            lines.append(f"📍 {location}")
+        if url:
+            lines.append(f'<a href="{_escape(url)}">🔗 vezi anunțul</a>')
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "🔖 Salvează", "callback_data": f"job:save:{jhash}"},
+                {"text": "✍️ Aplică", "callback_data": f"job:apply:{jhash}"},
+                {"text": "🗑 Ignoră", "callback_data": f"job:ignore:{jhash}"},
+            ]]
+        }
+        await self.send("\n".join(lines), reply_markup=keyboard)
+
     # ── Polling loop ───────────────────────────────────────────────────────────
 
     async def _poll_loop(self) -> None:
@@ -160,7 +187,8 @@ class TelegramGateway:
                 "• <code>!run &lt;task&gt;</code> — agent background\n"
                 "• <code>!status</code> — statistici live\n"
                 "• <code>!swarm &lt;task&gt;</code> — agent paralel\n"
-                "• <code>!schedule</code> — task programat\n\n"
+                "• <code>!schedule</code> — task programat\n"
+                "• <code>!scan</code> — caută joburi noi (WP-J)\n\n"
                 "Orice alt mesaj merge direct la Kage."
             )
             return
@@ -180,9 +208,12 @@ class TelegramGateway:
         # Confirmă primirea (elimină loading din Telegram)
         await self._tg_post("answerCallbackQuery", {"callback_query_id": callback_id})
 
-        if not data.startswith("risk:"):
-            return
+        if data.startswith("risk:"):
+            await self._handle_risk_callback(data)
+        elif data.startswith("job:"):
+            await self._handle_job_callback(data)
 
+    async def _handle_risk_callback(self, data: str) -> None:
         parts = data.split(":", 2)
         if len(parts) != 3:
             return
@@ -210,6 +241,38 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] risk respond failed: {e}")
             await self.send(f"⚠️ Eroare internă la procesare decizie.")
+
+    async def _handle_job_callback(self, data: str) -> None:
+        """Butoane job (WP-J): job:save|apply|ignore:<hash> → endpoint /jobs/*."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, action, jhash = parts
+        if action == "apply":
+            path = f"/jobs/apply/{jhash}"
+        elif action in ("save", "ignore"):
+            path = f"/jobs/action/{action}/{jhash}"
+        else:
+            return
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(f"{self._orchestrator_url}{path}", headers=headers)
+            if resp.status_code == 200:
+                if action == "save":
+                    await self.send("🔖 Job salvat.")
+                elif action == "ignore":
+                    await self.send("🗑 Job ignorat (nu revine).")
+                else:
+                    msg = resp.json().get("message", "career-ops pornit")
+                    await self.send(f"✍️ {_escape(str(msg))}")
+            else:
+                await self.send(f"⚠️ Eroare job ({action}): HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] job callback failed: {e}")
+            await self.send("⚠️ Eroare internă la procesare job.")
 
     async def _forward_to_orchestrator(self, text: str) -> None:
         """Trimite mesaj text la /v1/chat/completions și returnează răspunsul în Telegram."""

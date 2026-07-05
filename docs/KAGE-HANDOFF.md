@@ -400,7 +400,20 @@ backup · restore testat dintr-o arhivă luată din iCloud · grep fără token 
   repo-ului privat GitHub al vault-ului (SSH sau HTTPS cu credential helper) ca push-ul nocturn
   să funcționeze. Vault-ul se `git init`-ează automat la jobul de 03:00 (WP-G1).
 
-### WP-J — Job hunter multi-profil (career-ops + JobSpy) · efort: un weekend · după WP2, independent de restul
+### WP-J — Job hunter multi-profil (career-ops + JobSpy) ✅ (05.07.2026) · efort: un weekend · după WP2, independent de restul
+
+**Implementat (05.07.2026):** pipeline complet în cod. Rafinare față de plan: career-ops
+NU rulează în scanul automat (ar arde budget cloud la fiecare scan de 2×/zi) — scanul face
+DOAR scan→dedup→pre-filtru T2 local→digest (cost cloud zero, cum cere acceptarea). Evaluarea
+career-ops + CV tailoring pornește la butonul ✍️, on-demand, confinată la workspace-ul
+profilului. Piese: `job_scan.py` (standalone, `.jobs-venv` 3.12) · tabel `jobs` în
+`chat_history.db` · secțiunea „Job hunter" din `orchestrator.py` (pipeline + endpoint-uri
+`/jobs/scan|action|apply`) · `send_job_card`/callback `job:` în `telegram_gateway.py` ·
+comanda `!scan [profil]` · config `jobs` (opt-in, `enabled:false` implicit) · `tests/test_jobs.py`
+(13 teste). **Setup necesar înainte de folosire:** `scripts/setup.sh` creează `.jobs-venv` +
+jobspy; clonează [santifer/career-ops](https://github.com/santifer/career-ops) în
+`~/career-ops/{stefan,tata}/` cu CV+context; adaugă acele workspace-uri în `allowed_task_roots`;
+pune `jobs.enabled:true` + token Telegram. Fără setup, `!scan` degradează grațios (mesaj clar).
 
 **Decizie (05.07.2026):** digest + draft la cerere, FĂRĂ auto-apply (§4). Două profiluri:
 Stefan (student CS, QA intern) + tatăl lui (project manager, non-tech — Stefan operează tot,

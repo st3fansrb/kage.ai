@@ -1,0 +1,4 @@
+# WP-J — dependențe pentru job_scan.py, instalate în .jobs-venv (Python ≥3.10).
+# Separate de requirements.txt fiindcă python-jobspy cere 3.10+, iar nucleul Kage
+# rulează pe 3.9. Vezi scripts/setup.sh (bloc .jobs-venv).
+python-jobspy>=1.1.80

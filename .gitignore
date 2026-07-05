@@ -4,6 +4,7 @@ ntfy_config.json
 
 .venv/
 .widget-venv/
+.jobs-venv/
 
 cache_db/
 .logs/
