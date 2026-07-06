@@ -16,7 +16,7 @@ restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart
 ### Acceptare
 - `git rev-parse --abbrev-ref HEAD | grep -qx feat/mission-eur-cost`
 
-## WP2 — Helper de conversie + config
+## WP2 — Helper de conversie + config ✅ (2026-07-06)
 
 - În `orchestrator.py`, lângă celelalte constante de config (ex. zona `WHISPER_*` /
   `AGENT_INACTIVITY_TIMEOUT`), adaugă constanta `EUR_USD_RATE` citită din config:
