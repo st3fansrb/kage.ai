@@ -488,7 +488,7 @@ generează la cerere · zero apeluri cloud la compunere · pytest verde.
   randare md/HTML+escaping, zero-cloud, comandă + push). Baseline 122 → **142 verzi**.
   **Necesită restart** (`start_all.sh`) ca jobul de briefing + comanda `!briefing` să fie active.
 
-### WP6 (#13) — Voice memos pe Telegram · efort: o seară–un weekend · depinde de WP1
+### WP6 (#13) — Voice memos pe Telegram · efort: o seară–un weekend · depinde de WP1 · ✅ IMPLEMENTAT (06.07.2026)
 
 **Fișiere:** `orchestrator.py`, `telegram_gateway.py`, `kage_config.json[.example]`.
 **Pași:** (1) endpoint `POST /v1/audio/transcriptions` (OpenAI-compatible) — subprocess
@@ -498,6 +498,25 @@ pentru `message.voice` → `getFile` → download OGG → transcrie → intră �
 cu reply „📝 Am înțeles: …"; (3) test cu fixture audio scurt.
 **Acceptare:** voice memo în română pe Telegram → răspuns text corect (test manual) · endpoint
 testat cu fixture · transcrierea rulează 100% local.
+
+**Implementat:**
+
+- Config `whisper` în `kage_config.example.json`: `bin` (default `whisper-cli`, rezolvat prin
+  PATH sau cale absolută), `model` (cale GGML, gol = dezactivat), `language` (default `ro`).
+- `orchestrator.py`: `_resolve_whisper_bin()`, `_transcribe_audio()` (temp file → ffmpeg
+  OGG→WAV 16kHz mono dacă e disponibil → `whisper-cli -nt -np`, stdout = text; timeout 300s),
+  clasa `_WhisperUnavailable` și endpoint `POST /v1/audio/transcriptions` (multipart `file`,
+  OpenAI-compatible, întoarce `{"text": …}`; **503** dacă whisper/model lipsesc — degradare grațioasă).
+- `telegram_gateway.py`: ramură `voice`/`audio` în `_dispatch` → `_handle_voice()`
+  (getFile → download OGG → POST la endpoint cu auth → reply `📝 Am înțeles: …` → `_forward_to_orchestrator`).
+  503 → mesaj „transcrierea vocală nu e configurată". `/help` menționează mesajele vocale.
+- Teste noi: `tests/test_voice.py` (12) — rezolvare binar, degradare (bin/model lipsă),
+  transcriere cu/fără ffmpeg, returncode ≠ 0, endpoint (400 lipsă/gol, 503 neinstalat, 200 happy).
+  Suită totală: 154 verzi.
+- **Setup necesar** (opt-in, nu e făcut încă): `brew install whisper-cpp ffmpeg`, descarcă modelul
+  GGML (large-v3-turbo ~1,6GB) și setează `whisper.model` în `kage_config.json`. Fără el, endpoint-ul
+  dă 503 și Telegram anunță că nu e configurat — restul sistemului nu e afectat.
+  **Necesită restart** (`start_all.sh`) ca ramura de voce din gateway + endpoint-ul să fie active.
 
 ### WP7 (#15A) — Phoenix peste LiteLLM · efort: câteva seri · AMÂNAT (05.07.2026): se face împreună cu WP10
 

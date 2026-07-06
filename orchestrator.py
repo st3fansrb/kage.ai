@@ -282,6 +282,15 @@ BRIEFING_INTRO_LLM     = bool(_briefing_cfg.get("intro_llm", True))
 BRIEFING_VAULT_SECTION = bool(_briefing_cfg.get("vault_section", True))
 BRIEFING_VAULT_DAILY_DIR = str(_briefing_cfg.get("vault_daily_dir", "")).strip()
 
+# WP6: transcriere voce 100% LOCALĂ (whisper.cpp) pentru voice memos pe Telegram.
+# `bin`   = binarul whisper.cpp (brew: `whisper-cli`); rezolvat prin PATH dacă nu e cale absolută.
+# `model` = calea către modelul GGML (ex. large-v3-turbo, ~1,6GB — descărcat separat).
+# Degradare grațioasă: fără bin/model, endpoint-ul întoarce 503 și Telegram anunță userul.
+_whisper_cfg = _cfg.get("whisper", {}) if isinstance(_cfg.get("whisper"), dict) else {}
+WHISPER_BIN      = str(_whisper_cfg.get("bin", "whisper-cli")).strip() or "whisper-cli"
+WHISPER_MODEL    = str(_whisper_cfg.get("model", "")).strip()
+WHISPER_LANGUAGE = str(_whisper_cfg.get("language", "auto")).strip() or "auto"
+
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
     def _t(key: str, prov_def: str, model_def: str):
@@ -1233,6 +1242,107 @@ async def admin_backup():
         return JSONResponse({"status": "ok", "archive": path})
     except Exception as e:
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+# ── WP6: transcriere voce locală (whisper.cpp) ──────────────────────────────────
+
+def _resolve_whisper_bin() -> Optional[str]:
+    """Calea către binarul whisper.cpp, sau None dacă lipsește.
+    Acceptă cale absolută (config) sau nume rezolvat prin PATH."""
+    p = Path(WHISPER_BIN).expanduser()
+    if p.is_absolute() or "/" in WHISPER_BIN:
+        return str(p) if p.exists() else None
+    return shutil.which(WHISPER_BIN)
+
+
+class _WhisperUnavailable(RuntimeError):
+    """Ridicată când whisper.cpp sau modelul nu sunt instalate (setup opt-in)."""
+
+
+async def _transcribe_audio(audio_bytes: bytes, src_suffix: str = ".ogg") -> str:
+    """Transcrie audio 100% LOCAL prin whisper.cpp. Returnează textul (strip).
+
+    Pași: (1) scrie bytes într-un temp; (2) dacă `ffmpeg` există, convertește la
+    WAV 16kHz mono (formatul cerut de whisper.cpp); (3) rulează binarul cu `-nt -np`
+    și capturează stdout. Ridică `_WhisperUnavailable` dacă binarul/modelul lipsesc."""
+    whisper_bin = _resolve_whisper_bin()
+    if not whisper_bin:
+        raise _WhisperUnavailable(
+            f"whisper.cpp neinstalat (lipsă binarul {WHISPER_BIN!r}) — vezi setup.sh / `brew install whisper-cpp`"
+        )
+    if not WHISPER_MODEL or not Path(WHISPER_MODEL).expanduser().exists():
+        raise _WhisperUnavailable(
+            f"modelul whisper lipsește ({WHISPER_MODEL!r}) — descarcă un GGML (ex. large-v3-turbo) și setează `whisper.model`"
+        )
+
+    tmp_files: list[str] = []
+    try:
+        with tempfile.NamedTemporaryFile("wb", suffix=src_suffix, delete=False) as tf:
+            tf.write(audio_bytes)
+            src_path = tf.name
+            tmp_files.append(src_path)
+
+        # whisper.cpp cere WAV 16kHz mono. Convertim cu ffmpeg dacă e disponibil;
+        # altfel pasăm fișierul brut (build-urile whisper.cpp cu ffmpeg linkat îl decodează singure).
+        audio_path = src_path
+        ffmpeg = shutil.which("ffmpeg")
+        if ffmpeg:
+            wav_path = src_path + ".wav"
+            tmp_files.append(wav_path)
+            conv = await asyncio.create_subprocess_exec(
+                ffmpeg, "-nostdin", "-y", "-i", src_path,
+                "-ar", "16000", "-ac", "1", "-f", "wav", wav_path,
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+            )
+            _, ferr = await asyncio.wait_for(conv.communicate(), timeout=120)
+            if conv.returncode == 0 and Path(wav_path).exists():
+                audio_path = wav_path
+            else:
+                logger.warning(f"[Whisper] ffmpeg a eșuat, folosesc fișierul brut: {ferr.decode('utf-8', 'replace')[:200]}")
+
+        proc = await asyncio.create_subprocess_exec(
+            whisper_bin, "-m", str(Path(WHISPER_MODEL).expanduser()),
+            "-f", audio_path, "-l", WHISPER_LANGUAGE, "-nt", "-np",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            raise RuntimeError(f"whisper.cpp eroare (rc={proc.returncode}): {stderr.decode('utf-8', 'replace')[:300]}")
+        return stdout.decode("utf-8", errors="replace").strip()
+    except asyncio.TimeoutError:
+        raise RuntimeError("transcriere timeout (>300s)")
+    finally:
+        for f in tmp_files:
+            try:
+                os.unlink(f)
+            except OSError:
+                pass
+
+
+@app.post("/v1/audio/transcriptions")
+async def audio_transcriptions(request: Request):
+    """Transcriere audio OpenAI-compatible, 100% locală (whisper.cpp) — WP6.
+    Acceptă multipart/form-data cu câmpul `file` (ca API-ul OpenAI). Rulează pe
+    mașină, fără cost cloud. 503 dacă whisper.cpp/modelul nu sunt instalate."""
+    try:
+        form = await request.form()
+    except Exception:
+        return JSONResponse({"error": "multipart/form-data așteptat (câmp `file`)"}, status_code=400)
+    upload = form.get("file")
+    if upload is None or not hasattr(upload, "read"):
+        return JSONResponse({"error": "câmpul `file` lipsește"}, status_code=400)
+    audio_bytes = await upload.read()
+    if not audio_bytes:
+        return JSONResponse({"error": "fișier audio gol"}, status_code=400)
+    filename = getattr(upload, "filename", "") or "audio.ogg"
+    suffix = Path(filename).suffix or ".ogg"
+    try:
+        text = await _transcribe_audio(audio_bytes, src_suffix=suffix)
+    except _WhisperUnavailable as e:
+        return JSONResponse({"error": str(e)}, status_code=503)
+    except Exception as e:
+        return JSONResponse({"error": f"transcriere eșuată: {e}"}, status_code=500)
+    return JSONResponse({"text": text})
 
 
 async def _sse_to_openai_json(resp: StreamingResponse, model: str = "kage") -> JSONResponse:

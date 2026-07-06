@@ -169,6 +169,11 @@ class TelegramGateway:
             text = msg.get("text", "").strip()
             if text:
                 await self._handle_message(text)
+                return
+            # WP6: voice memo → transcriere locală (whisper.cpp) → pipeline normal
+            voice = msg.get("voice") or msg.get("audio")
+            if voice and voice.get("file_id"):
+                await self._handle_voice(voice["file_id"])
 
     # ── Handlers ───────────────────────────────────────────────────────────────
 
@@ -189,6 +194,7 @@ class TelegramGateway:
                 "• <code>!swarm &lt;task&gt;</code> — agent paralel\n"
                 "• <code>!schedule</code> — task programat\n"
                 "• <code>!scan</code> — caută joburi noi (WP-J)\n\n"
+                "🎙 Mesaj vocal — transcris local și trimis la Kage.\n"
                 "Orice alt mesaj merge direct la Kage."
             )
             return
@@ -198,6 +204,55 @@ class TelegramGateway:
 
         # Rutare la orchestrator
         await self._forward_to_orchestrator(text)
+
+    async def _handle_voice(self, file_id: str) -> None:
+        """WP6: descarcă voice memo-ul, îl transcrie local (endpoint orchestrator)
+        și trimite textul mai departe în pipeline-ul normal de chat."""
+        try:
+            # 1. getFile → file_path pe serverele Telegram
+            info = await self._tg_post("getFile", {"file_id": file_id})
+            file_path = info.get("result", {}).get("file_path", "") if info.get("ok") else ""
+            if not file_path:
+                await self.send("⚠️ Nu am putut prelua fișierul vocal.")
+                return
+            # 2. Download OGG (Opus) din API-ul de fișiere Telegram
+            if not self._client:
+                return
+            dl = await self._client.get(
+                f"https://api.telegram.org/file/bot{self._token}/{file_path}",
+                timeout=30,
+            )
+            if dl.status_code != 200 or not dl.content:
+                await self.send("⚠️ Descărcarea fișierului vocal a eșuat.")
+                return
+            # 3. Transcriere 100% locală prin orchestrator (/v1/audio/transcriptions)
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            suffix = file_path.rsplit(".", 1)[-1] if "." in file_path else "ogg"
+            files = {"file": (f"voice.{suffix}", dl.content, "application/ogg")}
+            async with httpx.AsyncClient(timeout=330) as client:
+                tr = await client.post(
+                    f"{self._orchestrator_url}/v1/audio/transcriptions",
+                    files=files,
+                    headers=headers,
+                )
+            if tr.status_code == 503:
+                await self.send("🎙 Transcrierea vocală nu e configurată (whisper.cpp neinstalat).")
+                return
+            if tr.status_code != 200:
+                await self.send(f"⚠️ Transcriere eșuată: HTTP {tr.status_code}")
+                return
+            transcript = (tr.json().get("text") or "").strip()
+            if not transcript:
+                await self.send("🎙 N-am înțeles nimic din mesajul vocal.")
+                return
+            # 4. Confirmă ce a înțeles + trimite textul în pipeline
+            await self.send(f"📝 Am înțeles: <i>{_escape(transcript)}</i>")
+            await self._forward_to_orchestrator(transcript)
+        except Exception as e:
+            logger.error(f"[TelegramGateway] voice handling failed: {e}")
+            await self.send("⚠️ Eroare internă la procesarea mesajului vocal.")
 
     async def _handle_callback(self, callback_query: dict) -> None:
         """Procesează apăsare buton inline (aprobare/blocare risc)."""
