@@ -1,8 +1,24 @@
+"use client";
+
+import { useState } from "react";
 import { Approval } from "@/lib/types";
 import { T } from "@/lib/tokens";
+import { respondApproval } from "@/lib/actions";
 
 export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
-  const has = approvals.length > 0;
+  // optimistic: ascunde cardul imediat ce APPROVE/DENY reușește; SSE reconciliază.
+  const [resolving, setResolving] = useState<Record<string, boolean>>({});
+  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+
+  async function act(id: string, action: "confirm" | "block") {
+    setResolving((r) => ({ ...r, [id]: true }));
+    const ok = await respondApproval(id, action);
+    if (ok) setHidden((h) => ({ ...h, [id]: true }));
+    else setResolving((r) => ({ ...r, [id]: false }));
+  }
+
+  const visible = approvals.filter((ap) => !hidden[ap.id]);
+  const has = visible.length > 0;
   return (
     <div
       style={{
@@ -17,7 +33,7 @@ export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
         <span style={{ fontSize: 10, letterSpacing: ".14em", textTransform: "uppercase", color: T.orange2, fontWeight: 500 }}>
           Approvals
         </span>
-        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.orange2 }}>{approvals.length}</span>
+        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.orange2 }}>{visible.length}</span>
       </div>
 
       {!has && (
@@ -28,7 +44,7 @@ export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        {approvals.map((ap) => (
+        {visible.map((ap) => (
           <div
             key={ap.id}
             style={{
@@ -76,8 +92,8 @@ export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
             {ap.why && <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.5, marginTop: 8 }}>{ap.why}</div>}
             <div style={{ display: "flex", gap: 9, marginTop: 11 }}>
               <button
-                disabled
-                title="Acțiunile approve/deny vin în slice 3"
+                onClick={() => act(ap.id, "confirm")}
+                disabled={resolving[ap.id]}
                 style={{
                   flex: 2,
                   height: 40,
@@ -87,14 +103,16 @@ export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
                   color: T.bg,
                   fontWeight: 700,
                   fontSize: 14,
-                  cursor: "not-allowed",
-                  opacity: 0.55,
+                  cursor: resolving[ap.id] ? "wait" : "pointer",
+                  opacity: resolving[ap.id] ? 0.55 : 1,
+                  boxShadow: "0 0 18px rgba(255,106,48,.25)",
                 }}
               >
-                APPROVE
+                {resolving[ap.id] ? "…" : "APPROVE"}
               </button>
               <button
-                disabled
+                onClick={() => act(ap.id, "block")}
+                disabled={resolving[ap.id]}
                 style={{
                   flex: 1,
                   height: 40,
@@ -103,8 +121,8 @@ export function ApprovalsPanel({ approvals }: { approvals: Approval[] }) {
                   background: "none",
                   color: T.soft2,
                   fontSize: 13,
-                  cursor: "not-allowed",
-                  opacity: 0.55,
+                  cursor: resolving[ap.id] ? "wait" : "pointer",
+                  opacity: resolving[ap.id] ? 0.55 : 1,
                 }}
               >
                 DENY

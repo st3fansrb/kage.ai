@@ -30,7 +30,7 @@ export default function MissionControl() {
 
       {/* main */}
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <Header budget={state.budget} conn={conn} />
+        <Header budget={state.budget} conn={conn} runningCount={state.runningCount} />
 
         <div
           style={{

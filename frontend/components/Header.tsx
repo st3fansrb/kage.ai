@@ -1,10 +1,22 @@
+"use client";
+
+import { useState } from "react";
 import { Budget } from "@/lib/types";
 import { ConnState } from "@/lib/useMissionState";
 import { T } from "@/lib/tokens";
+import { stopAll } from "@/lib/actions";
 
-export function Header({ budget, conn }: { budget: Budget; conn: ConnState }) {
+export function Header({ budget, conn, runningCount }: { budget: Budget; conn: ConnState; runningCount: number }) {
   const pct = budget.maxUsd > 0 ? Math.min(1, budget.spentUsd / budget.maxUsd) : 0;
   const live = conn === "live";
+  const [stopping, setStopping] = useState(false);
+
+  async function onStop() {
+    if (!confirm("Oprești toți agenții activi + pauzezi scheduler-ul?")) return;
+    setStopping(true);
+    await stopAll();
+    setStopping(false);
+  }
   return (
     <header
       style={{
@@ -41,6 +53,26 @@ export function Header({ budget, conn }: { budget: Budget; conn: ConnState }) {
         {conn === "live" ? "SSE live" : conn === "connecting" ? "conectare…" : "reconectare…"}
       </span>
       <div style={{ flex: 1 }} />
+      {runningCount > 0 && (
+        <button
+          onClick={onStop}
+          disabled={stopping}
+          title="Kill switch: oprește toți agenții + pauzează scheduler-ul"
+          style={{
+            fontFamily: T.mono,
+            fontSize: 10.5,
+            color: T.orange2,
+            border: `1px solid ${T.orangeLine}`,
+            background: T.orangeTint,
+            borderRadius: 8,
+            padding: "3px 10px",
+            cursor: stopping ? "wait" : "pointer",
+            opacity: stopping ? 0.6 : 1,
+          }}
+        >
+          ■ stop all
+        </button>
+      )}
       <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>
         cloud <b style={{ color: T.text, fontWeight: 500 }}>{budget.cloudCalls}</b>/{budget.maxCloud}
       </span>
