@@ -67,7 +67,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 
 ### Siguranță & control
 - **Risk gate 3-axis** — fiecare tool call (Bash, operații pe fișiere) al agentului e evaluat pe 3 axe; operațiile riscante cer aprobare explicită în UI/telefon.
-- **Workspace confinement** — agenții `!run`/`!sysrun`/`!swarm` sunt limitați la folderele permise (`allowed_task_roots`); execuția în afara lor e blocată automat.
+- **Workspace confinement** — agenții `!run`/`!sysrun`/`!swarm` pornesc doar într-un folder permis (`allowed_task_roots`; cwd în afara lor e blocat la lansare), iar orice `Write`/`Edit` pe o cale din afara rooturilor cere aprobare explicită (confinement per-tool-call, nu doar la pornire).
 - **Budget zilnic** — limită hard de apeluri cloud/zi (default 20), alertă la 80%, fallback pe local la depășire.
 - **Auth API** — token în middleware FastAPI.
 

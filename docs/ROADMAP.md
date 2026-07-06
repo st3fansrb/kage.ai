@@ -71,6 +71,8 @@ Indexare și căutare în vault-ul Obsidian sau fișiere locale — distinctă f
 ### Workspace Confinement ✅ (Faza 19)
 Implementat — `_validate_task_cwd` validează `cwd`-ul agenților `!run`/`!sysrun`/`!swarm` față de `allowed_task_roots` din `kage_config.json` (canonicalizare cu `resolve()`, anti-bypass `..`/symlink). Listă goală/absentă = dezactivat (non-breaking); `PROJECT_ROOT` mereu permis pentru `!sysrun`. Task respins → răspuns `[BLOCKED]`, niciun subprocess lansat.
 
+**Confinement per-tool-call ✅ (2026-07-06 — D4 pct. 3 / #2):** `risk_hook.py` încarcă acum `ALLOWED_TASK_ROOTS` din config; `_path_in_allowed_roots` + gate în `evaluate_risk` fac ca orice `Write`/`Edit` pe o cale din afara rooturilor să escaladeze la **High** (aprobare), cu downgrade la **Medium** pe instrucție explicită. `Never` (căi/fișiere sensibile) păstrează prioritatea; roots gol = dezactivat. Astfel confinement-ul e adevărat *după* start, nu doar pe cwd — aliniat cu `DESPRE_KAGE.md`. Scope: Write/Edit; confinement pe Bash rămâne pentru mai târziu. Teste: `tests/test_confinement.py` (+9).
+
 ---
 
 ### Round Limit + Continue
