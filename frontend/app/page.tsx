@@ -1,14 +1,29 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useMissionState } from "@/lib/useMissionState";
 import { Header } from "@/components/Header";
 import { AgentsPanel } from "@/components/AgentsPanel";
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { ActivityStream } from "@/components/ActivityStream";
+import { ChatPanel } from "@/components/ChatPanel";
 import { T } from "@/lib/tokens";
 
 export default function MissionControl() {
   const { state, conn } = useMissionState();
+  const [chatOpen, setChatOpen] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
+        e.preventDefault();
+        setChatOpen((o) => !o);
+      }
+      if (e.key === "Escape") setChatOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100%", background: T.bg, color: T.text, overflow: "hidden" }}>
@@ -26,6 +41,27 @@ export default function MissionControl() {
         }}
       >
         <div style={{ fontSize: 20, fontWeight: 700, color: T.text, textShadow: "3px 3px 0 rgba(255,106,48,.25)" }}>影</div>
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => setChatOpen((o) => !o)}
+          title="Chat ⌘J"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 4,
+            width: 48,
+            padding: "8px 0",
+            borderRadius: 12,
+            border: "none",
+            cursor: "pointer",
+            background: chatOpen ? "rgba(236,225,210,.08)" : "none",
+            color: chatOpen ? T.text : T.muted,
+          }}
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>⌘</span>
+          <span style={{ fontSize: 8.5, letterSpacing: ".08em", textTransform: "uppercase" }}>chat</span>
+        </button>
       </nav>
 
       {/* main */}
@@ -49,6 +85,8 @@ export default function MissionControl() {
           </div>
         </div>
       </main>
+
+      <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   );
 }
