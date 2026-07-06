@@ -34,6 +34,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 import telegram_gateway as _tg_module
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
+import mission_runner as _mr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -421,6 +422,11 @@ def _stop_all() -> dict:
             asyncio.get_running_loop().create_task(_agent_runner.stop_all())
         except RuntimeError:
             pass
+    # WP11: oprește misiunea activă (bucla vede flag-ul după ce se întrerupe rularea SDK).
+    if _active_mission_id:
+        _mission_stop[_active_mission_id] = True
+        _mission_update(_active_mission_id, status="paused")
+    _mission_caffeinate_stop()
     scheduler_paused = False
     if _scheduler is not None:
         try:
@@ -915,6 +921,8 @@ async def startup_cache():
         _ensure_approvals_table(_db_conn)
         # WP9: mapare sesiuni pentru resume (Agent SDK).
         _ensure_agent_sessions_table(_db_conn)
+        # WP11: mission runner — stare care supraviețuiește restartului.
+        _ensure_missions_table(_db_conn)
         _db_conn.commit()
         _load_pending_approvals()
 
@@ -938,6 +946,9 @@ async def startup_cache():
         await _seed_routing_examples()
     except Exception as e:
         logger.error(f"ChromaDB startup failed: {e}")
+
+    # WP11: relansează misiunile întrerupte de un restart (după scheduler + telegram).
+    _mission_resume_on_startup()
 
 
 async def _seed_routing_examples() -> None:
@@ -1169,6 +1180,54 @@ async def api_run_detail(run_id: str):
     except Exception as e:
         logger.error(f"Run detail fetch failed: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.post("/mission/answer/{request_id}")
+async def mission_answer(request_id: str, request: Request):
+    """Puntea de decizii (WP11): răspunsul la o întrebare de misiune (butoane Telegram)
+    deblochează runner-ul."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    answer = body.get("answer", "")
+    mission_answers[request_id] = answer
+    if request_id in pending_mission_q:
+        pending_mission_q[request_id].set()
+    return {"ok": True, "answer": answer}
+
+
+@app.get("/api/missions")
+async def api_missions():
+    """Lista misiunilor + progresul lor (WP11)."""
+    if _db_conn is None:
+        return []
+    try:
+        rows = _db_conn.execute(
+            "SELECT id, slug, title, status, current_idx, created_at, updated_at "
+            "FROM missions ORDER BY created_at DESC LIMIT 50").fetchall()
+        cols = ["id", "slug", "title", "status", "current_idx", "created_at", "updated_at"]
+        out = []
+        for row in rows:
+            m = dict(zip(cols, row))
+            wps = _mission_wps(m["id"])
+            m["wps_total"] = len(wps)
+            m["wps_done"] = sum(1 for w in wps if w["status"] == "done")
+            out.append(m)
+        return out
+    except Exception as e:
+        logger.error(f"Missions fetch failed: {e}")
+        return []
+
+
+@app.get("/api/missions/{mission_id}")
+async def api_mission_detail(mission_id: str):
+    """O misiune + pachetele ei de lucru cu status (WP11)."""
+    row = _mission_row(mission_id)
+    if row is None:
+        return JSONResponse({"error": "misiune inexistentă"}, status_code=404)
+    row["wps"] = _mission_wps(mission_id)
+    return row
 
 
 @app.post("/schedule")
@@ -1571,6 +1630,9 @@ async def _chat_dispatch(request: Request, body: dict):
 
     if last_user.strip().lower() == "!briefing":
         return await _handle_briefing_command()
+
+    if re.match(r"^!mission\b", last_user.strip(), re.IGNORECASE):
+        return await _handle_mission_command(last_user.strip())
 
     # WP8: deschide un run în ledger pentru fiecare cerere REALĂ de chat (după shortcut-uri).
     run_id = _run_start("chat", session_id=session_id,
@@ -2233,6 +2295,390 @@ def _load_pending_approvals() -> None:
             logger.info(f"[approvals] {len(rows)} aprobări pending reîncărcate din DB")
     except Exception as e:
         logger.warning(f"[approvals] load la startup eșuat: {e}")
+
+
+# ═══ Mission Runner (WP11): handoff → execuție nonstop ════════════════════════
+# „Îi dau planul și lucrează singur." Bucla peste AgentRunner (WP9): ia următorul WP
+# nemarcat dintr-un mission.md, spawnează o sesiune (resume la nivel de misiune),
+# rulează criteriile verificabile (comenzi shell), marchează ✅ + commit, trece mai
+# departe. Poziția + starea trăiesc în SQLite (missions/mission_wps) → restart nu
+# pierde misiunea. Logica pură (parsare/verificare/rate-limit) e în `mission_runner`.
+
+MISSIONS_DIR = PROJECT_ROOT / "missions"
+
+_active_mission_id: Optional[str] = None      # o singură misiune activă la un moment dat
+_mission_task: Optional[asyncio.Task] = None
+_mission_stop: dict = {}                        # mission_id -> True (cerere pauză/stop)
+_caffeinate_proc = None                         # anti-sleep cât timp rulează o misiune
+pending_mission_q: Dict[str, asyncio.Event] = {}
+mission_answers: Dict[str, str] = {}
+_MISSION_UPDATABLE = {"status", "current_idx", "sdk_session_id"}
+
+
+def _ensure_missions_table(conn) -> None:
+    """Tabele `missions` + `mission_wps` (stare care supraviețuiește restartului)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS missions (
+            id TEXT PRIMARY KEY, slug TEXT, title TEXT, path TEXT, cwd TEXT,
+            status TEXT NOT NULL, current_idx INTEGER DEFAULT 0,
+            sdk_session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mission_wps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL,
+            idx INTEGER NOT NULL, title TEXT, status TEXT NOT NULL DEFAULT 'pending',
+            detail TEXT, finished_at TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_mission_wps ON mission_wps(mission_id)")
+
+
+def _mission_row(mission_id: str) -> Optional[dict]:
+    if _db_conn is None or not mission_id:
+        return None
+    try:
+        r = _db_conn.execute(
+            "SELECT id, slug, title, path, cwd, status, current_idx, sdk_session_id "
+            "FROM missions WHERE id=?", (mission_id,)).fetchone()
+    except Exception:
+        return None
+    if not r:
+        return None
+    return {"id": r[0], "slug": r[1], "title": r[2], "path": r[3], "cwd": r[4],
+            "status": r[5], "current_idx": r[6], "sdk_session_id": r[7]}
+
+
+def _mission_update(mission_id: str, **fields) -> None:
+    if _db_conn is None or not mission_id:
+        return
+    cols = [k for k in fields if k in _MISSION_UPDATABLE]
+    if not cols:
+        return
+    try:
+        assignments = ", ".join(f"{c}=?" for c in cols) + ", updated_at=?"
+        _db_conn.execute(f"UPDATE missions SET {assignments} WHERE id=?",
+                         (*[fields[c] for c in cols], datetime.datetime.now().isoformat(), mission_id))
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[mission] update eșuat: {e}")
+
+
+def _mission_wp_set(mission_id: str, idx: int, status: str, detail: Optional[str] = None) -> None:
+    if _db_conn is None:
+        return
+    try:
+        fin = datetime.datetime.now().isoformat() if status in ("done", "failed") else None
+        _db_conn.execute(
+            "UPDATE mission_wps SET status=?, detail=COALESCE(?, detail), finished_at=? "
+            "WHERE mission_id=? AND idx=?",
+            (status, detail, fin, mission_id, idx))
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[mission] wp_set eșuat: {e}")
+
+
+def _mission_wps(mission_id: str) -> list:
+    if _db_conn is None:
+        return []
+    try:
+        return [{"idx": r[0], "title": r[1], "status": r[2], "detail": r[3]}
+                for r in _db_conn.execute(
+                    "SELECT idx, title, status, detail FROM mission_wps "
+                    "WHERE mission_id=? ORDER BY idx", (mission_id,)).fetchall()]
+    except Exception:
+        return []
+
+
+def _mission_resolve_path(slug_or_path: str):
+    """Rezolvă un slug/cale la un `mission.md`. Acceptă: cale directă,
+    `missions/<slug>/mission.md`, sau `missions/<slug>.md`."""
+    p = Path(slug_or_path).expanduser()
+    if p.is_file():
+        return p
+    for cand in (MISSIONS_DIR / slug_or_path / "mission.md", MISSIONS_DIR / f"{slug_or_path}.md"):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def _mission_create(slug_or_path: str, cwd: Optional[str] = None):
+    """Încarcă un mission.md, parsează WP-urile și inserează starea în DB.
+    Întoarce (mission_id, None) sau (None, mesaj_eroare)."""
+    if _db_conn is None:
+        return None, "DB indisponibil"
+    path = _mission_resolve_path(slug_or_path)
+    if path is None:
+        return None, f"misiune '{slug_or_path}' negăsită (caut în {MISSIONS_DIR})"
+    try:
+        mission = _mr.parse_mission(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, f"nu pot citi/parsa misiunea: {e}"
+    if not mission.wps:
+        return None, "misiunea nu are pachete de lucru (## ...)"
+
+    workspace = _validate_task_cwd(cwd or str(PROJECT_ROOT)) or str(PROJECT_ROOT)
+    slug = path.parent.name if path.name == "mission.md" else path.stem
+    mission_id = uuid.uuid4().hex
+    now = datetime.datetime.now().isoformat()
+    first_pending = next((i for i, wp in enumerate(mission.wps) if not wp.done), len(mission.wps))
+    try:
+        _db_conn.execute(
+            "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
+            (mission_id, slug, mission.title, str(path), workspace, first_pending, now, now))
+        for i, wp in enumerate(mission.wps):
+            _db_conn.execute(
+                "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (?, ?, ?, ?)",
+                (mission_id, i, wp.title, "done" if wp.done else "pending"))
+        _db_conn.commit()
+    except Exception as e:
+        return None, f"insert misiune eșuat: {e}"
+    return mission_id, None
+
+
+def _mission_build_prompt(mission, wp, idx: int) -> str:
+    criteria = "\n".join(f"- {c}" for c in wp.criteria) or "- (fără criterii explicite)"
+    return (
+        f"Ești Kage în modul MISIUNE autonom. Misiune: «{mission.title}».\n"
+        f"Lucrezi la pachetul {idx + 1}/{len(mission.wps)}: «{wp.title}».\n\n"
+        f"## Pași\n{wp.body or '(vezi titlul)'}\n\n"
+        f"## Criterii de acceptare\n{criteria}\n\n"
+        "Execută pașii până când TOATE criteriile trec. Fă commit-uri pentru munca ta "
+        "dacă modifici cod. La final raportează în 1–2 propoziții ce ai făcut. Dacă ai "
+        "nevoie de o decizie pe care nu o poți lua singur, spune clar ce întrebi."
+    )
+
+
+async def _mission_verify(wp, cwd: str):
+    """Rulează criteriile verificabile (comenzi shell) în `cwd`. Toate trebuie să dea
+    exit 0. Fără shell-checks → (True, 'fără verificări automate'). Întoarce (ok, detail)."""
+    if not wp.shell_checks:
+        return True, "fără verificări automate"
+    for cmd in wp.shell_checks:
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, cwd=cwd)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=600)
+            if proc.returncode != 0:
+                tail = out.decode("utf-8", errors="replace")[-300:]
+                return False, f"`{cmd}` → exit {proc.returncode}\n{tail}"
+        except asyncio.TimeoutError:
+            return False, f"`{cmd}` → timeout"
+        except Exception as e:
+            return False, f"`{cmd}` → eroare: {e}"
+    return True, "toate verificările trec"
+
+
+def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> None:
+    """Marchează WP-ul ca ✅ în mission.md (checklist viu) + commit doar acel fișier."""
+    try:
+        p = Path(path)
+        p.write_text(_mr.mark_wp_done(p.read_text(encoding="utf-8"), idx,
+                                      stamp=datetime.date.today().isoformat()), encoding="utf-8")
+    except Exception as e:
+        logger.debug(f"[mission] mark ✅ eșuat: {e}")
+    try:
+        subprocess.run(["git", "add", path], cwd=str(PROJECT_ROOT), capture_output=True, timeout=30)
+        subprocess.run(["git", "commit", "-m", f"mission: ✅ {wp_title[:60]}", "--", path],
+                       cwd=str(PROJECT_ROOT), capture_output=True, timeout=30)
+    except Exception as e:
+        logger.debug(f"[mission] commit eșuat: {e}")
+
+
+async def _mission_ask(question: str, options: list, timeout: Optional[float] = None) -> Optional[str]:
+    """Puntea de decizii (WP11 §3): trimite întrebarea + opțiunile pe Telegram și
+    așteaptă răspunsul (injectat prin /mission/answer). Timeout/fără gateway → None
+    (caller-ul pune misiunea pe `paused`, NU o omoară — o decizie ≠ o aprobare de risc)."""
+    if _tg_gateway is None:
+        return None
+    req_id = uuid.uuid4().hex[:12]
+    ev = asyncio.Event()
+    pending_mission_q[req_id] = ev
+    asyncio.create_task(_tg_gateway.send_mission_question(req_id, question, options))
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=timeout or CONFIRM_TIMEOUT_SECS)
+    except asyncio.TimeoutError:
+        return None
+    finally:
+        pending_mission_q.pop(req_id, None)
+    return mission_answers.get(req_id)
+
+
+def _mission_caffeinate_start() -> None:
+    """Anti-sleep (WP11 §5): ține un `caffeinate -s` cât timp rulează o misiune."""
+    global _caffeinate_proc
+    if _caffeinate_proc is not None:
+        return
+    try:
+        _caffeinate_proc = subprocess.Popen(["caffeinate", "-s"])
+    except Exception as e:
+        logger.debug(f"[mission] caffeinate eșuat: {e}")
+        _caffeinate_proc = None
+
+
+def _mission_caffeinate_stop() -> None:
+    global _caffeinate_proc
+    if _caffeinate_proc is not None:
+        try:
+            _caffeinate_proc.terminate()
+        except Exception:
+            pass
+        _caffeinate_proc = None
+
+
+def _mission_schedule_resume(mission_id: str, delay_s: int) -> None:
+    """Auto-resume la rate-limit (WP11 §4): programează un job one-shot la ora de reset."""
+    if _scheduler is None:
+        return
+    run_at = datetime.datetime.now() + datetime.timedelta(seconds=max(delay_s, 30))
+    try:
+        _scheduler.add_job(_mission_resume_job, "date", run_date=run_at, args=[mission_id],
+                           id=f"mission_resume_{mission_id}", replace_existing=True)
+        logger.info(f"[mission] resume programat la {run_at.strftime('%H:%M')} pentru {mission_id}")
+    except Exception as e:
+        logger.warning(f"[mission] schedule resume eșuat: {e}")
+
+
+async def _mission_resume_job(mission_id: str) -> None:
+    """Rulat de scheduler la ora de reset — repornește bucla misiunii."""
+    _mission_stop.pop(mission_id, None)
+    _mission_update(mission_id, status="running")
+    _mission_launch(mission_id)
+
+
+def _mission_launch(mission_id: str) -> None:
+    """Pornește bucla misiunii ca task de fundal (dacă nu rulează deja alta)."""
+    global _mission_task
+    _mission_stop.pop(mission_id, None)
+    _mission_task = asyncio.create_task(_mission_run(mission_id))
+
+
+async def _mission_run(mission_id: str) -> None:
+    """Bucla centrală: pentru fiecare WP nemarcat — rulează agentul, verifică criteriile,
+    marchează ✅ + commit, avansează. Rate-limit → pauză + resume programat. Verificare
+    picată → puntea de decizii (retry/skip/abort)."""
+    global _active_mission_id
+    _active_mission_id = mission_id
+    _mission_caffeinate_start()
+    row0 = _mission_row(mission_id)
+    run_id = _run_start("mission", channel="mission",
+                        input_text=(row0 or {}).get("title", mission_id))
+    try:
+        while True:
+            if _mission_stop.get(mission_id):
+                _mission_update(mission_id, status="paused")
+                await _mission_notify(f"⏸ Misiune pusă pe pauză: {(_mission_row(mission_id) or {}).get('title','')}")
+                break
+            row = _mission_row(mission_id)
+            if row is None or row["status"] not in ("running",):
+                break
+            wps = _mission_wps(mission_id)
+            wp_state = next((w for w in wps if w["status"] in ("pending", "running")), None)
+            if wp_state is None:
+                _mission_update(mission_id, status="done")
+                _run_event(run_id, "result", {"wps": len(wps)})
+                await _mission_notify(f"✅ Misiune terminată: {row['title']} ({len(wps)} pachete)")
+                break
+
+            idx = wp_state["idx"]
+            _mission_wp_set(mission_id, idx, "running")
+            _mission_update(mission_id, current_idx=idx)
+            try:
+                mission = _mr.parse_mission(Path(row["path"]).read_text(encoding="utf-8"))
+            except Exception as e:
+                _mission_wp_set(mission_id, idx, "failed", detail=f"citire mission.md: {e}")
+                _mission_update(mission_id, status="failed")
+                break
+            wp = mission.wps[idx]
+            _run_event(run_id, "tool_call", {"wp": idx, "title": wp.title})
+
+            allowed, disallowed, pmode = _policy_tools("task")
+            rate_limited: Optional[int] = None
+            async for ev in _agent_runner.run(
+                _mission_build_prompt(mission, wp, idx),
+                user_message=wp.title, cwd=row["cwd"],
+                allowed_tools=allowed, disallowed_tools=disallowed, permission_mode=pmode,
+                resume=row["sdk_session_id"], inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
+                autonomous=AUTONOMOUS_MODE, approval_cb=_agent_approval_cb,
+            ):
+                if ev["type"] == "tool_use":
+                    _run_event(run_id, "tool_call", {"name": ev["name"]})
+                elif ev["type"] == "result":
+                    _save_sdk_session(mission_id, ev.get("session_id"))
+                    if ev.get("session_id"):
+                        _mission_update(mission_id, sdk_session_id=ev["session_id"])
+                elif ev["type"] == "error":
+                    secs = _mr.parse_rate_limit_reset(ev["error"])
+                    low = ev["error"].lower()
+                    if secs is not None or "limit" in low or "rate" in low:
+                        rate_limited = secs if secs is not None else 900
+
+            if _mission_stop.get(mission_id):
+                continue  # !stop în timpul rulării → tratat la începutul buclei
+
+            if rate_limited is not None:
+                _mission_wp_set(mission_id, idx, "pending")   # se reia acest WP
+                _mission_update(mission_id, status="paused")
+                _mission_schedule_resume(mission_id, rate_limited)
+                mins = max(rate_limited // 60, 1)
+                await _mission_notify(f"⏸ Limită atinsă — reiau «{wp.title}» în ~{mins} min.")
+                break
+
+            ok, detail = await _mission_verify(wp, row["cwd"])
+            if ok:
+                _mission_wp_set(mission_id, idx, "done", detail=detail)
+                _mission_mark_and_commit(row["path"], idx, wp.title)
+                await _mission_notify(f"✅ {wp.title}")
+            else:
+                answer = await _mission_ask(
+                    f"Pachetul «{wp.title}» n-a trecut verificarea:\n{detail[:400]}\nCe fac?",
+                    ["retry", "skip", "abort"])
+                if answer == "retry":
+                    _mission_wp_set(mission_id, idx, "pending")
+                elif answer == "skip":
+                    _mission_wp_set(mission_id, idx, "done", detail=f"skip: {detail[:200]}")
+                    _mission_mark_and_commit(row["path"], idx, wp.title)
+                else:
+                    # abort explicit → failed; timeout (None) → paused (decizie ≠ risc)
+                    _mission_wp_set(mission_id, idx, "failed", detail=detail[:400])
+                    _mission_update(mission_id, status=("failed" if answer == "abort" else "paused"))
+                    await _mission_notify(
+                        f"{'🛑 Misiune abandonată' if answer == 'abort' else '⏸ Misiune în așteptare (fără răspuns)'}: {wp.title}")
+                    break
+    except Exception as e:
+        logger.error(f"[mission] buclă eșuată: {e}")
+        _run_event(run_id, "error", {"error": str(e)[:300]})
+        _mission_update(mission_id, status="failed")
+    finally:
+        final = (_mission_row(mission_id) or {}).get("status", "done")
+        _run_end(run_id, "done" if final == "done" else final)
+        if _active_mission_id == mission_id:
+            _active_mission_id = None
+        _mission_caffeinate_stop()
+
+
+async def _mission_notify(text: str) -> None:
+    """Notificare de misiune pe Telegram (best-effort)."""
+    try:
+        if _tg_gateway is not None:
+            await _tg_gateway.send(text)
+    except Exception as e:
+        logger.debug(f"[mission] notify eșuat: {e}")
+
+
+def _mission_resume_on_startup() -> None:
+    """La startup, relansează misiunile rămase `running` (întrerupte de un restart) —
+    reiau din WP-ul corect (starea e în DB). WP11 §2."""
+    if _db_conn is None:
+        return
+    try:
+        rows = _db_conn.execute("SELECT id, title FROM missions WHERE status='running'").fetchall()
+    except Exception:
+        return
+    for mid, title in rows:
+        logger.info(f"[mission] reiau după restart: {title} ({mid})")
+        _mission_launch(mid)
 
 
 def _ensure_usage_table(conn) -> None:
@@ -3847,6 +4293,7 @@ def _help_response() -> StreamingResponse:
         "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!scan [profil]` → Caută joburi noi (WP-J) — digest pe Telegram",
         "  `!briefing` → Briefing zilnic acum (joburi, buget, taskuri, vault)",
+        "  `!mission start <slug>` → Rulează o misiune autonom (WP11); `status`/`pause`/`resume`/`stop`",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
         "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",
@@ -3866,6 +4313,92 @@ def _help_response() -> StreamingResponse:
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _sse_text_response(text: str) -> StreamingResponse:
+    """Împachetează un text simplu ca răspuns SSE (o comandă → un mesaj)."""
+    async def generate():
+        yield _sse_delta(text)
+        yield "data: [DONE]\n\n"
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+async def _handle_mission_command(message: str) -> StreamingResponse:
+    """Comenzi `!mission` (WP11): start <slug> · status · pause · resume · stop · list.
+
+    Modul „îi dau planul și lucrează singur": pornește o misiune dintr-un
+    `missions/<slug>/mission.md` și o duce cap-coadă, cu checkpoint în DB.
+    """
+    parts = message.strip().split(maxsplit=2)
+    sub = (parts[1].lower() if len(parts) > 1 else "status")
+    arg = parts[2].strip() if len(parts) > 2 else ""
+
+    if sub == "start":
+        if not arg:
+            return _sse_text_response("Folosire: `!mission start <slug>` (caut în `missions/`).")
+        if _active_mission_id is not None:
+            act = _mission_row(_active_mission_id)
+            return _sse_text_response(f"⚠️ O misiune rulează deja: «{(act or {}).get('title','?')}». "
+                                      "Oprește-o cu `!mission stop` întâi.")
+        mission_id, err = _mission_create(arg, cwd=None)
+        if err:
+            return _sse_text_response(f"❌ {err}")
+        _mission_launch(mission_id)
+        row = _mission_row(mission_id)
+        n = len(_mission_wps(mission_id))
+        return _sse_text_response(f"🚀 Misiune pornită: «{row['title']}» ({n} pachete). "
+                                  "Îți raportez pe Telegram progresul.")
+
+    if sub == "status":
+        mid = _active_mission_id
+        if mid is None and _db_conn is not None:
+            r = _db_conn.execute("SELECT id FROM missions ORDER BY created_at DESC LIMIT 1").fetchone()
+            mid = r[0] if r else None
+        if mid is None:
+            return _sse_text_response("Nicio misiune. Pornește una cu `!mission start <slug>`.")
+        row = _mission_row(mid)
+        wps = _mission_wps(mid)
+        icon = {"done": "✅", "running": "▶️", "failed": "❌", "pending": "⬜", "paused": "⏸"}
+        lines = [f"**{row['title']}** — status: `{row['status']}`"]
+        for w in wps:
+            lines.append(f"  {icon.get(w['status'], '⬜')} {w['title']}")
+        active = " (activă)" if mid == _active_mission_id else ""
+        return _sse_text_response("\n".join(lines) + active)
+
+    if sub in ("pause", "stop"):
+        mid = _active_mission_id
+        if mid is None:
+            return _sse_text_response("Nicio misiune activă de oprit.")
+        _mission_stop[mid] = True
+        _mission_update(mid, status="paused")
+        # Întrerupe rularea SDK în curs, ca bucla să vadă flag-ul acum.
+        asyncio.create_task(_agent_runner.stop_all())
+        _mission_caffeinate_stop()
+        verb = "oprită" if sub == "stop" else "pusă pe pauză"
+        return _sse_text_response(f"⏸ Misiune {verb}. Reia cu `!mission resume`.")
+
+    if sub == "resume":
+        mid = _active_mission_id
+        if mid is None and _db_conn is not None:
+            r = _db_conn.execute(
+                "SELECT id FROM missions WHERE status='paused' ORDER BY updated_at DESC LIMIT 1").fetchone()
+            mid = r[0] if r else None
+        if mid is None:
+            return _sse_text_response("Nicio misiune pe pauză de reluat.")
+        _mission_update(mid, status="running")
+        _mission_launch(mid)
+        return _sse_text_response(f"▶️ Reiau misiunea: «{(_mission_row(mid) or {}).get('title','')}».")
+
+    if sub == "list":
+        if _db_conn is None:
+            return _sse_text_response("DB indisponibil.")
+        rows = _db_conn.execute(
+            "SELECT title, status FROM missions ORDER BY created_at DESC LIMIT 10").fetchall()
+        if not rows:
+            return _sse_text_response("Nicio misiune încă.")
+        return _sse_text_response("**Misiuni:**\n" + "\n".join(f"  • {t} — `{s}`" for t, s in rows))
+
+    return _sse_text_response("Subcomenzi: `start <slug>` · `status` · `pause` · `resume` · `stop` · `list`.")
 
 
 def _port_up(port: int) -> bool:

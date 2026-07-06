@@ -99,6 +99,17 @@ class TelegramGateway:
         }
         await self.send(text, reply_markup=keyboard)
 
+    async def send_mission_question(
+        self, request_id: str, question: str, options: list
+    ) -> None:
+        """Puntea de decizii (WP11 §3): o misiune blocată pe o decizie trimite
+        întrebarea + opțiunile ca butoane inline. Răspunsul se injectează înapoi în
+        runner prin /mission/answer/{id}."""
+        text = f"🤔 <b>Decizie misiune</b>\n\n{_escape(question)}"
+        row = [{"text": _escape(str(o))[:32], "callback_data": f"mission:{o}:{request_id}"}
+               for o in (options or ["ok"])[:4]]
+        await self.send(text, reply_markup={"inline_keyboard": [row]})
+
     async def send_job_card(self, job: dict) -> None:
         """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
         `job` are cheile: hash, title, company, location, url, score."""
@@ -267,6 +278,8 @@ class TelegramGateway:
             await self._handle_risk_callback(data)
         elif data.startswith("job:"):
             await self._handle_job_callback(data)
+        elif data.startswith("mission:"):
+            await self._handle_mission_callback(data)
 
     async def _handle_risk_callback(self, data: str) -> None:
         parts = data.split(":", 2)
@@ -296,6 +309,31 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] risk respond failed: {e}")
             await self.send(f"⚠️ Eroare internă la procesare decizie.")
+
+    async def _handle_mission_callback(self, data: str) -> None:
+        """Buton de decizie misiune (WP11): mission:<answer>:<request_id> →
+        /mission/answer/{id}. Deblochează runner-ul cu răspunsul ales."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, answer, request_id = parts
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    f"{self._orchestrator_url}/mission/answer/{request_id}",
+                    json={"answer": answer},
+                    headers=headers,
+                )
+            if resp.status_code == 200:
+                await self.send(f"↩️ Răspuns înregistrat: <b>{_escape(answer)}</b>")
+            else:
+                await self.send(f"⚠️ Eroare decizie misiune: HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] mission callback failed: {e}")
+            await self.send("⚠️ Eroare internă la procesare decizie.")
 
     async def _handle_job_callback(self, data: str) -> None:
         """Butoane job (WP-J): job:save|apply|ignore:<hash> → endpoint /jobs/*."""
