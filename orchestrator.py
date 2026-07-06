@@ -1161,7 +1161,12 @@ async def api_runs(limit: int = 50):
         cols = ["id", "kind", "channel", "tier", "model", "routing_method", "routing_confidence",
                 "cache_hit", "budget_state", "status", "cost_usd", "duration_ms", "created_at",
                 "finished_at", "input"]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        out = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            d["cost_eur"] = _usd_to_eur(d.get("cost_usd"))
+            out.append(d)
+        return out
     except Exception as e:
         logger.error(f"Runs fetch failed: {e}")
         return []
