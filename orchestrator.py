@@ -1196,6 +1196,200 @@ async def api_run_detail(run_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+# ── WP10: AG-UI Mission Control (SSE state stream) ────────────────────────────
+# Traduce run ledger-ul (runs) + aprobările de risc în protocolul AG-UI: la conectare
+# RUN_STARTED → STATE_SNAPSHOT cu starea completă a dashboard-ului; apoi STATE_SNAPSHOT
+# re-emis când starea se schimbă (poll ~2s) + keepalive. Schema de stare derivă din
+# designul Claude Design (Kage Mission Control desktop / Kage Mobile): header buget,
+# coloana Agenți, inbox Approvals, Activity stream.
+
+_MC_MAX_USD = 5.0  # buget zilnic în $ afișat în header (din design: "/ $5.00")
+
+
+def _mc_risk_label(tool_name: str, cmd: str) -> str:
+    """Etichetă scurtă de risc pentru cardul de approval (din design: DESTRUCTIV/FILESYSTEM/…)."""
+    t = (tool_name or "").lower()
+    c = (cmd or "").lower()
+    if any(k in c for k in ("rm ", "rmdir", "delete", "drop ", "shred", "unlink")):
+        return "DESTRUCTIV"
+    if t in ("write", "edit") or any(k in c for k in ("mv ", "cp ", "> ")):
+        return "FILESYSTEM"
+    if "git" in c or "push" in c:
+        return "GIT"
+    return "COMANDĂ"
+
+
+def _mc_agent_status(status: str) -> str:
+    """Mapează status-ul din run ledger la stările din design (running/pending/done/failed)."""
+    s = (status or "").lower()
+    if s == "running":
+        return "running"
+    if s in ("failed", "error"):
+        return "failed"
+    if s == "paused":
+        return "pending"
+    return "done"
+
+
+def _mc_approvals() -> list[dict]:
+    """Aprobările de risc nerezolvate → carduri de approval (id, agent, risk, cmd, why)."""
+    resolved = set(risk_decisions.keys())
+    out = []
+    for k, m in pending_risk_meta.items():
+        if k in resolved:
+            continue
+        out.append({
+            "id": m.get("id", k),
+            "agent": m.get("tool_name", ""),
+            "risk": _mc_risk_label(m.get("tool_name", ""), m.get("cmd", "")),
+            "cmd": m.get("cmd", ""),
+            "why": m.get("reason", ""),
+            "time": m.get("time", ""),
+        })
+    return out
+
+
+def _mc_runs(limit: int = 40) -> list[dict]:
+    """Ultimele run-uri din ledger, ca dict-uri (sursă pentru Agenți + Activity)."""
+    if _db_conn is None:
+        return []
+    try:
+        cur = _db_conn.execute(
+            "SELECT id, kind, channel, tier, model, status, cost_usd, duration_ms, "
+            "created_at, finished_at, substr(input, 1, 80) FROM runs "
+            "ORDER BY created_at DESC LIMIT ?",
+            (max(1, min(int(limit), 200)),),
+        )
+        cols = ["id", "kind", "channel", "tier", "model", "status", "cost_usd",
+                "duration_ms", "created_at", "finished_at", "input"]
+        return [dict(zip(cols, r)) for r in cur.fetchall()]
+    except Exception:
+        return []
+
+
+def _mc_agents(runs: list[dict]) -> list[dict]:
+    """Run-urile agentice (task/mission) → carduri de agent."""
+    out = []
+    for r in runs:
+        if r["kind"] not in ("task", "mission"):
+            continue
+        out.append({
+            "id": r["id"],
+            "name": ((r["input"] or "").strip()[:40]) or r["kind"],
+            "status": _mc_agent_status(r["status"]),
+            "note": r["input"] or "",
+            "elapsedMs": r["duration_ms"],
+            "costUsd": r["cost_usd"],
+        })
+    return out[:8]
+
+
+def _mc_activity(runs: list[dict]) -> list[dict]:
+    """Toate run-urile recente → rânduri de activity stream."""
+    out = []
+    for r in runs:
+        out.append({
+            "id": r["id"],
+            "ts": r["created_at"],
+            "tier": (f"T{r['tier']}" if r["tier"] is not None else "—"),
+            "channel": r["channel"] or r["kind"],
+            "text": r["input"] or r["kind"],
+            "meta": r["model"] or "",
+            "status": _mc_agent_status(r["status"]),
+            "costUsd": r["cost_usd"],
+        })
+    return out[:30]
+
+
+def _mc_budget() -> dict:
+    """Header buget: apeluri cloud azi + cost real în $/EUR (din run ledger)."""
+    _, cloud_today = _usage_counts_today()
+    try:
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
+        max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
+    except Exception:
+        max_cloud = 20
+    spent = 0.0
+    if _db_conn is not None:
+        try:
+            today, tomorrow = _usage_day_bounds()
+            row = _db_conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE created_at >= ? AND created_at < ?",
+                (today, tomorrow),
+            ).fetchone()
+            spent = float(row[0] or 0.0)
+        except Exception:
+            pass
+    return {
+        "cloudCalls": cloud_today,
+        "maxCloud": max_cloud,
+        "spentUsd": round(spent, 4),
+        "spentEur": _usd_to_eur(spent),
+        "maxUsd": _MC_MAX_USD,
+    }
+
+
+def _mc_state() -> dict:
+    """Starea completă a Mission Control-ului, consumată de frontend prin STATE_SNAPSHOT."""
+    runs = _mc_runs()
+    agents = _mc_agents(runs)
+    return {
+        "budget": _mc_budget(),
+        "agents": agents,
+        "approvals": _mc_approvals(),
+        "activity": _mc_activity(runs),
+        "runningCount": sum(1 for a in agents if a["status"] == "running"),
+    }
+
+
+def _agui_line(event_type: str, **fields) -> str:
+    """Serializează un eveniment AG-UI ca linie SSE (`data: {json}\\n\\n`)."""
+    ev = {"type": event_type, "timestamp": int(_time.time() * 1000)}
+    ev.update(fields)
+    return f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+
+@app.get("/agui")
+async def agui_stream(request: Request):
+    """WP10 — stream AG-UI peste run ledger pentru Mission Control (Next.js + CopilotKit).
+
+    RUN_STARTED → STATE_SNAPSHOT inițial → STATE_SNAPSHOT re-emis la fiecare schimbare
+    de stare (poll 2s), cu keepalive la ~14s. Se închide când clientul se deconectează."""
+    thread_id = uuid.uuid4().hex
+    run_id = uuid.uuid4().hex
+
+    async def gen():
+        yield _agui_line("RUN_STARTED", threadId=thread_id, runId=run_id)
+        state = _mc_state()
+        yield _agui_line("STATE_SNAPSHOT", snapshot=state)
+        last_json = json.dumps(state, sort_keys=True, ensure_ascii=False)
+        idle = 0
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                await asyncio.sleep(2)
+                cur = _mc_state()
+                cur_json = json.dumps(cur, sort_keys=True, ensure_ascii=False)
+                if cur_json != last_json:
+                    yield _agui_line("STATE_SNAPSHOT", snapshot=cur)
+                    last_json = cur_json
+                    idle = 0
+                else:
+                    idle += 1
+                    if idle >= 7:  # ~14s
+                        yield ": keepalive\n\n"
+                        idle = 0
+        except asyncio.CancelledError:
+            pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/mission/answer/{request_id}")
 async def mission_answer(request_id: str, request: Request):
     """Puntea de decizii (WP11): răspunsul la o întrebare de misiune (butoane Telegram)
