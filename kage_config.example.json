@@ -12,6 +12,9 @@
   "autonomous_mode": false,
   "confirm_timeout_secs": 300,
   "max_cloud_calls_per_day": 20,
+
+  "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local, T4 Gemini), fiindcă executorul SDK e Claude-only. Gol = Sonnet.",
+  "mission_default_model": "",
   "api_token": "CHANGEME-run: openssl rand -hex 20",
 
   "vault_path": "~/Documents/MyVault",
