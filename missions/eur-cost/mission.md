@@ -8,7 +8,7 @@ Prima misiune reală de dogfood a Mission Runner-ului (WP11). Lucrează pe un br
 la final Stefan revizuiește PR-ul manual (mission-ul face codarea, omul face merge-ul +
 restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart ca să treacă.
 
-## WP1 — Branch de lucru
+## WP1 — Branch de lucru ✅ (2026-07-06)
 
 - Creează și treci pe un branch nou `feat/mission-eur-cost` pornit din `dev`.
 - Nu modifica nimic altceva în acest pachet.
