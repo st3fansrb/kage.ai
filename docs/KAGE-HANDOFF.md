@@ -651,42 +651,10 @@ taskuri >120s active.
   altă funcție) încă pe subprocess — cale rară, nu blochează. Instrumentarea WP11 (mission
   runner) se construiește peste `AgentRunner`. `.venv-py39` de șters după câteva zile de rulare OK.
 
-### WP11 — Mission Runner: handoff → execuție nonstop · efort: 1–2 săptămâni de seri · după WP8+WP9 · ✅ IMPLEMENTAT (06.07.2026)
+### WP11 — Mission Runner: handoff → execuție nonstop · efort: 1–2 săptămâni de seri · după WP8+WP9
 
 Modul „îi dau planul și lucrează singur": automatizarea buclei pe care Stefan o face azi
 manual cu acest fișier (plan cu WP-uri → sesiune per WP → verificare criterii → următorul).
-
-**Implementat (06.07.2026):**
-
-- **`mission_runner.py` — logica pură** (fără I/O, testabilă izolat): `parse_mission`
-  (mission.md → WP-uri cu pași + criterii), extragerea criteriilor **verificabile** (comenzi
-  shell între backtick-uri), `mark_wp_done` (marchează ✅ idempotent), `parse_rate_limit_reset`
-  (ora de reset dintr-un mesaj de rate-limit → secunde). Orchestrarea cu stare e în
-  `orchestrator.py`, secțiunea „Mission Runner" (pattern-ul briefing: pur vs cu stare).
-- **Formatul misiunii** (1): `missions/<slug>/mission.md`, același format ca acest handoff.
-  `## ` = WP; `### Acceptare` cu bullet-uri; cele între backtick-uri = verificabile. Exemplu
-  rulabil în `missions/exemplu/`, `missions/README.md` documentează.
-- **Runner-ul** (2): `_mission_run` — buclă peste `AgentRunner` (WP9), o **sesiune per misiune
-  cu resume** (context-ul se duce între WP-uri). Rulează criteriile shell (`_mission_verify`,
-  exit 0), marchează ✅ în md + **commit doar acel fișier**, avansează. Stare în SQLite
-  (`missions`, `mission_wps`) → **restart reia din WP-ul corect** (`_mission_resume_on_startup`).
-- **Puntea de decizii** (3): verificare picată → `_mission_ask` trimite întrebarea + opțiunile
-  (retry/skip/abort) pe Telegram (`send_mission_question`, callback `mission:`), răspunsul vine
-  prin `/mission/answer/{id}`. **Timeout → `paused`** (NU failed — decizie ≠ aprobare de risc).
-- **Auto-resume la limită** (4): din eroarea SDK, `parse_rate_limit_reset` deduce ora de reset
-  → job one-shot APScheduler (`_mission_schedule_resume`); fallback 15 min; WP-ul se reia.
-- **Anti-sleep** (5): `caffeinate -s` cât timp o misiune e activă, eliberat la final/pauză/stop.
-- **Kill switch** (6): `_stop_all` (`!stop`) oprește și misiunea activă; comenzi noi
-  `!mission start/status/pause/resume/stop/list`; endpoints `/api/missions` + `/api/missions/{id}`.
-- **Rămas (fază 2, notat):** agentul care *inițiază* singur o întrebare (tool MCP `ask_user`) —
-  acum puntea se declanșează determinist la verificare picată; failover pe Gemini la limită (în
-  loc de doar așteptare) — hook-ul de rate-limit e pregătit. O singură misiune activă la un moment
-  dat (design intenționat, single-user).
-- Teste: `tests/test_mission_runner.py` (12, logica pură) + `tests/test_mission_orchestration.py`
-  (15, bucla + decizii + rate-limit + restart-resume + comenzi). Suită: 190 → **217 verzi**.
-  **Necesită restart** ca tabelele + comenzile `!mission` să fie active în producție.
-
-**Componente (specificația originală):**
 
 **Componente:**
 
