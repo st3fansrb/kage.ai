@@ -29,11 +29,11 @@ Ce este și ce face: `docs/DESPRE_KAGE.md`.
 - **Codul e sursa de adevăr, nu documentația.** README/DESPRE_KAGE descriu intenția; mai multe
   afirmații sunt contrazise de cod (listate în KAGE-HANDOFF §2–3). Verifică în cod înainte să
   presupui că un feature funcționează.
-- **Python runtime = 3.9.6** (`.venv`) — fără sintaxă 3.10+ (`match`, `X | Y` în adnotări
-  evaluate la runtime, `tomllib` etc.). Excepție: `status_widget.py` rulează pe 3.12
-  (`.widget-venv`).
+- **Python runtime = 3.12** (`.venv`) — migrat de la 3.9.6 la WP9 (06.07.2026), fiindcă
+  `claude-agent-sdk` cere ≥3.10. Sintaxa 3.10+ e permisă acum. `status_widget.py`/`.widget-venv`
+  și `.jobs-venv` rămân tot pe 3.12. (Backup vechi: `.venv-py39` — de șters după validare.)
 - Un pachet de lucru per branch; branch din `dev` (branch-ul de PR-uri). `pytest` înainte și
-  după orice modificare (baseline 03.07.2026: 28 de teste, toate verzi).
+  după orice modificare (baseline 06.07.2026: 190 de teste, toate verzi).
 - Serverul poate rula în producție pe mașina asta (`start_all.sh`) — nu reporni servicii fără
   să anunți userul.
 - `kage_config.json` e config-ul real (template: `kage_config.example.json`) — conține

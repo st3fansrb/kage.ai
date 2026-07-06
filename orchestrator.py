@@ -33,6 +33,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 import telegram_gateway as _tg_module
+from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -178,6 +179,16 @@ def _policy_cli_flags(run_type: str) -> list[str]:
     return flags
 
 
+def _policy_tools(run_type: str) -> tuple:
+    """Ca `_policy_cli_flags`, dar întoarce (allowed, disallowed, permission_mode) ca
+    liste/str — pentru executorul pe Agent SDK (WP9), care primește tool-urile ca
+    argumente Python, nu ca flag-uri CLI."""
+    spec = _load_policy().get("run_types", {}).get(run_type) \
+        or _POLICY_FALLBACK["run_types"].get(run_type, {})
+    return (spec.get("tools") or [], spec.get("disallowed") or [],
+            spec.get("permission_mode", "auto"))
+
+
 # ── Blast radius: vault sub git (WP-G1, §6.3) ─────────────────────────────────
 def _vault_git_commit(vault_path: Optional[Path] = None) -> str:
     """`git init` (dacă lipsește) + commit al tuturor schimbărilor din vault.
@@ -291,6 +302,14 @@ WHISPER_BIN      = str(_whisper_cfg.get("bin", "whisper-cli")).strip() or "whisp
 WHISPER_MODEL    = str(_whisper_cfg.get("model", "")).strip()
 WHISPER_LANGUAGE = str(_whisper_cfg.get("language", "auto")).strip() or "auto"
 
+# WP9 (#4): executor pe Claude Agent SDK. Gate-ul de risc in-proces refolosește
+# aceleași setări ca hook-ul CLI risk_hook.py.
+AUTONOMOUS_MODE     = bool(_cfg.get("autonomous_mode", False))
+CONFIRM_TIMEOUT_SECS = int(_cfg.get("confirm_timeout_secs", 300))
+# Timeout de inactivitate (secunde) — resetat la fiecare eveniment SDK. Un task
+# lung dar activ NU e ucis (repară deadline-ul fix 120s / D5).
+AGENT_INACTIVITY_TIMEOUT = float(_cfg.get("agent_inactivity_timeout", 180))
+
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
     def _t(key: str, prov_def: str, model_def: str):
@@ -395,6 +414,13 @@ def _stop_all() -> dict:
             logger.warning(f"[!stop] nu am putut opri procesul: {e}")
         finally:
             _running_procs.discard(proc)
+    # WP9: întrerupe și rulările prin Agent SDK (nu-s subprocess-uri în _running_procs).
+    sdk_live = len(_agent_runner.active_clients)
+    if sdk_live:
+        try:
+            asyncio.get_running_loop().create_task(_agent_runner.stop_all())
+        except RuntimeError:
+            pass
     scheduler_paused = False
     if _scheduler is not None:
         try:
@@ -402,15 +428,20 @@ def _stop_all() -> dict:
             scheduler_paused = True
         except Exception as e:
             logger.warning(f"[!stop] scheduler.pause() eșuat: {e}")
-    logger.info(f"[!stop] {killed} procese oprite, scheduler_paused={scheduler_paused}")
-    return {"procs_killed": killed, "scheduler_paused": scheduler_paused}
+    logger.info(f"[!stop] {killed} procese + {sdk_live} rulări SDK oprite, scheduler_paused={scheduler_paused}")
+    return {"procs_killed": killed + sdk_live, "scheduler_paused": scheduler_paused}
 
 # ── Telegram gateway (Faza 17) ────────────────────────────────────────────────
 _tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
 
 async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: str, is_sysrun: bool, parent_id: Optional[str] = None):
-    """Executes agent in background, puts chunks in queue, saves to DB at end."""
+    """Rulează un agent în fundal, pune chunk-uri în coadă, salvează în DB la final.
+
+    WP9: agentul `claude` merge prin Claude Agent SDK (`AgentRunner`) — tool calls
+    vizibile în run ledger, gate de risc in-proces cu aprobare, inactivity timeout,
+    cost real din SDK. `gemini` rămâne pe subprocess (SDK e claude-only).
+    """
     badge = f"**[{'SYS·' if is_sysrun else ''}TASK·{agent}]** "
     full_output = [badge]
     start_ts = datetime.datetime.now()
@@ -426,44 +457,71 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
         await queue.put(badge)
 
     proc = None
+    cost_usd: Optional[float] = None
     try:
-        env = {**os.environ, "ORCHESTRATOR_USER_MSG": task_text}
         if agent == "gemini":
-            cmd = [GEMINI_CLI, "-p", task_text]
+            env = {**os.environ, "ORCHESTRATOR_USER_MSG": task_text}
+            proc = await asyncio.create_subprocess_exec(
+                GEMINI_CLI, "-p", task_text,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=cwd, env=env,
+            )
+            assert proc.stdout is not None
+            _register_proc(proc)
+            while True:
+                chunk = await proc.stdout.read(512)
+                if not chunk:
+                    break
+                text = chunk.decode("utf-8", errors="replace")
+                full_output.append(text)
+                q = _active_task_queues.get(target_id)
+                if q:
+                    await q.put(text)
+            await proc.wait()
         else:
-            # Policy as code (WP-G1): !sysrun = auto-modificare, !run = task pe workspace.
-            cmd = [
-                CLAUDE_CLI, "-p", task_text,
-                "--output-format", "text",
-                *_policy_cli_flags("sysrun" if is_sysrun else "task"),
-                "--settings", str(RISK_SETTINGS),
-            ]
+            # WP9: Claude prin SDK. Policy (WP-G1): !sysrun = auto-modificare, !run = task.
+            allowed, disallowed, pmode = _policy_tools("sysrun" if is_sysrun else "task")
+            async for ev in _agent_runner.run(
+                task_text,
+                user_message=task_text,
+                cwd=cwd,
+                allowed_tools=allowed,
+                disallowed_tools=disallowed,
+                permission_mode=pmode,
+                inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
+                autonomous=AUTONOMOUS_MODE,
+                approval_cb=_agent_approval_cb,
+            ):
+                kind = ev["type"]
+                q = _active_task_queues.get(target_id)
+                if kind == "text":
+                    full_output.append(ev["text"])
+                    if q:
+                        await q.put(ev["text"])
+                elif kind == "tool_use":
+                    _run_event(run_id, "tool_call",
+                               {"name": ev["name"], "input": str(ev["input"])[:500]})
+                    marker = f"\n`🔧 {ev['name']}`\n"
+                    full_output.append(marker)
+                    if q:
+                        await q.put(marker)
+                elif kind == "tool_result":
+                    _run_event(run_id, "tool_result",
+                               {"chars": len(ev["content"]), "is_error": ev["is_error"]})
+                elif kind == "result":
+                    cost_usd = ev.get("cost_usd")
+                elif kind == "error":
+                    note = f"\n\n*[{ev['error']}]*"
+                    full_output.append(note)
+                    if q:
+                        await q.put(note)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=cwd,
-            env=env,
-        )
-        assert proc.stdout is not None
-        _register_proc(proc)
-
-        while True:
-            chunk = await proc.stdout.read(512)
-            if not chunk:
-                break
-            text = chunk.decode("utf-8", errors="replace")
-            full_output.append(text)
-            q = _active_task_queues.get(target_id)
-            if q:
-                await q.put(text)
-
-        await proc.wait()
         duration_ms = int((datetime.datetime.now() - start_ts).total_seconds() * 1000)
         _log_usage(5, agent, task_text, duration_ms, agent=agent)
         _run_event(run_id, "result", {"chars": len("".join(full_output))})
-        _run_end(run_id, "done", duration_ms=duration_ms)
+        _run_end(run_id, "done", duration_ms=duration_ms,
+                 cost_usd=(cost_usd if agent == "claude" else None))
 
         # Persistence: save to DB so it survives page reloads
         if _db_conn:
@@ -855,6 +913,8 @@ async def startup_cache():
         # Run ledger + aprobări persistente (WP8): rulează după celelalte tabele.
         _ensure_runs_table(_db_conn)
         _ensure_approvals_table(_db_conn)
+        # WP9: mapare sesiuni pentru resume (Agent SDK).
+        _ensure_agent_sessions_table(_db_conn)
         _db_conn.commit()
         _load_pending_approvals()
 
@@ -1608,7 +1668,8 @@ async def _chat_dispatch(request: Request, body: dict):
         messages_out = await _compact_messages(messages_out, MAX_CONTEXT_MESSAGES)
         response = await _route_litellm(tier, messages_out, system_prompt, last_user, messages, save_path=save_path, badge=badge)
     else:
-        response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path, badge=badge)
+        response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path,
+                                    badge=badge, session_id=session_id, run_id=run_id)
 
     # WP8 / D9: persistența (istoric + cache + memorie + închiderea run-ului) se face
     # într-un task de fundal care DRENEAZĂ generatorul complet, independent de client.
@@ -1998,6 +2059,76 @@ def _run_end(run_id: Optional[str], status: str, *, cost_usd: Optional[float] = 
         _db_conn.commit()
     except Exception as e:
         logger.debug(f"[run-ledger] _run_end eșuat: {e}")
+
+
+# ── WP9: executor pe Agent SDK — sesiuni resume + gate de aprobare in-proces ──
+_agent_runner = AgentRunner()
+
+
+def _ensure_agent_sessions_table(conn) -> None:
+    """Mapare session_id (kage) → sdk_session_id (Claude Agent SDK), ca un follow-up
+    să reia (`resume`) exact conversația SDK anterioară. Idempotent."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS agent_sessions (
+            session_id TEXT PRIMARY KEY,
+            sdk_session_id TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+
+def _get_sdk_session(session_id: Optional[str]) -> Optional[str]:
+    """sdk_session_id pentru resume, sau None (prima tură / fără DB)."""
+    if _db_conn is None or not session_id:
+        return None
+    try:
+        row = _db_conn.execute(
+            "SELECT sdk_session_id FROM agent_sessions WHERE session_id=?",
+            (session_id,)).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _save_sdk_session(session_id: Optional[str], sdk_session_id: Optional[str]) -> None:
+    """Reține sdk_session_id-ul întors de SDK în `ResultMessage`. Best-effort."""
+    if _db_conn is None or not session_id or not sdk_session_id:
+        return
+    try:
+        _db_conn.execute(
+            "INSERT INTO agent_sessions (session_id, sdk_session_id, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET "
+            "sdk_session_id=excluded.sdk_session_id, updated_at=excluded.updated_at",
+            (session_id, sdk_session_id, datetime.datetime.now().isoformat()))
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[agent-session] save eșuat: {e}")
+
+
+async def _agent_approval_cb(tool_name: str, tool_input: dict, level: str, reason: str) -> str:
+    """Gate de aprobare in-proces pentru AgentRunner (înlocuiește roundtrip-ul HTTP
+    din risk_hook.py). Persistă aprobarea, emite butoanele inline Telegram și așteaptă
+    decizia (`/risk/respond` setează event-ul). Timeout → 'block' (fail-closed)."""
+    req_id = uuid.uuid4().hex[:12]
+    cmd_preview = json.dumps(tool_input, ensure_ascii=False)[:300]
+    meta = {"id": req_id, "tool_name": tool_name, "cmd": cmd_preview,
+            "reason": reason, "time": datetime.datetime.now().strftime("%H:%M")}
+    pending_risk_meta[req_id] = meta
+    _persist_approval(req_id, meta)
+    ev = asyncio.Event()
+    pending_risk[req_id] = ev
+    if _tg_gateway:
+        asyncio.create_task(
+            _tg_gateway.send_risk_approval(req_id, tool_name, cmd_preview, reason))
+    try:
+        await asyncio.wait_for(ev.wait(), timeout=CONFIRM_TIMEOUT_SECS)
+    except asyncio.TimeoutError:
+        risk_decisions.setdefault(req_id, "block")
+        pending_risk_meta.pop(req_id, None)
+        _resolve_approval(req_id, "block")
+    finally:
+        pending_risk.pop(req_id, None)
+    return "confirm" if risk_decisions.get(req_id) == "confirm" else "block"
 
 
 def _persisting_stream(source_iter, *, on_complete):
@@ -4090,10 +4221,16 @@ async def _route_cli(
     messages: list,
     save_path: Optional[str] = None,
     badge: Optional[str] = None,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> StreamingResponse:
     provider, model = TIER_MODELS[tier]
 
-    conv_ctx = _build_conversation_context(messages)
+    # WP9: cu resume pe sesiunea SDK, contextul conversației îl ține SDK-ul — nu-l
+    # mai concatenăm manual dacă avem o sesiune de reluat. Prima tură (fără resume) →
+    # includem contextul construit local, ca înainte.
+    resume_sid = _get_sdk_session(session_id) if provider != "gemini" else None
+    conv_ctx = "" if resume_sid else _build_conversation_context(messages)
     if conv_ctx:
         full_prompt = (
             f"{system_prompt}\n\n"
@@ -4106,7 +4243,9 @@ async def _route_cli(
     if provider == "gemini":
         return await _route_gemini(full_prompt, tier, user_message, save_path=save_path, badge=badge)
     else:
-        return await _route_claude_autonomous(tier, model, full_prompt, user_message, save_path=save_path, badge=badge)
+        return await _route_claude_autonomous(
+            tier, model, full_prompt, user_message, save_path=save_path, badge=badge,
+            session_id=session_id, run_id=run_id)
 
 
 async def _route_gemini(
@@ -4258,6 +4397,11 @@ async def _generate_cli_chunks(
         yield "data: [DONE]\n\n"
 
 
+def _sse_delta(text: str) -> str:
+    """Împachetează un fragment de text ca linie SSE OpenAI-compatible."""
+    return f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
+
+
 async def _route_claude_autonomous(
     tier: int,
     model: str,
@@ -4265,119 +4409,69 @@ async def _route_claude_autonomous(
     user_message: str,
     save_path: Optional[str] = None,
     badge: Optional[str] = None,
+    session_id: Optional[str] = None,
+    run_id: Optional[str] = None,
 ) -> StreamingResponse:
-    """Run Claude CLI in autonomous mode with PreToolUse risk gating."""
-    # Chat T3+ = răspuns conversațional, nu agent. Capability minimă — read-only,
-    # fără Bash/Write/Edit (WP-G1 / D7). Pentru execuție reală: !run/!sysrun.
-    cmd = [
-        CLAUDE_CLI, "-p", full_prompt,
-        "--model", model,
-        "--output-format", "stream-json",
-        "--verbose",
-        *_policy_cli_flags("chat"),
-        "--settings", str(RISK_SETTINGS),
-    ]
-    env = {**os.environ, "ORCHESTRATOR_USER_MSG": user_message}
+    """Chat T3+ prin Claude Agent SDK (WP9 / #4).
+
+    Delte reale (nu chunking-ul finalului — D5), resume pe sesiunea SDK anterioară,
+    gate de risc in-proces (`_agent_approval_cb`), inactivity timeout. Chat = capability
+    minimă (read-only, fără Bash/Write/Edit — WP-G1 / D7); execuție reală: !run/!sysrun.
+    """
     _badge = badge or _tier_badge(tier)
+    allowed, disallowed, pmode = _policy_tools("chat")
+    resume_sid = _get_sdk_session(session_id)
 
     async def generate():
-        final_text = ""
-        has_streamed = False
-        badge_sent = False
-        proc = None
         accumulated: list[str] = []
-        queue: asyncio.Queue = asyncio.Queue()
-
-        async def feed_queue() -> None:
-            nonlocal final_text
-            try:
-                while True:
-                    raw_line = await proc.stdout.readline()
-                    if not raw_line:
-                        break
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    if event.get("type") == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            text = delta.get("text", "")
-                            if text:
-                                await queue.put(text)
-                    elif event.get("type") == "result":
-                        final_text = event.get("result", "")
-            finally:
-                await queue.put(None)
-
+        badge_sent = False
+        emitted = False
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            _register_proc(proc)
-
-            reader = asyncio.create_task(feed_queue())
-            deadline = asyncio.get_event_loop().time() + 120
-
-            try:
-                while True:
-                    remaining = deadline - asyncio.get_event_loop().time()
-                    if remaining <= 0:
-                        raise asyncio.TimeoutError()
-                    text = await asyncio.wait_for(queue.get(), timeout=remaining)
-                    if text is None:
-                        break
-                    has_streamed = True
+            async for ev in _agent_runner.run(
+                full_prompt,
+                user_message=user_message,
+                model=model,
+                resume=resume_sid,
+                allowed_tools=allowed,
+                disallowed_tools=disallowed,
+                permission_mode=pmode,
+                inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
+                autonomous=AUTONOMOUS_MODE,
+                approval_cb=_agent_approval_cb,
+            ):
+                kind = ev["type"]
+                if kind == "text":
                     if not badge_sent:
                         badge_sent = True
-                        yield f'data: {json.dumps({"choices": [{"delta": {"content": _badge}, "index": 0}]})}\n\n'
-                    accumulated.append(text)
-                    yield f'data: {json.dumps({"choices": [{"delta": {"content": text}, "index": 0}]})}\n\n'
-            except asyncio.TimeoutError:
-                reader.cancel()
-                if proc:
-                    proc.terminate()
-                    try:
-                        await asyncio.wait_for(proc.wait(), timeout=5)
-                    except asyncio.TimeoutError:
-                        proc.kill()
-                yield f'data: {json.dumps({"choices": [{"delta": {"content": "[Timeout 120s — task oprit]"}, "index": 0}]})}\n\n'
-                return
+                        yield _sse_delta(_badge)
+                    emitted = True
+                    accumulated.append(ev["text"])
+                    yield _sse_delta(ev["text"])
+                elif kind == "tool_use":
+                    _run_event(run_id, "tool_call",
+                               {"name": ev["name"], "input": str(ev["input"])[:500]})
+                elif kind == "tool_result":
+                    _run_event(run_id, "tool_result",
+                               {"chars": len(ev["content"]), "is_error": ev["is_error"]})
+                elif kind == "result":
+                    if ev.get("cost_usd") is not None:
+                        _run_update(run_id, cost_usd=ev["cost_usd"])
+                    _save_sdk_session(session_id, ev.get("session_id"))
+                elif kind == "error":
+                    yield _sse_delta(f"[Tier {tier}: {ev['error']}]")
 
-            if not has_streamed:
-                if final_text:
-                    accumulated.append(final_text)
-                    yield f'data: {json.dumps({"choices": [{"delta": {"content": _badge}, "index": 0}]})}\n\n'
-                    chunk_size = 20
-                    for i in range(0, len(final_text), chunk_size):
-                        yield f'data: {json.dumps({"choices": [{"delta": {"content": final_text[i:i+chunk_size]}, "index": 0}]})}\n\n'
-                else:
-                    stderr_data = b""
-                    if proc:
-                        try:
-                            stderr_data = await asyncio.wait_for(proc.stderr.read(), timeout=5)
-                        except asyncio.TimeoutError:
-                            pass
-                    error_msg = f"[Tier {tier}: răspuns gol. {stderr_data.decode('utf-8', errors='replace')[:150]}]"
-                    yield f'data: {json.dumps({"choices": [{"delta": {"content": error_msg}, "index": 0}]})}\n\n'
+            if not emitted:
+                yield _sse_delta(f"[Tier {tier}: răspuns gol]")
 
             if save_path is not None and accumulated:
                 written = _write_obsidian_output(user_message, "".join(accumulated), save_path or None)
                 rel = str(written).replace(str(VAULT) + "/", "")
-                confirm = f"\n\n*Salvat în Obsidian → {rel}*"
-                yield f'data: {json.dumps({"choices": [{"delta": {"content": confirm}, "index": 0}]})}\n\n'
+                yield _sse_delta(f"\n\n*Salvat în Obsidian → {rel}*")
 
         except Exception as e:
             logger.error(f"Claude autonomous error (tier {tier}): {e}")
-            yield f'data: {json.dumps({"choices": [{"delta": {"content": f"[Eroare CLI tier {tier}: {e}]"}, "index": 0}]})}\n\n'
+            yield _sse_delta(f"[Eroare tier {tier}: {e}]")
         finally:
-            _unregister_proc(proc)
             _write_status_idle(tier, model or "gemini-pro")
             yield "data: [DONE]\n\n"
 

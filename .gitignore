@@ -3,6 +3,8 @@ ntfy_config.json
 .env
 
 .venv/
+.venv-py39/
+.venv312/
 .widget-venv/
 .jobs-venv/
 
