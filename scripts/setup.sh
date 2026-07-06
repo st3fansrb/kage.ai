@@ -12,19 +12,24 @@ echo ""
 echo "=== Kage Setup ==="
 echo ""
 
-# Python 3.10+
-if ! command -v python3 &>/dev/null; then
-    fail "Python 3 not found. Install from https://python.org"
+# Python 3.10+ (WP9: nucleul Kage rulează pe 3.12 — Claude Agent SDK cere ≥3.10).
+# Preferă python3.12; cade pe python3 doar dacă e deja ≥3.10.
+if command -v python3.12 &>/dev/null; then
+    PYBIN=python3.12
+elif command -v python3 &>/dev/null; then
+    PYBIN=python3
+else
+    fail "Python 3 not found. Install python@3.12 (brew install python@3.12)"
     exit 1
 fi
-PY_VER=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PY_VER=$("$PYBIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 PY_MAJOR=$(echo "$PY_VER" | cut -d. -f1)
 PY_MINOR=$(echo "$PY_VER" | cut -d. -f2)
 if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-    fail "Python 3.10+ required (found $PY_VER)"
+    fail "Python 3.10+ required for Kage core (found $PY_VER via $PYBIN). Install python@3.12."
     exit 1
 fi
-ok "Python $PY_VER"
+ok "Python $PY_VER ($PYBIN)"
 
 # Ollama
 if command -v ollama &>/dev/null; then
@@ -50,8 +55,8 @@ fi
 
 # Virtual environment
 if [ ! -d "$DIR/.venv" ]; then
-    echo "  → Creating Python virtual environment..."
-    python3 -m venv "$DIR/.venv"
+    echo "  → Creating Python virtual environment ($PYBIN)..."
+    "$PYBIN" -m venv "$DIR/.venv"
     ok ".venv created"
 else
     ok ".venv exists"
@@ -63,7 +68,7 @@ echo "  → Installing Python dependencies..."
 "$DIR/.venv/bin/pip" install -q -r "$DIR/requirements.txt"
 ok "Dependencies installed"
 
-# Job hunter venv (WP-J) — python-jobspy cere Python ≥3.10, nucleul Kage e pe 3.9.
+# Job hunter venv (WP-J) — python-jobspy într-un venv 3.12 separat (izolare de deps).
 # Opțional: doar dacă vrei job hunter-ul. Sare peste dacă python3.12 lipsește.
 if command -v python3.12 >/dev/null 2>&1; then
     if [ ! -d "$DIR/.jobs-venv" ]; then

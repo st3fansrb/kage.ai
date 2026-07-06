@@ -597,7 +597,7 @@ tot se salvează (test cu client anulat) · `/api/runs` întoarce JSON · pytest
 - **Rămas pentru mai târziu:** `cost_usd` e în schemă dar populat abia de #7 (buget EUR);
   `routing_neighbor` rezervat; instrumentarea fină per-tool a agenților vine cu WP9 (SDK).
 
-### WP9 (#4) — Executor pe Claude Agent SDK · efort: 2–4 săptămâni de seri
+### WP9 (#4) — Executor pe Claude Agent SDK · efort: 2–4 săptămâni de seri · ✅ IMPLEMENTAT (06.07.2026)
 
 **Pași:** (1) `agent_runner.py` nou, clasa `AgentRunner` peste `claude-agent-sdk` (sesiuni cu
 resume, hook PreToolUse în-proces, event mapping → SSE chunks + run_events); (2) rescrie
@@ -611,6 +611,45 @@ dacă da, decide împreună cu userul: venv nou 3.12 pentru orchestrator vs vari
 **Acceptare:** deltas reale în UI (nu totul la final) · un follow-up T5 referă corect
 conversația anterioară (resume) · tool calls vizibile în run ledger · fără timeout fals la
 taskuri >120s active.
+
+**Implementat (06.07.2026):**
+
+- **Decizie: migrare completă pe Python 3.12.** `claude-agent-sdk` cere `>=3.10`; Stefan a
+  ales SDK-ul oficial (nu varianta minimală). Spike de de-risking întâi: venv 3.12 + toate
+  deps (ChromaDB/LiteLLM/FastAPI/APScheduler) + SDK → suita existentă verde pe 3.12 fără nicio
+  modificare. Apoi swap `.venv` (3.9.6) → 3.12 (backup `.venv-py39`); `setup.sh` preferă
+  `python3.12`; `requirements.txt` += `claude-agent-sdk`; constrângerea „no 3.10+ syntax" din
+  CLAUDE.md ridicată.
+- **`agent_runner.py` — `AgentRunner`** peste `ClaudeSDKClient` (nu `query()`: `can_use_tool`
+  cere streaming mode). Emite evenimente normalizate (`text`/`tool_use`/`tool_result`/`result`/
+  `error`) — dict-uri pure, mapate în SSE + `run_events`. `_map_sync` (pur, testabil) traduce
+  mesajele SDK; `StreamEvent`/`content_block_delta` → delte reale (D5); `TextBlock` din
+  `AssistantMessage` e SĂRIT (ar dubla textul deja streamat). `ResultMessage` aduce
+  `session_id` (resume), `total_cost_usd` (bonus #7) și `duration_ms`.
+- **Gate de risc in-proces** (`_make_gate` → `can_use_tool`): refolosește `risk_hook.evaluate_risk`
+  (o singură sursă de adevăr). Never → deny; High/Medium-autonomous → `approval_cb`
+  (`_agent_approval_cb` din orchestrator: persistă aprobarea + butoane inline Telegram + așteaptă
+  `/risk/respond`, timeout → block fail-closed) — **fără roundtrip HTTP** ca la hook-ul CLI.
+  `risk_hook.py` rămâne intact pentru gemini + compat CLI (rulările SDK NU pasează
+  `--settings risk_settings.json`).
+- **Inactivity timeout** (reset la fiecare mesaj SDK, default 180s config `agent_inactivity_timeout`)
+  → `interrupt()` + eveniment `error`. Repară deadline-ul fix 120s care ucidea taskuri active.
+- **Rescrise:** `_route_claude_autonomous` (chat T3+, read-only via policy) și
+  `_background_task_exec` (task/sysrun, capability completă; gemini rămâne subprocess). Ambele
+  emit `tool_call`/`tool_result` în run ledger și `cost_usd` real. `_route_cli` threadează
+  `session_id`+`run_id`; cu resume, contextul îl ține SDK-ul (nu-l mai concatenăm manual).
+- **Resume:** tabel `agent_sessions` (`session_id` ↔ `sdk_session_id`) + `_get/_save_sdk_session`.
+  Un follow-up pe aceeași sesiune reia conversația SDK anterioară.
+- **Kill switch (WP-G1):** `_stop_all()` cheamă și `_agent_runner.stop_all()` (interrupt pe
+  clienții SDK vii, care nu-s în `_running_procs`).
+- Teste: `tests/test_agent_runner.py` (19) — `_map_sync`, gate (Never/Safe/High±canal/downgrade),
+  `run()` cu client mock (delte + fallback fără delte + inactivity timeout + SDK indisponibil),
+  mapare sesiuni roundtrip, `_agent_approval_cb` (confirm + timeout). Suită: 171 → **190 verzi**.
+- **Verificat live** (după restart pe 3.12): chat T5 real → delte reale; run ledger cu
+  `cost_usd=0.069` populat; `agent_sessions` salvat; follow-up cu resume reia contextul.
+- **Rămas:** fallback-ul LiteLLM→CLI (`feed()` din `_route_claude_autonomous` vechi, acum în
+  altă funcție) încă pe subprocess — cale rară, nu blochează. Instrumentarea WP11 (mission
+  runner) se construiește peste `AgentRunner`. `.venv-py39` de șters după câteva zile de rulare OK.
 
 ### WP11 — Mission Runner: handoff → execuție nonstop · efort: 1–2 săptămâni de seri · după WP8+WP9
 

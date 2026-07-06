@@ -304,6 +304,21 @@ Fiecare chat și task de agent devine un `run` cu evenimente (routing · cache �
 - `GET /api/runs` + `/api/runs/{id}` (decision trace) + tab **🧾 Runs** în dashboard.
 - Teste: 154 → **168 verzi**.
 
+### WP9 — Executor pe Claude Agent SDK ✅ (06.07.2026)
+
+Agenții și chat-ul T3+ rulează acum prin `claude-agent-sdk` (`agent_runner.py` → `AgentRunner`),
+nu prin subprocess `claude -p`. Rezolvă D5 (streaming simulat) la sursă.
+
+- **Migrare pe Python 3.12:** SDK-ul cere ≥3.10; nucleul Kage a trecut de la 3.9.6 la 3.12
+  (backup `.venv-py39`). Spike de de-risking întâi (suita verde pe 3.12 înainte de swap).
+- **Delte reale** (nu chunking-ul finalului), **resume** de sesiuni (tabel `agent_sessions`:
+  `session_id` ↔ `sdk_session_id`), **gate de risc in-proces** (`can_use_tool` refolosind
+  `risk_hook.evaluate_risk` + aprobare pe Telegram), **inactivity timeout** (reset per eveniment,
+  nu deadline fix 120s).
+- Run ledger primește `tool_call`/`tool_result` reale + **`cost_usd` real** din SDK (pregătește #7).
+  `risk_hook.py` rămâne pentru gemini/compat CLI.
+- Teste: 168 → **190 verzi**. Verificat live: chat T5 real cu delte, cost în ledger, resume.
+
 ---
 
 ## Viziune business (toamnă 2026)
