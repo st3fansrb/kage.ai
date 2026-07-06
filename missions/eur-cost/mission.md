@@ -8,7 +8,7 @@ Prima misiune reală de dogfood a Mission Runner-ului (WP11). Lucrează pe un br
 la final Stefan revizuiește PR-ul manual (mission-ul face codarea, omul face merge-ul +
 restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart ca să treacă.
 
-## WP1 — Branch de lucru
+## WP1 — Branch de lucru ✅ (2026-07-06)
 
 - Creează și treci pe un branch nou `feat/mission-eur-cost` pornit din `dev`.
 - Nu modifica nimic altceva în acest pachet.
@@ -16,7 +16,7 @@ restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart
 ### Acceptare
 - `git rev-parse --abbrev-ref HEAD | grep -qx feat/mission-eur-cost`
 
-## WP2 — Helper de conversie + config
+## WP2 — Helper de conversie + config ✅ (2026-07-06)
 
 - În `orchestrator.py`, lângă celelalte constante de config (ex. zona `WHISPER_*` /
   `AGENT_INACTIVITY_TIMEOUT`), adaugă constanta `EUR_USD_RATE` citită din config:
@@ -32,7 +32,7 @@ restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart
 - `grep -q "def _usd_to_eur" orchestrator.py`
 - `.venv/bin/pytest -q tests/test_eur.py`
 
-## WP3 — Expune `cost_eur` în /api/runs
+## WP3 — Expune `cost_eur` în /api/runs ✅ (2026-07-06)
 
 - În endpoint-ul `/api/runs`, adaugă în fiecare dict din răspuns cheia `cost_eur` =
   `_usd_to_eur(cost_usd)` (folosind valoarea `cost_usd` a run-ului).

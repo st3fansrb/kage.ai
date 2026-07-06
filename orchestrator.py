@@ -311,6 +311,15 @@ CONFIRM_TIMEOUT_SECS = int(_cfg.get("confirm_timeout_secs", 300))
 # lung dar activ NU e ucis (repară deadline-ul fix 120s / D5).
 AGENT_INACTIVITY_TIMEOUT = float(_cfg.get("agent_inactivity_timeout", 180))
 
+# Curs EUR/USD folosit pentru afișarea costurilor în EUR (felia de afișare din #7).
+EUR_USD_RATE = float(_cfg.get("eur_usd_rate", 0.92))
+
+def _usd_to_eur(usd, rate=None):
+    """Convertește un cost din USD în EUR (funcție pură). None → None."""
+    if usd is None:
+        return None
+    return round(usd * (rate if rate is not None else EUR_USD_RATE), 4)
+
 def _build_tier_models(cfg: dict) -> dict:
     m = cfg.get("models", {})
     def _t(key: str, prov_def: str, model_def: str):
@@ -1152,7 +1161,12 @@ async def api_runs(limit: int = 50):
         cols = ["id", "kind", "channel", "tier", "model", "routing_method", "routing_confidence",
                 "cache_hit", "budget_state", "status", "cost_usd", "duration_ms", "created_at",
                 "finished_at", "input"]
-        return [dict(zip(cols, row)) for row in cur.fetchall()]
+        out = []
+        for row in cur.fetchall():
+            d = dict(zip(cols, row))
+            d["cost_eur"] = _usd_to_eur(d.get("cost_usd"))
+            out.append(d)
+        return out
     except Exception as e:
         logger.error(f"Runs fetch failed: {e}")
         return []
