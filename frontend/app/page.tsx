@@ -7,11 +7,14 @@ import { AgentsPanel } from "@/components/AgentsPanel";
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { ActivityStream } from "@/components/ActivityStream";
 import { ChatPanel } from "@/components/ChatPanel";
+import { MobileLayout } from "@/components/MobileLayout";
+import { useIsMobile } from "@/lib/useIsMobile";
 import { T } from "@/lib/tokens";
 
 export default function MissionControl() {
   const { state, conn } = useMissionState();
   const [chatOpen, setChatOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -24,6 +27,15 @@ export default function MissionControl() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  if (isMobile) {
+    return (
+      <>
+        <MobileLayout state={state} conn={conn} onOpenChat={() => setChatOpen(true)} />
+        <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      </>
+    );
+  }
 
   return (
     <div style={{ display: "flex", height: "100vh", width: "100%", background: T.bg, color: T.text, overflow: "hidden" }}>
