@@ -289,6 +289,21 @@ intră în pipeline-ul normal de chat, cu reply `📝 Am înțeles: …`.
   (large-v3-turbo ~1,6GB) → `whisper.model`.
 - Teste: 142 → **154 verzi**.
 
+### WP8 — Run ledger + decision trace ✅ (06.07.2026)
+
+Coloana vertebrală pentru observabilitate, aprobări persistente și viitoarele #4/#15B/auto-skills.
+Fiecare chat și task de agent devine un `run` cu evenimente (routing · cache · memory · budget · result).
+
+- Schemă nouă în `chat_history.db`: `runs` + `run_events` + `pending_approvals`; helperi
+  best-effort `_run_start/_run_event/_run_update/_run_end` (nu blochează chat-ul dacă DB pică).
+- **Aprobări persistente:** `/risk/register` + `/risk/respond` scriu în DB; la restart
+  aprobările pending revin în UI și deciziile ajung la `risk_hook.py` — nu se mai pierd.
+- **D9 reparat:** cache hit se salvează acum în istoricul SQLite; răspunsul LLM se drenează
+  printr-un task de fundal (`_persisting_stream`) → deconectarea clientului la mijloc de stream
+  nu mai pierde răspunsul (istoric/cache/memorie se salvează oricum).
+- `GET /api/runs` + `/api/runs/{id}` (decision trace) + tab **🧾 Runs** în dashboard.
+- Teste: 154 → **168 verzi**.
+
 ---
 
 ## Viziune business (toamnă 2026)

@@ -415,6 +415,11 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
     full_output = [badge]
     start_ts = datetime.datetime.now()
 
+    # WP8: fiecare task de agent = un run în ledger.
+    run_id = _run_start("task", channel="agent", input_text=f"{'!sysrun ' if is_sysrun else '!run '}{task_text}")
+    _run_update(run_id, model=agent, tier=5)
+    _run_event(run_id, "tool_call", {"agent": agent, "sysrun": is_sysrun, "cwd": cwd})
+
     target_id = parent_id or task_id
     queue = _active_task_queues.get(target_id)
     if queue:
@@ -457,6 +462,8 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
         await proc.wait()
         duration_ms = int((datetime.datetime.now() - start_ts).total_seconds() * 1000)
         _log_usage(5, agent, task_text, duration_ms, agent=agent)
+        _run_event(run_id, "result", {"chars": len("".join(full_output))})
+        _run_end(run_id, "done", duration_ms=duration_ms)
 
         # Persistence: save to DB so it survives page reloads
         if _db_conn:
@@ -473,6 +480,9 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
 
     except Exception as e:
         err = f"\n\n*[task error: {e}]*"
+        _run_event(run_id, "error", {"error": str(e)[:500]})
+        _run_end(run_id, "failed",
+                 duration_ms=int((datetime.datetime.now() - start_ts).total_seconds() * 1000))
         q = _active_task_queues.get(target_id)
         if q:
             await q.put(err)
@@ -842,7 +852,11 @@ async def startup_cache():
         _backfill_usage_from_jsonl(_db_conn)
         # Job hunter (WP-J): tabel de dedup + stare per anunț.
         _ensure_jobs_table(_db_conn)
+        # Run ledger + aprobări persistente (WP8): rulează după celelalte tabele.
+        _ensure_runs_table(_db_conn)
+        _ensure_approvals_table(_db_conn)
         _db_conn.commit()
+        _load_pending_approvals()
 
         _chroma_client = chromadb.PersistentClient(path=str(CACHE_DB_PATH))
         _cache_collection = _chroma_client.get_or_create_collection(
@@ -915,13 +929,16 @@ async def risk_register(request_id: str, request: Request):
     tool_name = body.get("tool_name", "")
     cmd = body.get("cmd", "")
     reason = body.get("reason", "")
-    pending_risk_meta[request_id] = {
+    meta = {
         "id": request_id,
         "tool_name": tool_name,
         "cmd": cmd,
         "reason": reason,
         "time": body.get("time", "now"),
     }
+    pending_risk_meta[request_id] = meta
+    # WP8 §3: persistă aprobarea ca să supraviețuiască restartului.
+    _persist_approval(request_id, meta)
     if _tg_gateway:
         asyncio.create_task(
             _tg_gateway.send_risk_approval(request_id, tool_name, cmd, reason)
@@ -941,6 +958,8 @@ async def risk_respond(request_id: str, request: Request):
     action = body.get("action", "block")
     risk_decisions[request_id] = action
     pending_risk_meta.pop(request_id, None)
+    # WP8 §3: marchează rezolvarea în DB (decizia supraviețuiește restartului).
+    _resolve_approval(request_id, action)
     if request_id in pending_risk:
         pending_risk[request_id].set()
     return {"ok": True, "action": action}
@@ -1044,6 +1063,52 @@ async def api_sessions():
     except Exception as e:
         logger.error(f"Sessions fetch failed: {e}")
         return []
+
+
+@app.get("/api/runs")
+async def api_runs(limit: int = 50):
+    """Run ledger (WP8): ultimele run-uri, cele mai recente primele."""
+    if _db_conn is None:
+        return []
+    limit = max(1, min(int(limit), 500))
+    try:
+        cur = _db_conn.execute(
+            "SELECT id, kind, channel, tier, model, routing_method, routing_confidence, "
+            "cache_hit, budget_state, status, cost_usd, duration_ms, created_at, finished_at, "
+            "substr(input, 1, 80) FROM runs ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        )
+        cols = ["id", "kind", "channel", "tier", "model", "routing_method", "routing_confidence",
+                "cache_hit", "budget_state", "status", "cost_usd", "duration_ms", "created_at",
+                "finished_at", "input"]
+        return [dict(zip(cols, row)) for row in cur.fetchall()]
+    except Exception as e:
+        logger.error(f"Runs fetch failed: {e}")
+        return []
+
+
+@app.get("/api/runs/{run_id}")
+async def api_run_detail(run_id: str):
+    """Un run + toate evenimentele lui (decision trace) — WP8."""
+    if _db_conn is None:
+        return JSONResponse({"error": "db indisponibil"}, status_code=503)
+    try:
+        rrow = _db_conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        if rrow is None:
+            return JSONResponse({"error": "run inexistent"}, status_code=404)
+        rcols = [d[0] for d in _db_conn.execute("SELECT * FROM runs WHERE id=? LIMIT 0", (run_id,)).description]
+        run = dict(zip(rcols, rrow))
+        evs = _db_conn.execute(
+            "SELECT ts, type, payload FROM run_events WHERE run_id=? ORDER BY id", (run_id,)
+        ).fetchall()
+        run["events"] = [
+            {"ts": ts, "type": t, "payload": (json.loads(p) if p else None)}
+            for ts, t, p in evs
+        ]
+        return run
+    except Exception as e:
+        logger.error(f"Run detail fetch failed: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.post("/schedule")
@@ -1447,6 +1512,14 @@ async def _chat_dispatch(request: Request, body: dict):
     if last_user.strip().lower() == "!briefing":
         return await _handle_briefing_command()
 
+    # WP8: deschide un run în ledger pentru fiecare cerere REALĂ de chat (după shortcut-uri).
+    run_id = _run_start("chat", session_id=session_id,
+                        channel=_channel_for(session_id), input_text=last_user)
+    _run_t0 = _time.time()
+
+    def _elapsed_ms() -> int:
+        return int((_time.time() - _run_t0) * 1000)
+
     # Semantic cache — context-aware (WP4/#8): sări peste follow-up-uri, nu stoca temporale,
     # curăță prefixele din cheie. Vezi _cache_policy.
     use_cache, store_ok, cache_query = _cache_policy(messages, last_user)
@@ -1458,6 +1531,19 @@ async def _chat_dispatch(request: Request, body: dict):
             global _cache_hits
             _cache_hits += 1
             logger.info(f"Cache HIT tier={cached_tier} query={cache_query[:50]!r}")
+            # WP8 + D9: cache hit e un run complet și se salvează în istoricul SQLite
+            # (înainte lipsea — conversația din cache nu apărea în /api/history).
+            _run_event(run_id, "cache", {"hit": True, "tier": cached_tier})
+            _run_update(run_id, cache_hit=1, tier=cached_tier)
+            if _db_conn:
+                try:
+                    _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "user", last_user))
+                    _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "assistant", cached_response))
+                    _db_conn.commit()
+                except Exception as e:
+                    logger.error(f"Failed to save cache-hit history: {e}")
+            _run_event(run_id, "result", {"chars": len(cached_response), "cached": True})
+            _run_end(run_id, "done", duration_ms=_elapsed_ms())
             return _make_cache_hit_response(cached_response, cached_tier)
         else:
             global _cache_misses
@@ -1466,6 +1552,8 @@ async def _chat_dispatch(request: Request, body: dict):
                 cache_embedding = await _get_embedding(cache_query)
 
     tier, forced, confidence, routing_method = await decide_tier(last_user)
+    _run_event(run_id, "routing", {"tier": tier, "method": routing_method,
+                                   "confidence": round(confidence, 3), "forced": forced})
 
     # Feedback loop: an explicit tier override teaches the router (WP3). method=="forced"
     # excludes !plan (keeps classifier tier) and un-prefixed classifications.
@@ -1477,10 +1565,18 @@ async def _chat_dispatch(request: Request, body: dict):
     if tier >= 3 and not forced:
         tier, confidence, budget_warning = _budget_check(tier, confidence)
     budget_downgraded = (tier != original_tier)
+    if budget_downgraded:
+        _run_event(run_id, "budget", {"downgraded": True, "from": original_tier, "to": tier})
+    _run_update(run_id, tier=tier, routing_method=routing_method,
+                routing_confidence=round(confidence, 3),
+                model=(str(TIER_MODELS[tier]) if tier <= 2 else str(TIER_MODELS[tier][1] or "gemini")),
+                budget_state=("downgraded" if budget_downgraded else "ok"))
 
     badge = _tier_badge_ext(tier, routing_method, confidence, budget_downgraded)
 
     memory_ctx = await _memory_retrieve(session_id, last_user, precomputed_emb=cache_embedding)
+    if memory_ctx:
+        _run_event(run_id, "memory", {"chars": len(memory_ctx)})
     obs_context = _get_obsidian_context(last_user)
     system_prompt = _build_system_prompt(tier, obs_context, memory_ctx)
     messages_out = _inject_system_prompt(messages, system_prompt)
@@ -1514,40 +1610,36 @@ async def _chat_dispatch(request: Request, body: dict):
     else:
         response = await _route_cli(tier, system_prompt, last_user, messages, save_path=save_path, badge=badge)
 
-    # Wrap generator to store response in cache and history after streaming completes
+    # WP8 / D9: persistența (istoric + cache + memorie + închiderea run-ului) se face
+    # într-un task de fundal care DRENEAZĂ generatorul complet, independent de client.
+    # Dacă clientul se deconectează la mijloc de stream, `_persisting_stream` continuă
+    # în fundal → răspunsul NU se pierde (fix D9). Vezi și pattern-ul din /task/run.
     original_gen = response.body_iterator
 
-    async def history_caching_gen():
-        collected: list[str] = []
-        async for chunk in original_gen:
-            yield chunk
-            chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
-            if chunk_str.startswith("data: ") and "[DONE]" not in chunk_str:
+    async def _persist_response(full: str) -> None:
+        clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full) if full else ""
+        if clean_text:
+            # Cache store (skip pentru temporale/follow-up — store_ok, WP4/#8)
+            if store_ok and cache_embedding is not None:
+                asyncio.create_task(_cache_store_async(cache_query, clean_text, tier, cache_embedding))
+            # Memory store — fire-and-forget
+            asyncio.create_task(_memory_store(session_id, last_user, clean_text))
+            # History store
+            if _db_conn:
                 try:
-                    text = json.loads(chunk_str[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if text:
-                        collected.append(text)
-                except Exception:
-                    pass
-        if collected:
-            full = "".join(collected)
-            # Strip leading badge (e.g. **[T3·haiku·sem:0.97]** )
-            clean_text = re.sub(r'^\*\*\[.*?\]\*\*\s*', '', full)
-            if clean_text:
-                # Cache store (skip pentru temporale/follow-up — store_ok, WP4/#8)
-                if store_ok and cache_embedding is not None:
-                    asyncio.create_task(_cache_store_async(cache_query, clean_text, tier, cache_embedding))
-                # Memory store — fire-and-forget
-                asyncio.create_task(_memory_store(session_id, last_user, clean_text))
-                # History store
-                if _db_conn:
-                    try:
-                        _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "assistant", clean_text))
-                        _db_conn.commit()
-                    except Exception as e:
-                        logger.error(f"Failed to save assistant message: {e}")
+                    _db_conn.execute("INSERT INTO messages (session_id, role, content) VALUES (?, ?, ?)", (session_id, "assistant", clean_text))
+                    _db_conn.commit()
+                except Exception as e:
+                    logger.error(f"Failed to save assistant message: {e}")
+            _run_event(run_id, "result", {"chars": len(clean_text)})
+            _run_end(run_id, "done", duration_ms=_elapsed_ms())
+        else:
+            _run_end(run_id, "failed", duration_ms=_elapsed_ms())
 
-    response = StreamingResponse(history_caching_gen(), media_type="text/event-stream")
+    response = StreamingResponse(
+        _persisting_stream(original_gen, on_complete=_persist_response),
+        media_type="text/event-stream",
+    )
 
     # Prepend budget warning AFTER history/caching wrapper so it is not stored in history/cache
     if budget_warning:
@@ -1773,6 +1865,243 @@ async def _routing_vacuum() -> None:
             logger.info(f"Routing vacuum: removed {len(to_delete)} old feedback entries")
     except Exception as e:
         logger.warning(f"Routing vacuum failed: {e}")
+
+
+# ── Run ledger (WP8 / #5) ──────────────────────────────────────────────────────
+# Coloana vertebrală pentru observabilitate, aprobări persistente și (mai târziu) #4/#15B.
+# Fiecare cerere reală de chat și fiecare task de agent = un `run` cu evenimente asociate
+# (routing, cache, memory, budget, result). Toate scrierile degradează grațios: dacă DB-ul
+# lipsește sau dă eroare, chat-ul continuă neafectat (ledgerul e best-effort, nu blochează).
+
+def _ensure_runs_table(conn) -> None:
+    """Creează tabelele `runs` + `run_events` (idempotent)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS runs (
+            id TEXT PRIMARY KEY,
+            kind TEXT NOT NULL,
+            session_id TEXT, channel TEXT,
+            input TEXT, tier INTEGER, model TEXT,
+            routing_method TEXT, routing_confidence REAL, routing_neighbor TEXT,
+            cache_hit INTEGER DEFAULT 0, budget_state TEXT,
+            status TEXT NOT NULL,
+            cost_usd REAL, duration_ms INTEGER,
+            created_at TEXT NOT NULL, finished_at TEXT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS run_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            type TEXT NOT NULL,
+            payload TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at)")
+
+
+def _ensure_approvals_table(conn) -> None:
+    """Aprobările de risc persistate (WP8 §3): supraviețuiesc restartului orchestratorului.
+    `status`: pending | confirm | block. La restart, rândurile `pending` revin în UI, iar
+    `risk_hook.py` (proces separat care polling-uiește /risk/status) primește decizia din DB."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS pending_approvals (
+            id TEXT PRIMARY KEY,
+            tool_name TEXT, cmd TEXT, reason TEXT, time TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL, resolved_at TEXT
+        )
+    """)
+
+
+def _channel_for(session_id: str) -> str:
+    """Deduce canalul dintr-un session_id (telegram_… → telegram; altfel ui)."""
+    s = (session_id or "").lower()
+    if s.startswith("telegram"):
+        return "telegram"
+    if s.startswith("cron") or s.startswith("sched"):
+        return "cron"
+    return "ui"
+
+
+def _run_start(kind: str, *, session_id: Optional[str] = None, channel: Optional[str] = None,
+               input_text: Optional[str] = None, status: str = "running") -> Optional[str]:
+    """Deschide un run în ledger. Întoarce run_id (uuid4 hex) sau None dacă DB-ul lipsește."""
+    if _db_conn is None:
+        return None
+    run_id = uuid.uuid4().hex
+    try:
+        _db_conn.execute(
+            "INSERT INTO runs (id, kind, session_id, channel, input, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (run_id, kind, session_id, channel, (input_text or "")[:2000], status,
+             datetime.datetime.now().isoformat()),
+        )
+        _db_conn.commit()
+        return run_id
+    except Exception as e:
+        logger.debug(f"[run-ledger] _run_start eșuat: {e}")
+        return None
+
+
+def _run_event(run_id: Optional[str], ev_type: str, payload: Optional[dict] = None) -> None:
+    """Adaugă un eveniment la un run. Payload JSON, trunchiat la ~4KB. Best-effort."""
+    if _db_conn is None or not run_id:
+        return
+    try:
+        p = json.dumps(payload, ensure_ascii=False)[:4096] if payload is not None else None
+        _db_conn.execute(
+            "INSERT INTO run_events (run_id, ts, type, payload) VALUES (?, ?, ?, ?)",
+            (run_id, datetime.datetime.now().isoformat(), ev_type, p),
+        )
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[run-ledger] _run_event eșuat: {e}")
+
+
+_RUN_UPDATABLE = {
+    "tier", "model", "routing_method", "routing_confidence", "routing_neighbor",
+    "cache_hit", "budget_state", "cost_usd",
+}
+
+
+def _run_update(run_id: Optional[str], **fields) -> None:
+    """Setează câmpuri pe rândul run-ului (doar cele din _RUN_UPDATABLE). Best-effort."""
+    if _db_conn is None or not run_id or not fields:
+        return
+    cols = [k for k in fields if k in _RUN_UPDATABLE]
+    if not cols:
+        return
+    try:
+        assignments = ", ".join(f"{c}=?" for c in cols)
+        _db_conn.execute(
+            f"UPDATE runs SET {assignments} WHERE id=?",
+            (*[fields[c] for c in cols], run_id),
+        )
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[run-ledger] _run_update eșuat: {e}")
+
+
+def _run_end(run_id: Optional[str], status: str, *, cost_usd: Optional[float] = None,
+             duration_ms: Optional[int] = None) -> None:
+    """Închide un run: status final + finished_at (+ cost/durată opționale). Best-effort."""
+    if _db_conn is None or not run_id:
+        return
+    try:
+        _db_conn.execute(
+            "UPDATE runs SET status=?, finished_at=?, cost_usd=COALESCE(?, cost_usd), "
+            "duration_ms=COALESCE(?, duration_ms) WHERE id=?",
+            (status, datetime.datetime.now().isoformat(), cost_usd, duration_ms, run_id),
+        )
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[run-ledger] _run_end eșuat: {e}")
+
+
+def _persisting_stream(source_iter, *, on_complete):
+    """D9 fix: drenează un generator SSE printr-un task de fundal care supraviețuiește
+    deconectării clientului. Colectează textul din `data:` chunks și, la final (chiar dacă
+    nu mai există client care ascultă), apelează `on_complete(full_text)` — acolo se salvează
+    istoricul/cache/memoria și se închide run-ul. Întoarce un generator pentru client care
+    citește dintr-o coadă; dacă clientul dispare, coada e ignorată dar drenajul continuă.
+
+    Pattern identic cu /task/run (execuție în fundal + coadă), aplicat pe calea de chat."""
+    queue: asyncio.Queue = asyncio.Queue()
+
+    async def _drain():
+        collected: list[str] = []
+        try:
+            async for chunk in source_iter:
+                await queue.put(chunk)
+                chunk_str = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+                if chunk_str.startswith("data: ") and "[DONE]" not in chunk_str:
+                    try:
+                        text = json.loads(chunk_str[6:]).get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if text:
+                            collected.append(text)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error(f"[run-ledger] drain error: {e}")
+        finally:
+            try:
+                await on_complete("".join(collected))
+            except Exception as e:
+                logger.error(f"[run-ledger] on_complete error: {e}")
+            await queue.put(None)  # sentinel de final pentru client
+
+    asyncio.create_task(_drain())
+
+    async def _client_gen():
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            yield item
+
+    return _client_gen()
+
+
+def _persist_approval(request_id: str, meta: dict) -> None:
+    """Scrie/înlocuiește o aprobare pending în DB (WP8 §3). Best-effort."""
+    if _db_conn is None:
+        return
+    try:
+        _db_conn.execute(
+            "INSERT OR REPLACE INTO pending_approvals "
+            "(id, tool_name, cmd, reason, time, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (request_id, meta.get("tool_name", ""), meta.get("cmd", ""),
+             meta.get("reason", ""), str(meta.get("time", "now")),
+             datetime.datetime.now().isoformat()),
+        )
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[approvals] _persist_approval eșuat: {e}")
+
+
+def _resolve_approval(request_id: str, action: str) -> None:
+    """Marchează o aprobare ca rezolvată (confirm/block) în DB. Best-effort."""
+    if _db_conn is None:
+        return
+    try:
+        _db_conn.execute(
+            "UPDATE pending_approvals SET status=?, resolved_at=? WHERE id=?",
+            (action, datetime.datetime.now().isoformat(), request_id),
+        )
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[approvals] _resolve_approval eșuat: {e}")
+
+
+def _load_pending_approvals() -> None:
+    """La startup: reîncarcă aprobările nerezolvate din DB în cache-urile in-memory,
+    ca să reapară în UI (/api/pending) și ca /risk/status să dea decizia deja luată.
+    Aprobările `pending` supraviețuiesc astfel restartului orchestratorului (WP8 §3)."""
+    if _db_conn is None:
+        return
+    try:
+        rows = _db_conn.execute(
+            "SELECT id, tool_name, cmd, reason, time, status FROM pending_approvals "
+            "WHERE status='pending'"
+        ).fetchall()
+        for rid, tool_name, cmd, reason, tm, _status in rows:
+            pending_risk_meta[rid] = {
+                "id": rid, "tool_name": tool_name, "cmd": cmd,
+                "reason": reason, "time": tm,
+            }
+        # Deciziile deja luate (dar poate ne-livrate) rămân disponibile pentru polling.
+        resolved = _db_conn.execute(
+            "SELECT id, status FROM pending_approvals WHERE status IN ('confirm','block')"
+        ).fetchall()
+        for rid, status in resolved:
+            risk_decisions[rid] = status
+        if rows:
+            logger.info(f"[approvals] {len(rows)} aprobări pending reîncărcate din DB")
+    except Exception as e:
+        logger.warning(f"[approvals] load la startup eșuat: {e}")
 
 
 def _ensure_usage_table(conn) -> None:
@@ -3100,6 +3429,7 @@ tr:hover td{{background:#fafafa}}
 <div class="main">
 <div class="tabs">
   <div class="tab active" onclick="switchTab('stats',this)">📊 Stats</div>
+  <div class="tab" onclick="switchTab('runs',this)">🧾 Runs</div>
   <div class="tab" onclick="switchTab('tasks',this)">⏰ Tasks ({task_count})</div>
 </div>
 
@@ -3133,6 +3463,13 @@ tr:hover td{{background:#fafafa}}
 <div class="footer">Date din cache_db/chat_history.db · actualizat <span id="footer-updated">{now_str}</span></div>
 </div>
 
+<div id="tab-runs" class="tab-content">
+<h2>Run ledger — ultimele run-uri</h2>
+<table><thead><tr><th>Ora</th><th>Tip</th><th>Canal</th><th>Tier</th><th>Model</th><th>Cache</th><th>Status</th><th style="text-align:right">Durată</th><th>Input</th></tr></thead>
+<tbody id="runs-tbody"><tr><td colspan="9" style="padding:12px;text-align:center;color:#aaa">Se încarcă...</td></tr></tbody></table>
+<div class="footer">Fiecare chat și task creează un run cu evenimente (routing · cache · memory · budget · result).</div>
+</div>
+
 <div id="tab-tasks" class="tab-content">
 <h2>Tasks programate</h2>
 <table><thead><tr><th>ID</th><th>Cron</th><th>Mesaj</th><th>Activ</th><th></th></tr></thead>
@@ -3152,6 +3489,42 @@ function switchTab(name, el) {{
   el.classList.add('active');
   document.getElementById('tab-' + name).classList.add('active');
   if (name === 'tasks') loadTasks();
+  if (name === 'runs') loadRuns();
+}}
+
+// ── Run ledger (WP8) ──────────────────────────────────────────────────────────
+async function loadRuns() {{
+  try {{
+    const r = await fetch('/api/runs?limit=50');
+    renderRuns(await r.json());
+  }} catch(e) {{ console.warn('Runs load failed:', e); }}
+}}
+
+function renderRuns(runs) {{
+  const tbody = document.getElementById('runs-tbody');
+  if (!runs.length) {{
+    tbody.innerHTML = "<tr><td colspan='9' style='padding:12px;text-align:center;color:#aaa'>Niciun run încă</td></tr>";
+    return;
+  }}
+  const stColor = {{done:'#4CAF50', running:'#2196F3', failed:'#f44336', pending_approval:'#FF9800'}};
+  tbody.innerHTML = runs.map(r => {{
+    const ts = (r.created_at||'').slice(0,19).replace('T',' ');
+    const dur = r.duration_ms != null ? r.duration_ms + 'ms' : '—';
+    const tier = r.tier != null ? 'T' + r.tier : '—';
+    const cache = r.cache_hit ? '✓' : '';
+    const col = stColor[r.status] || '#888';
+    const inp = (r.input||'').slice(0,50);
+    return "<tr>" +
+      "<td style='padding:3px 8px;color:#888;font-size:12px'>" + ts + "</td>" +
+      "<td style='padding:3px 8px;font-size:12px'>" + (r.kind||'') + "</td>" +
+      "<td style='padding:3px 8px;font-size:12px;color:#888'>" + (r.channel||'') + "</td>" +
+      "<td style='padding:3px 8px;text-align:center'>" + tier + "</td>" +
+      "<td style='padding:3px 8px;font-size:12px'>" + (r.model||'—') + "</td>" +
+      "<td style='padding:3px 8px;text-align:center;color:#9C27B0'>" + cache + "</td>" +
+      "<td style='padding:3px 8px;font-size:12px;color:" + col + ";font-weight:600'>" + (r.status||'') + "</td>" +
+      "<td style='padding:3px 8px;text-align:right;color:#888'>" + dur + "</td>" +
+      "<td style='padding:3px 8px;font-size:12px'>" + inp + "</td></tr>";
+  }}).join('');
 }}
 
 // ── Live stats polling ────────────────────────────────────────────────────────
