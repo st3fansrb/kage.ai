@@ -64,6 +64,11 @@ def mdb(monkeypatch, tmp_path):
                         lambda path, idx, title: commits.append((idx, title)))
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
     orchestrator._commits = commits  # expus pentru assert
+
+    # decide_tier determinist (T5 → Sonnet) ca bucla să nu atingă ChromaDB reală.
+    async def _fake_decide(msg):
+        return (5, False, 1.0, "test")
+    monkeypatch.setattr(orchestrator, "decide_tier", _fake_decide)
     yield orchestrator
     conn.close()
 
@@ -216,6 +221,60 @@ def test_resume_on_startup_relaunches_running(mdb, tmp_path, monkeypatch):
     monkeypatch.setattr(orch, "_mission_launch", lambda m: launched.append(m))
     orch._mission_resume_on_startup()
     assert launched == [mid]
+
+
+# ── Rutare model prin router-ul Kage + logare cost ────────────────────────────
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier,expected", [
+    (3, "claude-haiku-4-5"),
+    (5, "claude-sonnet-4-6"),
+    (6, "claude-opus-4-8"),
+])
+async def test_pick_model_claude_tiers(mdb, monkeypatch, tier, expected):
+    async def _dec(msg):
+        return (tier, False, 1.0, "t")
+    monkeypatch.setattr(mdb, "decide_tier", _dec)
+    t, model = await mdb._mission_pick_model("orice")
+    assert t == tier and model == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tier", [1, 2, 4])
+async def test_pick_model_non_claude_clamps_to_default(mdb, monkeypatch, tier):
+    async def _dec(msg):
+        return (tier, False, 1.0, "t")
+    monkeypatch.setattr(mdb, "decide_tier", _dec)
+    _t, model = await mdb._mission_pick_model("orice")
+    assert model == mdb.MISSION_DEFAULT_MODEL
+
+
+@pytest.mark.asyncio
+async def test_pick_model_decide_error_falls_back(mdb, monkeypatch):
+    async def _boom(msg):
+        raise RuntimeError("x")
+    monkeypatch.setattr(mdb, "decide_tier", _boom)
+    _t, model = await mdb._mission_pick_model("orice")
+    assert model == mdb.MISSION_DEFAULT_MODEL
+
+
+@pytest.mark.asyncio
+async def test_loop_passes_router_model_and_logs_cost(mdb, tmp_path, monkeypatch):
+    orch = mdb
+    _write_mission(orch, tmp_path, _TWO_WP)
+    async def _dec(msg):
+        return (3, False, 1.0, "t")            # T3 → Haiku
+    monkeypatch.setattr(orch, "decide_tier", _dec)
+    monkeypatch.setattr(orch, "_agent_runner", _FakeRunner([[_result_ev()], [_result_ev()]]))
+    mid, _ = orch._mission_create("test", cwd=str(tmp_path))
+    await orch._mission_run(mid)
+    # agentul primește modelul ales de router
+    assert orch._agent_runner.calls[0][1]["model"] == "claude-haiku-4-5"
+    # model + cost real logate pe run-ul de misiune (înainte erau None)
+    row = orch._db_conn.execute(
+        "SELECT model, cost_usd FROM runs WHERE kind='mission' ORDER BY created_at DESC LIMIT 1").fetchone()
+    assert row[0] == "claude-haiku-4-5"
+    assert abs(row[1] - 0.02) < 1e-9           # 2 WP × 0.01 (cost din _result_ev)
 
 
 # ── _mission_ask (unit) ───────────────────────────────────────────────────────

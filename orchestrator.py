@@ -2313,6 +2313,26 @@ _caffeinate_proc = None                         # anti-sleep cât timp rulează 
 pending_mission_q: Dict[str, asyncio.Event] = {}
 mission_answers: Dict[str, str] = {}
 _MISSION_UPDATABLE = {"status", "current_idx", "sdk_session_id"}
+# Model implicit pentru missions dacă router-ul cade pe un tier ne-Claude (executorul
+# SDK e Claude-only). Sonnet = echilibrul cost/capabilitate pentru muncă autonomă.
+MISSION_DEFAULT_MODEL = str(_cfg.get("mission_default_model", "") or (TIER_MODELS[5][1] or "claude-sonnet-4-6"))
+
+
+async def _mission_pick_model(prompt: str):
+    """Rutează alegerea modelului unei misiuni prin clasificatorul lui Kage (`decide_tier`),
+    cu clamp pe tier-urile Claude (executorul e Claude-only): T3→Haiku, T5→Sonnet, T6→Opus;
+    T1/T2 (local) și T4 (Gemini) → MISSION_DEFAULT_MODEL. Un WP simplu prinde Haiku/Sonnet,
+    unul greu urcă la Opus — nu mai e Opus pe tot, ca la default-ul CLI. Întoarce (tier, model)."""
+    try:
+        tier, _forced, _conf, _method = await decide_tier(prompt)
+    except Exception as e:
+        logger.debug(f"[mission] decide_tier eșuat, folosesc default: {e}")
+        return 5, MISSION_DEFAULT_MODEL
+    if tier in (3, 5, 6):
+        prov, model = TIER_MODELS[tier]
+        if prov == "claude" and model:
+            return tier, model
+    return tier, MISSION_DEFAULT_MODEL
 
 
 def _ensure_missions_table(conn) -> None:
@@ -2564,6 +2584,7 @@ async def _mission_run(mission_id: str) -> None:
     row0 = _mission_row(mission_id)
     run_id = _run_start("mission", channel="mission",
                         input_text=(row0 or {}).get("title", mission_id))
+    _mission_cost = 0.0
     try:
         while True:
             if _mission_stop.get(mission_id):
@@ -2591,13 +2612,18 @@ async def _mission_run(mission_id: str) -> None:
                 _mission_update(mission_id, status="failed")
                 break
             wp = mission.wps[idx]
-            _run_event(run_id, "tool_call", {"wp": idx, "title": wp.title})
+            prompt = _mission_build_prompt(mission, wp, idx)
+            # Modelul misiunii trece prin router-ul Kage (clamp pe tier-urile Claude).
+            wp_tier, wp_model = await _mission_pick_model(prompt)
+            _run_event(run_id, "routing", {"wp": idx, "title": wp.title,
+                                           "tier": wp_tier, "model": wp_model})
+            _run_update(run_id, model=wp_model, tier=wp_tier)
 
             allowed, disallowed, pmode = _policy_tools("task")
             rate_limited: Optional[int] = None
             async for ev in _agent_runner.run(
-                _mission_build_prompt(mission, wp, idx),
-                user_message=wp.title, cwd=row["cwd"],
+                prompt,
+                user_message=wp.title, cwd=row["cwd"], model=wp_model,
                 allowed_tools=allowed, disallowed_tools=disallowed, permission_mode=pmode,
                 resume=row["sdk_session_id"], inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
                 autonomous=AUTONOMOUS_MODE, approval_cb=_agent_approval_cb,
@@ -2608,6 +2634,8 @@ async def _mission_run(mission_id: str) -> None:
                     _save_sdk_session(mission_id, ev.get("session_id"))
                     if ev.get("session_id"):
                         _mission_update(mission_id, sdk_session_id=ev["session_id"])
+                    if ev.get("cost_usd") is not None:
+                        _mission_cost += ev["cost_usd"]
                 elif ev["type"] == "error":
                     secs = _mr.parse_rate_limit_reset(ev["error"])
                     low = ev["error"].lower()
@@ -2652,7 +2680,8 @@ async def _mission_run(mission_id: str) -> None:
         _mission_update(mission_id, status="failed")
     finally:
         final = (_mission_row(mission_id) or {}).get("status", "done")
-        _run_end(run_id, "done" if final == "done" else final)
+        _run_end(run_id, "done" if final == "done" else final,
+                 cost_usd=(_mission_cost or None))
         if _active_mission_id == mission_id:
             _active_mission_id = None
         _mission_caffeinate_stop()
