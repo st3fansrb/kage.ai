@@ -32,7 +32,7 @@ restartul). Toate criteriile se verifică cu `pytest` — nu e nevoie de restart
 - `grep -q "def _usd_to_eur" orchestrator.py`
 - `.venv/bin/pytest -q tests/test_eur.py`
 
-## WP3 — Expune `cost_eur` în /api/runs
+## WP3 — Expune `cost_eur` în /api/runs ✅ (2026-07-06)
 
 - În endpoint-ul `/api/runs`, adaugă în fiecare dict din răspuns cheia `cost_eur` =
   `_usd_to_eur(cost_usd)` (folosind valoarea `cost_usd` a run-ului).
