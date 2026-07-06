@@ -11,6 +11,8 @@
   "telegram_chat_id": "CHANGEME",
   "autonomous_mode": false,
   "confirm_timeout_secs": 300,
+  "_comment_eur": "Curs EUR/USD pentru afișarea costurilor în EUR (felia de afișare din #7).",
+  "eur_usd_rate": 0.92,
   "max_cloud_calls_per_day": 20,
   "api_token": "CHANGEME-run: openssl rand -hex 20",
 
