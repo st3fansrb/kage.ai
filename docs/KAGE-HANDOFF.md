@@ -529,7 +529,7 @@ cere 3.10+; atunci rulează-l standalone: `phoenix serve`); callback Phoenix în
 adaugă în `start_all.sh`.
 **Acceptare:** un request T1/T2 apare ca trace în UI-ul Phoenix (`localhost:6006`).
 
-### WP8 (#5) — Run ledger + decision trace · efort: 1–2 săptămâni de seri
+### WP8 (#5) — Run ledger + decision trace · efort: 1–2 săptămâni de seri · ✅ IMPLEMENTAT (06.07.2026)
 
 Coloana vertebrală pentru #4, #15B și auto-skills. Schemă propusă (SQLite, în
 `chat_history.db`):
@@ -568,6 +568,34 @@ ca disconnect-ul clientului să nu piardă răspunsul.
 **Acceptare:** fiecare chat și task creează un run cu evenimente · restart nu pierde istoricul
 și aprobările pending · cache hit apare în istoric SQLite · disconnect mid-stream → răspunsul
 tot se salvează (test cu client anulat) · `/api/runs` întoarce JSON · pytest verde.
+
+**Implementat:**
+
+- Schemă: `_ensure_runs_table` (runs + run_events + indexuri) și `_ensure_approvals_table`
+  (`pending_approvals`) în `chat_history.db`, create la startup.
+- Helpers best-effort (nu blochează chat-ul dacă DB-ul dă eroare): `_run_start`, `_run_event`
+  (payload JSON trunchiat 4KB), `_run_update` (whitelist de coloane), `_run_end`, plus
+  `_channel_for` (telegram/cron/ui).
+- Instrumentare `_chat_dispatch`: un run per cerere reală de chat (după shortcut-uri) cu
+  evenimente `routing`/`budget`/`memory`/`cache`/`result`; `_background_task_exec` deschide un
+  run `kind=task` cu `tool_call`/`result`/`error`. (`decide_tier`/`_budget_check` etc. sunt
+  citite prin evenimentele emise în dispatch, nu modificate în semnătură.)
+- **Aprobări persistente (§3):** `/risk/register` scrie în `pending_approvals` (`_persist_approval`),
+  `/risk/respond` marchează `confirm`/`block` (`_resolve_approval`), iar la startup
+  `_load_pending_approvals` repopulează `pending_risk_meta`/`risk_decisions` din DB → aprobările
+  pending revin în UI și deciziile deja luate ajung la `risk_hook.py` prin `/risk/status`.
+- **D9 reparat:** (a) cache hit inserează perechea user+assistant în `messages` înainte de
+  return (înainte lipsea din `/api/history`); (b) `_persisting_stream` drenează generatorul SSE
+  într-un `asyncio.create_task` cu coadă — dacă clientul se deconectează la mijloc, salvarea
+  istoric/cache/memorie + închiderea run-ului continuă în fundal (pattern din `/task/run`).
+- `GET /api/runs` (listă, `?limit`) + `GET /api/runs/{id}` (run + decision trace) + tab **🧾 Runs**
+  în dashboard (fetch live la deschidere).
+- Teste noi: `tests/test_run_ledger.py` (14) — helperi, canal, persistență aprobări (inclusiv
+  simulare restart), `/api/runs` + detail (404), cache hit salvat în SQLite, stream
+  disconnect-safe (client abandonat după 1 chunk → răspunsul tot se persistă). Suită: **168 verzi**.
+- **Necesită restart** (`start_all.sh`) ca tabelele + endpoint-urile să fie active în producție.
+- **Rămas pentru mai târziu:** `cost_usd` e în schemă dar populat abia de #7 (buget EUR);
+  `routing_neighbor` rezervat; instrumentarea fină per-tool a agenților vine cu WP9 (SDK).
 
 ### WP9 (#4) — Executor pe Claude Agent SDK · efort: 2–4 săptămâni de seri
 

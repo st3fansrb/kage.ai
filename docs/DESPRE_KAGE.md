@@ -83,7 +83,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 
 ### Interfață
 - **`kage.html`** — UI proprie: streaming SSE, badge de tier animat, chips de prefix, panou de aprobări pending, URL relativ (pregătit pentru acces remote).
-- **Dashboard** — statistici live (polling), tab de taskuri programate.
+- **Dashboard** — statistici live (polling), tab de taskuri programate, tab **Runs** (run ledger: fiecare chat/task cu evenimentele lui — routing, cache, budget, result).
 
 ### Automatizare & operare
 - **Scheduled tasks** — `!schedule "0 9 * * 1" <task>` rulează taskuri recurente prin cron (APScheduler).
