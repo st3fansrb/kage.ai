@@ -319,20 +319,6 @@ nu prin subprocess `claude -p`. Rezolvă D5 (streaming simulat) la sursă.
   `risk_hook.py` rămâne pentru gemini/compat CLI.
 - Teste: 168 → **190 verzi**. Verificat live: chat T5 real cu delte, cost în ledger, resume.
 
-### WP11 — Mission Runner: handoff → execuție nonstop ✅ (06.07.2026)
-
-Modul „îi dau planul și lucrează singur" — bucla pe care Stefan o făcea manual (plan cu
-WP-uri → sesiune per WP → verifică criterii → următorul) e acum automată, peste WP8+WP9.
-
-- Misiune = `missions/<slug>/mission.md` (format handoff). `mission_runner.py` = logica pură
-  (parsare + criterii verificabile + rate-limit); orchestrarea cu stare în `orchestrator.py`.
-- Bucla: sesiune per misiune (resume), rulează criteriile shell, marchează ✅ + commit, avansează.
-  Stare în SQLite (`missions`/`mission_wps`) → **restart reia din WP-ul corect**.
-- **Puntea de decizii** pe Telegram (retry/skip/abort; timeout → paused), **auto-resume la
-  rate-limit** (parse oră reset → schedule), **anti-sleep** (`caffeinate -s`), kill switch `!stop`.
-- Comenzi `!mission start/status/pause/resume/stop/list` + `/api/missions`.
-- Teste: 190 → **217 verzi** (27 noi). Exemplu rulabil în `missions/exemplu/`.
-
 ---
 
 ## Viziune business (toamnă 2026)
