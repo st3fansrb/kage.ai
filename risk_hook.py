@@ -41,6 +41,50 @@ NTFY_CONFIG     = next(
 )
 ORCHESTRATOR_URL = "http://localhost:4001"
 
+
+def _load_allowed_task_roots() -> list[str]:
+    """Citește `allowed_task_roots` din config (același mecanism ca `_load_vault`).
+    Fiecare element e expanduser()-uit. Absent/gol → [] (confinement dezactivat)."""
+    root = Path(__file__).parent
+    for name in ("kage_config.json", "ntfy_config.json"):
+        p = root / name
+        if p.exists():
+            try:
+                cfg = json.loads(p.read_text(encoding="utf-8"))
+                return [
+                    str(Path(r).expanduser())
+                    for r in cfg.get("allowed_task_roots", [])
+                    if r
+                ]
+            except Exception:
+                pass
+    return []
+
+
+ALLOWED_TASK_ROOTS = _load_allowed_task_roots()
+
+
+def _path_in_allowed_roots(path: str, roots: list[str]) -> bool:
+    """True dacă `path` (canonicalizat) e un root permis sau în interiorul unuia.
+
+    `roots` gol → True (confinement dezactivat, non-breaking). Canonicalizarea cu
+    `resolve()` neutralizează bypass-ul prin `..`/symlink. Orice cale sau root
+    ne-rezolvabil(ă) → nu bloca (hook-ul nu trebuie să pice pe input malformat)."""
+    if not roots:
+        return True
+    try:
+        p = Path(path).expanduser().resolve()
+    except Exception:
+        return True
+    for root in roots:
+        try:
+            r = Path(root).expanduser().resolve()
+        except Exception:
+            continue
+        if p == r or r in p.parents:
+            return True
+    return False
+
 # ── Never list patterns (Bash commands) ───────────────────────────────────────
 NEVER_CMD_PATTERNS: list[tuple[str, str]] = [
     (r"rm\s+(-[rRfF]{1,3}\s+)?~/",        "rm în home directory"),
@@ -235,6 +279,13 @@ def evaluate_risk(
         for fname in NEVER_FILENAMES:
             if basename == fname or basename.endswith(fname):
                 return "Never", f"Scriere în fișier sensibil: {fname}"
+
+        # Confinement per-tool-call: scriere în afara workspace-ului permis → aprobare.
+        # Roots gol → dezactivat (non-breaking). Never de mai sus are prioritate.
+        if ALLOWED_TASK_ROOTS and not _path_in_allowed_roots(file_path, ALLOWED_TASK_ROOTS):
+            if _has_explicit_keyword(user_message):
+                return "Medium", "Scriere în afara workspace-ului permis (downgrade: instrucție explicită)"
+            return "High", "Scriere în afara workspace-ului permis"
 
         for part in HIGH_PATH_PARTS:
             if part in file_path:
