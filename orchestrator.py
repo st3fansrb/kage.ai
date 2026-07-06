@@ -2464,6 +2464,8 @@ def _ensure_jobs_table(conn) -> None:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_profile_status ON jobs(profile, status)")
+    # Index pentru dedup secundar pe URL (WP-J fix: repost cu titlu schimbat, același URL).
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_url ON jobs(url)")
 
 
 def _job_hash(title: str, company: str) -> str:
@@ -2549,8 +2551,11 @@ def _keyword_screen(profile: dict, job: dict) -> Optional[str]:
     return None
 
 
-async def _prefilter_score(profile: dict, job: dict) -> int:
-    """Scor 1-10 pe T2 LOCAL (ollama via LiteLLM) — ZERO cost cloud. 0 la eșec (exclus)."""
+async def _prefilter_score(profile: dict, job: dict) -> Optional[int]:
+    """Scor 1-10 pe T2 LOCAL (ollama via LiteLLM) — ZERO cost cloud.
+    Întoarce int 0-10 la succes, sau **None dacă scoring-ul a eșuat** (ex. Ollama rece/down).
+    None ≠ 0: apelantul lasă jobul `new` ca să-l re-scoreze la scanul următor, în loc să-l
+    îngroape ca `skipped` din cauza unui hiccup local (cauza „n-am primit joburi dimineața")."""
     criteria = str(profile.get("criteria", "")).strip() or profile.get("label", "")
     user = (
         f"Criterii candidat:\n{criteria}\n\n"
@@ -2578,14 +2583,20 @@ async def _prefilter_score(profile: dict, job: dict) -> int:
                 headers={"Authorization": f"Bearer {LITELLM_KEY}"},
                 timeout=60,
             )
-        text = r.json()["choices"][0]["message"]["content"]
+        data = r.json()
+        choices = data.get("choices") if isinstance(data, dict) else None
+        if not choices:
+            # Răspuns fără 'choices' = eroare de la LiteLLM/Ollama (model rece/down).
+            logger.warning(f"[Jobs] pre-filtru: răspuns fără choices ({str(data)[:120]}) — reîncerc la scanul următor")
+            return None
+        text = choices[0]["message"]["content"]
         m = re.search(r"\d+", text)
         if not m:
             return 0
         return max(0, min(10, int(m.group())))
     except Exception as e:
-        logger.warning(f"[Jobs] pre-filtru eșuat: {e}")
-        return 0
+        logger.warning(f"[Jobs] pre-filtru eșuat: {e} — reîncerc la scanul următor")
+        return None
 
 
 async def _scan_profile(profile: dict) -> dict:
@@ -2600,31 +2611,38 @@ async def _scan_profile(profile: dict) -> dict:
     if _db_conn is None:
         return {"selected": [], "scanned": len(scanned), "new": 0, "errors": errors + ["DB indisponibil"]}
 
-    # Dedup: INSERT OR IGNORE. Rândurile deja prezente (orice status) sunt sărite → nu re-trimise.
+    # Dedup: INSERT OR IGNORE pe hash (titlu|companie). În plus, dedup pe URL — un repost cu
+    # titlu ușor schimbat dar același URL e recunoscut ca deja-văzut → NU re-notificat (acoperă
+    # „nu primi despre unul deja primit sau trecut la ignorate"). Rândurile deja prezente (orice
+    # status: sent/ignored/saved/skipped) sunt sărite din start.
     now = datetime.datetime.now().isoformat()
     fresh_hashes: list[str] = []
     for j in scanned:
         h = _job_hash(j.get("title", ""), j.get("company", ""))
+        url = str(j.get("url", "")).strip()
+        if url and _db_conn.execute("SELECT 1 FROM jobs WHERE url = ? LIMIT 1", (url,)).fetchone():
+            continue  # același anunț sub alt hash → deja văzut
         cur = _db_conn.execute(
             "INSERT OR IGNORE INTO jobs (hash, profile, title, company, location, url, site, description, status, first_seen) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (h, pid, j.get("title", ""), j.get("company", ""), j.get("location", ""),
-             j.get("url", ""), j.get("site", ""), str(j.get("description", ""))[:4000],
+             url, j.get("site", ""), str(j.get("description", ""))[:4000],
              _JOB_STATUS_NEW, now),
         )
         if cur.rowcount > 0:
             fresh_hashes.append(h)
     _db_conn.commit()
 
-    # Pre-filtru pe joburile cu adevărat noi (status 'new').
+    # Pre-filtru pe TOATE joburile 'new' ale profilului: cele proaspete + cele rămase 'new' de
+    # la un scan anterior în care scoring-ul local a picat (self-heal — nu le pierdem).
+    rows = _db_conn.execute(
+        "SELECT hash, profile, title, company, location, url, site, description FROM jobs "
+        "WHERE profile = ? AND status = ?",
+        (pid, _JOB_STATUS_NEW),
+    ).fetchall()
     scored: list[tuple] = []  # (score, row_dict)
-    for h in fresh_hashes:
-        row = _db_conn.execute(
-            "SELECT hash, profile, title, company, location, url, site, description FROM jobs WHERE hash = ? AND status = ?",
-            (h, _JOB_STATUS_NEW),
-        ).fetchone()
-        if not row:
-            continue
+    scoring_failed = 0
+    for row in rows:
         job = {
             "hash": row[0], "profile": row[1], "title": row[2], "company": row[3],
             "location": row[4], "url": row[5], "site": row[6], "description": row[7],
@@ -2632,16 +2650,21 @@ async def _scan_profile(profile: dict) -> dict:
         # Screen ieftin de keywords întâi — scor 0 fără LLM dacă e tăiat (senior, off-topic).
         cut = _keyword_screen(profile, job)
         if cut is not None:
-            score = 0
+            score: Optional[int] = 0
             logger.debug(f"[Jobs] keyword-cut ({cut}): {job.get('title','')[:50]!r}")
         else:
             score = await _prefilter_score(profile, job)
+        if score is None:
+            # Scoring local eșuat → lasă jobul 'new'; va fi re-scorat la scanul următor.
+            scoring_failed += 1
+            continue
         job["score"] = score
-        _db_conn.execute("UPDATE jobs SET score = ? WHERE hash = ?", (score, h))
+        _db_conn.execute("UPDATE jobs SET score = ? WHERE hash = ?", (score, job["hash"]))
         scored.append((score, job))
     _db_conn.commit()
 
-    # Selecție: scor ≥ prag, sortat desc, top-N → 'sent'; restul noilor → 'skipped'.
+    # Selecție: scor ≥ prag, sortat desc, top-N → 'sent'; restul (scorate) → 'skipped'.
+    # Joburile cu scoring eșuat rămân 'new' (nu apar în `scored`) → retry la scanul următor.
     scored.sort(key=lambda t: t[0], reverse=True)
     selected = [job for score, job in scored if score >= JOBS_MIN_SCORE][:JOBS_TOP_N]
     selected_hashes = {j["hash"] for j in selected}
@@ -2650,7 +2673,11 @@ async def _scan_profile(profile: dict) -> dict:
         _db_conn.execute("UPDATE jobs SET status = ? WHERE hash = ?", (new_status, job["hash"]))
     _db_conn.commit()
 
-    return {"selected": selected, "scanned": len(scanned), "new": len(fresh_hashes), "errors": errors}
+    if scoring_failed:
+        errors.append(f"scoring local eșuat pentru {scoring_failed} joburi (rămân 'new', retry la scanul următor)")
+
+    return {"selected": selected, "scanned": len(scanned), "new": len(fresh_hashes),
+            "retry_pending": scoring_failed, "errors": errors}
 
 
 async def _job_scan_all(only_profile: Optional[str] = None, manual: bool = False) -> dict:

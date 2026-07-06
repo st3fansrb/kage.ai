@@ -78,13 +78,27 @@ async def test_prefilter_zero_on_garbage(monkeypatch):
     assert await orchestrator._prefilter_score(_PROFILE, {}) == 0
 
 
-async def test_prefilter_zero_on_error(monkeypatch):
+async def test_prefilter_none_on_error(monkeypatch):
+    # Eșec de scoring local (ex. Ollama down) → None, NU 0. None = „reîncearcă", ca jobul
+    # să nu fie îngropat ca 'skipped' dintr-un hiccup (cauza „n-am primit joburi dimineața").
     class _Boom:
         async def __aenter__(self): return self
         async def __aexit__(self, *a): return False
         async def post(self, *a, **k): raise RuntimeError("down")
     monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda *a, **k: _Boom())
-    assert await orchestrator._prefilter_score(_PROFILE, {}) == 0
+    assert await orchestrator._prefilter_score(_PROFILE, {}) is None
+
+
+async def test_prefilter_none_on_no_choices(monkeypatch):
+    # Răspuns fără 'choices' (eroare LiteLLM/Ollama) → None (retry), nu 0.
+    class _Resp:
+        def json(self): return {"error": {"message": "model loading"}}
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, *a, **k): return _Resp()
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda *a, **k: _Client())
+    assert await orchestrator._prefilter_score(_PROFILE, {}) is None
 
 
 # ── Keyword screen (fără LLM) ─────────────────────────────────────────────────
@@ -181,6 +195,49 @@ async def test_scan_profile_dedup_second_run(jobs_db, monkeypatch):
     # Al doilea scan cu aceleași joburi → 0 noi, digest gol (nu re-trimite).
     second = await orchestrator._scan_profile(_PROFILE)
     assert second["new"] == 0 and second["selected"] == []
+
+
+async def test_scan_scoring_failure_keeps_new_and_retries(jobs_db, monkeypatch):
+    """Fix „n-am primit joburi dimineața": dacă scoring-ul local pică (None), jobul rămâne
+    'new' (nu îngropat ca 'skipped') și e re-scorat + trimis la scanul următor."""
+    monkeypatch.setattr(orchestrator, "JOBS_MIN_SCORE", 6)
+    monkeypatch.setattr(orchestrator, "JOBS_TOP_N", 5)
+    _mock_scan(monkeypatch, [{"title": "AI Intern", "company": "c1", "url": "u1", "description": "x"}])
+
+    # Scanul 1: scoring-ul local pică → None
+    async def _fail(profile, job):
+        return None
+    monkeypatch.setattr(orchestrator, "_prefilter_score", _fail)
+    r1 = await orchestrator._scan_profile(_PROFILE)
+    assert r1["selected"] == [] and r1["retry_pending"] == 1
+    assert jobs_db.execute("SELECT status FROM jobs WHERE title='AI Intern'").fetchone()[0] == orchestrator._JOB_STATUS_NEW
+
+    # Scanul 2: același anunț (nimic nou inserat), dar acum scoring-ul merge → sent
+    async def _ok(profile, job):
+        return 9
+    monkeypatch.setattr(orchestrator, "_prefilter_score", _ok)
+    r2 = await orchestrator._scan_profile(_PROFILE)
+    assert r2["new"] == 0                       # nimic nou inserat (dedup)
+    assert [j["title"] for j in r2["selected"]] == ["AI Intern"]  # dar cel rămas 'new' e re-scorat
+    assert jobs_db.execute("SELECT status FROM jobs WHERE title='AI Intern'").fetchone()[0] == orchestrator._JOB_STATUS_SENT
+
+
+async def test_scan_url_dedup_skips_reposts(jobs_db, monkeypatch):
+    """Dedup pe URL: același anunț repostat cu titlu ușor diferit dar același URL nu e re-trimis
+    (acoperă „nu primi despre unul deja primit / trecut la ignorate")."""
+    monkeypatch.setattr(orchestrator, "JOBS_MIN_SCORE", 1)
+    monkeypatch.setattr(orchestrator, "JOBS_TOP_N", 10)
+    _mock_scores(monkeypatch, {"QA Engineer": 8, "QA Engineer (Remote)": 8})
+
+    _mock_scan(monkeypatch, [{"title": "QA Engineer", "company": "c1", "url": "https://x/job/42", "description": "x"}])
+    r1 = await orchestrator._scan_profile(_PROFILE)
+    assert r1["new"] == 1
+
+    # Repost: titlu schimbat, ACELAȘI url → recunoscut ca deja văzut → nu re-inserat/re-trimis.
+    _mock_scan(monkeypatch, [{"title": "QA Engineer (Remote)", "company": "c1", "url": "https://x/job/42", "description": "x"}])
+    r2 = await orchestrator._scan_profile(_PROFILE)
+    assert r2["new"] == 0 and r2["selected"] == []
+    assert jobs_db.execute("SELECT COUNT(*) FROM jobs WHERE url='https://x/job/42'").fetchone()[0] == 1
 
 
 # ── Acțiuni pe job ────────────────────────────────────────────────────────────
