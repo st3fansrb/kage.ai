@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { T } from "@/lib/tokens";
 
 interface Msg {
@@ -9,26 +9,95 @@ interface Msg {
   badge?: string;
 }
 
+interface Session {
+  id: string;
+  started: string;
+  messages: number;
+}
+
 const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
+const SESSION_KEY = "kage_session"; // partajat cu kage.html → sesiuni comune
+
+function newSessionId(): string {
+  try {
+    return crypto.randomUUID();
+  } catch {
+    return "ui-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+}
 
 export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [sessionId, setSessionId] = useState<string>("");
+  const [sessions, setSessions] = useState<Session[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  const loadHistory = useCallback(async (sid: string) => {
+    try {
+      const rows = await fetch(`/api/history?session_id=${encodeURIComponent(sid)}`).then((r) => r.json());
+      if (Array.isArray(rows)) {
+        setMsgs(rows.map((r: { role: string; content: string }) => ({ role: r.role === "user" ? "user" : "assistant", content: r.content })));
+      }
+    } catch {
+      /* sesiune goală sau backend indisponibil */
+    }
+  }, []);
+
+  const loadSessions = useCallback(async () => {
+    try {
+      const rows = await fetch("/api/sessions").then((r) => r.json());
+      if (Array.isArray(rows)) setSessions(rows);
+    } catch {
+      /* ignoră */
+    }
+  }, []);
+
+  // Inițializează sesiunea din localStorage (o dată).
+  useEffect(() => {
+    let sid = localStorage.getItem(SESSION_KEY);
+    if (!sid) {
+      sid = newSessionId();
+      localStorage.setItem(SESSION_KEY, sid);
+    }
+    setSessionId(sid);
+  }, []);
+
+  // La deschidere: încarcă lista de sesiuni + istoricul sesiunii curente.
+  useEffect(() => {
+    if (open && sessionId) {
+      loadSessions();
+      if (msgs.length === 0) loadHistory(sessionId);
+      inputRef.current?.focus();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, sessionId]);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs]);
 
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
+  function newChat() {
+    const sid = newSessionId();
+    localStorage.setItem(SESSION_KEY, sid);
+    setSessionId(sid);
+    setMsgs([]);
+    inputRef.current?.focus();
+  }
+
+  function switchSession(sid: string) {
+    if (sid === sessionId) return;
+    localStorage.setItem(SESSION_KEY, sid);
+    setSessionId(sid);
+    setMsgs([]);
+    loadHistory(sid);
+  }
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if (!text || busy || !sessionId) return;
     const history = [...msgs, { role: "user" as const, content: text }];
     setMsgs([...history, { role: "assistant", content: "" }]);
     setInput("");
@@ -37,7 +106,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
     try {
       const resp = await fetch("/api/chat", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "X-Session-Id": sessionId },
         body: JSON.stringify({
           model: "auto",
           stream: true,
@@ -94,6 +163,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
       });
     } finally {
       setBusy(false);
+      loadSessions(); // reflectă sesiunea nouă în listă
     }
   }
 
@@ -120,10 +190,42 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
           boxShadow: "-16px 0 40px rgba(0,0,0,.4)",
         }}
       >
-        <div style={{ height: 52, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 16px", borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ height: 52, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 12px 0 16px", borderBottom: `1px solid ${T.border}` }}>
           <span style={{ fontWeight: 600, fontSize: 14 }}>chat</span>
           <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>⌘J</span>
           <div style={{ flex: 1 }} />
+          {sessions.length > 0 && (
+            <select
+              value={sessions.some((s) => s.id === sessionId) ? sessionId : ""}
+              onChange={(e) => e.target.value && switchSession(e.target.value)}
+              title="Sesiuni recente"
+              style={{
+                background: T.panel,
+                color: T.muted,
+                border: `1px solid ${T.border3}`,
+                borderRadius: 8,
+                fontSize: 11,
+                fontFamily: T.mono,
+                padding: "3px 6px",
+                maxWidth: 150,
+                outline: "none",
+              }}
+            >
+              {!sessions.some((s) => s.id === sessionId) && <option value="">· sesiune nouă</option>}
+              {sessions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.id.slice(0, 8)} · {s.messages} msg
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={newChat}
+            title="Conversație nouă"
+            style={{ background: "none", border: "none", color: T.muted, fontSize: 16, cursor: "pointer", padding: "0 2px" }}
+          >
+            ✦
+          </button>
           <button
             onClick={onClose}
             style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}

@@ -6,11 +6,12 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const body = await req.text();
+  const sid = req.headers.get("x-session-id") || "default";
   try {
     const up = await forward("/v1/chat/completions", {
       method: "POST",
       body,
-      headers: { Accept: "text/event-stream" },
+      headers: { Accept: "text/event-stream", "X-Session-Id": sid },
     });
     if (!up.body) {
       return new Response(JSON.stringify({ error: `orchestrator ${up.status}` }), {
