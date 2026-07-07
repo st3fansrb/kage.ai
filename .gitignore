@@ -31,3 +31,7 @@ __pycache__/
 
 # WP6: modele whisper.cpp (binare mari, descărcate separat)
 .models/
+
+# WP-T: freqtrade venv separat + date locale (backtest results, candle cache)
+.trading-venv/
+trading/ft_userdata/

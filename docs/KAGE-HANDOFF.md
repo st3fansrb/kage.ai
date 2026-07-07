@@ -718,12 +718,28 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
 
 ### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
 
-**Stare T1 (07.07.2026):** slice 1 (fundația) livrat — pachet `trading/` self-contained:
-`ledger.py` (`trading.db` în `cache_db/`: `experiments`/`paper_trades`/`agent_status`, WAL) +
-`safety.py` (`assert_paper_only` — refuză chei live / `dry_run:false`; e apărarea programatică
-a criteriului „nicio cale spre ordine reale"). Config `trading` (paper-only, fără chei) în
-`kage_config.example.json`. Teste: `tests/test_trading.py` (+16). Următor: slice 2 = integrare
-freqtrade dry-run (venv propriu) → backtest → ledger.
+**Stare T1 (07.07.2026):** fundația + REORIENTARE spre Quant Lab.
+
+- **Slice 1 (fundația):** `trading/ledger.py` (`trading.db` în `cache_db/`) + `safety.py`
+  (`assert_paper_only`). Config paper-only în `kage_config.example.json`. (PR #25)
+- **Slice 2 (freqtrade):** `trading/runner.py` — punte subprocess `.trading-venv` → ledger,
+  cu `assert_paper_only` înainte de rulare. **PĂSTRAT.**
+- **Reorientare (spec `quant_lab_claude_code_prompt.md`, aprobat de Stefan 07.07.2026):**
+  abordarea naivă „N backtests + LLM mută strategia" e înlocuită cu **metoda științifică** —
+  edge-ul NU se găsește prin câteva backtests in/out-of-sample. Design:
+  `docs/QUANT_LAB_DESIGN.md` (invarianți, 3 bucle, validare statistică, registru de ipoteze,
+  routing LLM) + `docs/QUANT_LAB_BACKLOG.md` (5 etape).
+- **`trading/nocturnal.py` NAÏV = neutralizat** (guard) — încălca invarianți (LLM scrie execuția,
+  selecție pe profit IS). Se înlocuiește cu Actor→Critic→Validare (Etapa 5).
+- **Etapa 1 (validare statistică — PRIORITATE #1) LIVRATĂ:** `trading/validation.py` — bootstrap,
+  permutation, PSR, **Deflated Sharpe Ratio** + **PBO/CSCV** din papers (numpy +
+  `statistics.NormalDist`, fără mlfinlab comercial). Verdict SEMNAL/ZGOMOT deflatat pe contorul
+  de trial-uri. Teste `tests/test_trading_validation.py` (+14; testul central: cea mai bună din
+  50 strategii de zgomot pur = ZGOMOT după deflatare).
+- **Decizii Stefan:** Critic prin **OpenRouter** (model ieftin performant, nu Claude direct),
+  buget 5–10€/lună; kill-switch −15%; perechi BTC/ETH 5m.
+- **Următor:** Etapa 1.2 (raport verdict peste ledger real) → Etapa 2 (kill-switch + contor
+  global de trial-uri + buget API).
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:
@@ -750,6 +766,15 @@ anti-overfitting** (hyperopt „găsește" cu entuziasm strategii care mor pe da
 validare walk-forward + out-of-sample la orice promovare; fees + slippage modelate mereu;
 o strategie intră în paper doar cu OOS pozitiv; discuția de bani reali abia după ~3 luni de
 paper profitabil. Consiliere cloud: o sinteză săptămânală pe Sonnet, gated pe buget (#7).
+
+**Filozofia de Cercetare (Causalitate vs Corelație):** Edge-ul real nu va fi găsit prin simplă 
+optimizare de parametri pe indicatori tehnici (curve fitting pe o lună de date). Sistemul 
+trebuie să caute **înțelegerea cauzală** ("de ce se întâmplă X și de ce acum?"). Odată 
+ce agentul și Stefan observă un fenomen logic (ne-aleator), acesta trebuie transformat 
+într-o ipoteză. Ipoteza este apoi supusă unor **simulări matematice riguroase (ex: Monte Carlo, distribuții statistice)** 
+pentru a verifica dacă rezultatele converg statistic către așteptările noastre (demonstrând 
+că nu e un simplu *random walk*). Freqtrade e doar executantul matematic, inteligența stă în 
+formularea și dovedirea statistică a ipotezei.
 
 **Faze:** T1 crypto lab (freqtrade dry-run + ledger + buclă nocturnă) → **T2 sports
 betting** (detalii mai jos; tras înaintea Manifold: testul de edge cel mai măsurabil — CLV —
