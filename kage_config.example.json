@@ -15,6 +15,9 @@
   "eur_usd_rate": 0.92,
   "max_cloud_calls_per_day": 20,
 
+  "_comment_ui": "WP10: portul UI-ului web Mission Control (Next.js). /chat redirectează aici (kage.html retras).",
+  "mission_control_port": 3001,
+
   "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local, T4 Gemini), fiindcă executorul SDK e Claude-only. Gol = Sonnet.",
   "mission_default_model": "",
   "api_token": "CHANGEME-run: openssl rand -hex 20",

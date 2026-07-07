@@ -49,8 +49,8 @@ else
 fi
 
 # ── Browser (indiferent dacă tocmai l-am pornit sau era deja up)
-echo "  → Deschid http://localhost:4001/chat ..."
-open "http://localhost:4001/chat"
+echo "  → Deschid http://localhost:3001 (Mission Control) ..."
+open "http://localhost:3001"
 
 echo ""
-echo "=== Sistem pornit. Kage: http://localhost:4001/chat ==="
+echo "=== Sistem pornit. Kage: http://localhost:3001 (Mission Control) ==="
