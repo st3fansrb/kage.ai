@@ -799,6 +799,19 @@ pensionează la paritate. Referințe de design în `KAGE-EVALUARE.md` §3.12.
 **Promptul de design e gata:** `design/PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
 output-ul (direcție vizuală + layout-uri + componente) devine specul vizual al acestui WP.
 
+**Stare pensionare `kage.html` (07.07.2026):** pas SOFT făcut — banner de deprecare în `kage.html`
+(fixed jos, link către Mission Control `:3001`, dismiss cu localStorage), UI-ul vechi rămâne
+funcțional. **Ștergerea finală (`kage.html` + ruta `/chat`) e BLOCATĂ până Mission Control atinge
+paritate reală** — gap-uri rămase, de portat înainte de a șterge:
+
+1. **Sesiuni + istoric persistent** de chat (kage.html are `btnNewChat`/`recent`; ChatPanel-ul e
+   efemer, în memorie). Sursa există: `/api/history`, `/api/sessions`.
+2. **Task runner cu dropdown de cwd** (kage.html `cwdSel`; sursa: `/api/config` →
+   `allowed_task_roots`/`default_task_cwd`). Mission Control n-are UI de task runner.
+3. **Disponibilitate always-on**: kage.html e servit de orchestrator pe `:4001` (mereu sus);
+   Mission Control cere procesul `:3001` opt-in (`scripts/start_frontend.sh`) — de decis dacă
+   intră în `start_all.sh`/launchd înainte de a retrage `/chat`.
+
 ### Restul (după WP10, ordine: #12 → #14 → #6 → #9; #7 a fost tras în față)
 
 - **#12 Skills**: folder `skills/` cu 3–5 SKILL.md scrise de mână; symlink în `.claude/skills`
