@@ -41,19 +41,15 @@ Sursă unică de adevăr pentru tot ce e planificat, în lucru, sau decis conșt
 
 ## Prioritate medie
 
-### Acces Remote via Cloudflare Tunnel
-Face Kage accesibil de pe orice device fără VPN sau port forwarding manual.
+### Acces Remote via Cloudflare Tunnel ✅ (WP10, 07.07.2026)
 
-**Prerequisit:** ✅ rezolvat — `kage.html` folosește deja URL relativ (`window.location.host`).
+Face Kage accesibil de pe orice device (inclusiv telefonul nou, fără Tailscale) fără VPN
+sau port forwarding manual — doar browser.
 
-**Pași implementare:**
-```bash
-brew install cloudflared
-cloudflared tunnel login
-cloudflared tunnel create kage-orch
-# mapează kage.stefan.ro → http://localhost:4001
-```
-Autentificare: Cloudflare Zero Trust → Self-hosted App → politică pe email-ul tău.
+**Livrat:** `cloudflare_tunnel.example.yaml` + `scripts/start_tunnel.sh` +
+`scripts/start_frontend.sh`. Se expune **doar `:3001`** (Mission Control Next.js); proxy-ul
+lui server-side vorbește cu orchestratorul pe `:4001` localhost, deci `api_token`-ul nu ajunge
+niciodată public. Pași concreți: vezi `docs/INSTALL.md` §Acces remote.
 
 **Notă arhitecturală (viitor):** modelul "Hub + Agent distribuit" — Mac-ul e Hub central, alți utilizatori rulează un agent mic pe hardware-ul lor, cu propriile chei Claude/Gemini. Nu se implementează acum, dar designul Cloudflare trebuie să țină cont de această direcție.
 

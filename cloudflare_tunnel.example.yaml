@@ -1,0 +1,22 @@
+# Cloudflare Tunnel — acces remote la Kage Mission Control fără VPN / port-forward.
+# Copiază în `cloudflare_tunnel.yaml` (gitignored) și completează cu valorile tale.
+#
+# Setup unic (o singură dată):
+#   brew install cloudflared
+#   cloudflared tunnel login                 # autorizează în browser
+#   cloudflared tunnel create kage            # → afișează TUNNEL_ID + scrie credentials-file
+#   cloudflared tunnel route dns kage kage.exemplu.ro
+# Apoi: ./scripts/start_tunnel.sh
+#
+# Expunem DOAR :3001 (Mission Control Next.js). Proxy-ul lui server-side vorbește cu
+# orchestratorul pe :4001 localhost → api_token-ul nu ajunge niciodată public.
+# Auth: Cloudflare Zero Trust → Access → Self-hosted App → politică pe email-ul tău.
+
+tunnel: TUNNEL_ID_AICI
+credentials-file: /Users/USER/.cloudflared/TUNNEL_ID_AICI.json
+
+ingress:
+  - hostname: kage.exemplu.ro
+    service: http://localhost:3001
+  # tot restul → 404 (nu expune alte porturi accidental)
+  - service: http_status:404

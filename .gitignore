@@ -1,5 +1,6 @@
 kage_config.json
 ntfy_config.json
+cloudflare_tunnel.yaml
 .env
 
 .venv/
