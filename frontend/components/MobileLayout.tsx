@@ -15,10 +15,12 @@ export function MobileLayout({
   state,
   conn,
   onOpenChat,
+  onOpenTask,
 }: {
   state: MissionState;
   conn: ConnState;
   onOpenChat: () => void;
+  onOpenTask: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(state.approvals.length > 0 ? "approvals" : "agents");
   const live = conn === "live";
@@ -35,7 +37,8 @@ export function MobileLayout({
         <span style={{ marginLeft: "auto", fontFamily: T.mono, fontSize: 10.5, color: T.muted }}>
           {state.budget.cloudCalls}/{state.budget.maxCloud} · <b style={{ color: T.text, fontWeight: 500 }}>${state.budget.spentUsd.toFixed(2)}</b>
         </span>
-        <button onClick={onOpenChat} title="Chat" style={{ marginLeft: 4, background: "none", border: `1px solid ${T.border3}`, borderRadius: 8, color: T.muted, fontSize: 13, padding: "3px 8px", cursor: "pointer" }}>⌘</button>
+        <button onClick={onOpenTask} title="Task runner" style={{ marginLeft: 4, background: "none", border: `1px solid ${T.border3}`, borderRadius: 8, color: T.muted, fontSize: 13, padding: "3px 8px", cursor: "pointer" }}>▶</button>
+        <button onClick={onOpenChat} title="Chat" style={{ background: "none", border: `1px solid ${T.border3}`, borderRadius: 8, color: T.muted, fontSize: 13, padding: "3px 8px", cursor: "pointer" }}>⌘</button>
       </header>
 
       {/* content */}
