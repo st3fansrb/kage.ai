@@ -111,6 +111,39 @@ litellm (:4000)
 Ollama (:11434)   Claude API   Gemini API
 ```
 
+## Remote access (Cloudflare Tunnel)
+
+Reach the Mission Control UI from any device — phone included — with **no VPN and no client
+install on the device**, just a browser. Only port `:3001` (the Next.js Mission Control) is
+exposed; its server-side proxy talks to the orchestrator on `:4001` over localhost, so the
+`api_token` never leaves the machine.
+
+**One-time setup:**
+
+```bash
+brew install cloudflared
+cloudflared tunnel login                        # authorize in browser
+cloudflared tunnel create kage                  # prints TUNNEL_ID + writes credentials file
+cloudflared tunnel route dns kage kage.example.com
+
+cp cloudflare_tunnel.example.yaml cloudflare_tunnel.yaml   # fill in TUNNEL_ID + hostname
+cp frontend/.env.local.example frontend/.env.local         # set KAGE_API_TOKEN
+```
+
+**Auth:** in the Cloudflare dashboard, Zero Trust → Access → Add a self-hosted application
+for the hostname, with a policy allowing only your email (email OTP or Google). Without this,
+the tunnel is publicly reachable.
+
+**Run:**
+
+```bash
+bash scripts/start_frontend.sh   # builds once, serves Mission Control on :3001
+bash scripts/start_tunnel.sh     # starts the Cloudflare tunnel
+```
+
+Then open `https://kage.example.com` on any device. Logs: `.logs/frontend.log`,
+`.logs/tunnel.log`.
+
 ## Troubleshooting
 
 **`is the orchestrator running on :4001?`** — run `bash start_all.sh` first.
