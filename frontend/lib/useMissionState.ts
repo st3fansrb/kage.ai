@@ -26,7 +26,9 @@ export function useMissionState(): { state: MissionState; conn: ConnState } {
         try {
           const msg = JSON.parse(ev.data);
           if (msg.type === "STATE_SNAPSHOT" && msg.snapshot) {
-            setState(msg.snapshot as MissionState);
+            // Merge cu defaults: un backend mai vechi (sau parțial) poate omite chei
+            // (ex. cache/briefing) — fără merge, panourile ar crăpa pe `undefined`.
+            setState({ ...EMPTY_STATE, ...(msg.snapshot as Partial<MissionState>) });
             setConn("live");
           }
         } catch {
