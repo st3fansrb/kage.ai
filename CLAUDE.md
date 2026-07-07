@@ -6,9 +6,11 @@ Ce este și ce face: `docs/DESPRE_KAGE.md`.
 
 ## Structura repo-ului
 
-- Rădăcină: cod (`.py`), UI (`kage.html`), config real+example (`*.json`/`*.yaml` — citite
+- Rădăcină: cod (`.py`), config real+example (`*.json`/`*.yaml` — citite
   de cod din `Path(__file__).parent`, NU le muta), și **doar** lanțul launchd de pornire
   (`launch_kage.sh` → `start_all.sh`; plist-ul instalat le referă — NU le muta).
+- `frontend/` — UI-ul web (Kage Mission Control, Next.js pe `:3001`); a înlocuit `kage.html`
+  la WP10 (retras, `/chat` redirectează la `:3001`). Pornit de `scripts/start_frontend.sh`.
 - `scripts/` — restul scripturilor (`setup.sh`, `start_widget.sh`, `stop_all.sh`,
   `start_litellm.sh`, `start_orchestrator.sh`, `start_all.command`, plist de referință).
   Fiecare își repointează `SCRIPT_DIR`/`DIR` către rădăcină (`/..`).
@@ -44,13 +46,13 @@ Ce este și ce face: `docs/DESPRE_KAGE.md`.
 
 - Teste: `source .venv/bin/activate && pytest`
 - Pornire servicii: `./start_all.sh` · Log: `.logs/orchestrator.log`
-- Health: `curl localhost:4001/health` · UI: `localhost:4001/chat` · Dashboard: `/dashboard`
+- Health: `curl localhost:4001/health` · UI: `localhost:3001` (Mission Control) · Dashboard: `localhost:4001/dashboard`
 
 ## Fișiere cheie
 
 - `orchestrator.py` — tot nucleul: rutare 6-tier, cache semantic, memorie, budget, agenți
   (`!run`/`!swarm`/`!sysrun`), scheduler, backup, toate endpoint-urile
 - `risk_hook.py` — PreToolUse hook (matricea de risc) · `risk_settings.json` — matcher hooks
-- `telegram_gateway.py` — gateway Telegram (polling) · `kage.html` — UI web servit la `/chat`
+- `telegram_gateway.py` — gateway Telegram (polling) · `frontend/` — UI web Mission Control (Next.js `:3001`)
 - `status_widget.py` — widget menubar (Python 3.12!) · `tests/` — suită pytest
 - `cache_db/` — ChromaDB + `chat_history.db` (SQLite) — date live, nu le șterge

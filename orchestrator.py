@@ -31,7 +31,7 @@ from filelock import FileLock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
+from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
 import telegram_gateway as _tg_module
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
 import mission_runner as _mr
@@ -69,6 +69,8 @@ def _find_cli(name: str) -> str:
 LITELLM_URL  = _cfg.get("litellm_url",  "http://localhost:4000/v1")
 LITELLM_KEY  = _cfg.get("litellm_key",  "sk-orchestrator-local")
 OLLAMA_URL   = _cfg.get("ollama_url",   "http://localhost:11434")
+# WP10: portul UI-ului Mission Control (Next.js). `/chat` (kage.html retras) redirectează aici.
+MISSION_CONTROL_PORT = int(_cfg.get("mission_control_port", 3001))
 VAULT        = Path(_cfg.get("vault_path", str(Path.home() / "Documents" / "KageVault"))).expanduser()
 # WP-B: remote git pentru vault (GitHub privat). Gol = fără push (doar commit local).
 VAULT_GIT_REMOTE = str(_cfg.get("vault_git_remote", "")).strip()
@@ -1097,7 +1099,7 @@ async def api_stats():
 @app.get("/api/config")
 async def api_config():
     """Config non-sensibil pentru UI (WP2): rooturile permise pentru task-uri +
-    cwd-ul implicit, ca task runner-ul din kage.html să ofere un dropdown de cwd."""
+    cwd-ul implicit, ca task runner-ul din Mission Control să ofere un dropdown de cwd."""
     return {
         "allowed_task_roots": [str(r) for r in ALLOWED_TASK_ROOTS],
         "default_task_cwd": _default_task_cwd(),
@@ -1529,20 +1531,12 @@ async def dashboard():
 
 
 @app.get("/chat")
-async def chat_ui():
-    # WP-G1 (D15): token-ul NU se mai injectează în HTML/JS (era vizibil în sursa
-    # paginii). Îl livrăm ca cookie HttpOnly — invizibil pentru JS și pentru
-    # view-source; fetch-urile same-origin din pagină îl trimit automat.
-    kage_path = Path(__file__).parent / "kage.html"
-    html = kage_path.read_text(encoding="utf-8")
-    resp = HTMLResponse(html)
-    token = _get_api_token()
-    if token:
-        resp.set_cookie(
-            "kage_token", token,
-            httponly=True, samesite="strict", path="/", max_age=60 * 60 * 24 * 30,
-        )
-    return resp
+async def chat_ui(request: Request):
+    # WP10: `kage.html` a fost retras — UI-ul e acum Kage Mission Control (Next.js, :3001).
+    # `/chat` rămâne ca redirect ca bookmark-urile/PWA-ul vechi să nu dea 404. Temporar
+    # (307), fiindcă :3001 e un proces separat care poate fi jos. Pe același host, port 3001.
+    host = request.url.hostname or "localhost"
+    return RedirectResponse(url=f"http://{host}:{MISSION_CONTROL_PORT}/", status_code=307)
 
 
 @app.get("/manifest.json")
@@ -4580,7 +4574,7 @@ def _help_response() -> StreamingResponse:
         "",
         "**Tips:** Prefixele se pot combina: `!nocache !best explică-mi X`",
         "  Dashboard: http://localhost:4001/dashboard",
-        "  Chat UI:   http://localhost:4001/chat",
+        "  Mission Control: http://localhost:3001",
     ])
 
     async def generate():

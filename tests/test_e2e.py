@@ -235,15 +235,12 @@ def test_api_stop_endpoint(client, monkeypatch):
     assert "scheduler_paused" in body
 
 
-# ── Test 8 (WP-G1 / D15): /chat NU expune token-ul în HTML; îl pune pe cookie ──
+# ── Test 8 (WP10): kage.html retras — /chat redirectează la Mission Control (:3001) ──
 
-def test_chat_page_hides_token_in_cookie(client, monkeypatch):
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "secret-token-xyz")
-    resp = client.get("/chat")
-    assert resp.status_code == 200
-    # token-ul NU apare în sursa paginii
-    assert "secret-token-xyz" not in resp.text
-    # dar e livrat ca cookie HttpOnly
-    set_cookie = resp.headers.get("set-cookie", "")
-    assert "kage_token=secret-token-xyz" in set_cookie
-    assert "httponly" in set_cookie.lower()
+def test_chat_redirects_to_mission_control(client):
+    resp = client.get("/chat", follow_redirects=False)
+    assert resp.status_code == 307
+    location = resp.headers.get("location", "")
+    assert f":{orchestrator.MISSION_CONTROL_PORT}" in location
+    # nu mai expune token pe cookie (nu mai există pagină HTML de protejat)
+    assert "kage_token" not in resp.headers.get("set-cookie", "")

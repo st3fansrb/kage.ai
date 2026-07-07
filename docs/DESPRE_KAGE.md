@@ -4,7 +4,7 @@
 
 > Task rapid → Qwen local · Task complex → Claude/Gemini · Operație periculoasă → aprobare obligatorie
 
-Rulează self-hosted pe Mac (FastAPI pe `:4001`), expune un API compatibil OpenAI și o interfață web proprie (`kage.html`). E gândit ca alternativă personală la un chat cloud generic — cu control pe cost, pe date și pe execuție.
+Rulează self-hosted pe Mac (FastAPI pe `:4001`), expune un API compatibil OpenAI și o interfață web proprie (Kage Mission Control, Next.js pe `:3001`). E gândit ca alternativă personală la un chat cloud generic — cu control pe cost, pe date și pe execuție.
 
 ---
 
@@ -82,7 +82,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 - **Widget macOS** — buget și status în menubar (rumps).
 
 ### Interfață
-- **`kage.html`** — UI proprie: streaming SSE, badge de tier animat, chips de prefix, panou de aprobări pending, URL relativ (pregătit pentru acces remote).
+- **Kage Mission Control** (`frontend/`, Next.js pe `:3001`) — UI proprie: agent cards live, activity feed, buget/cost, cache/memorie, briefing, inbox de aprobări, chat cu sesiuni persistente (⌘J) și task runner cu dropdown de cwd (⌘K). A înlocuit fostul `kage.html` la WP10.
 - **Dashboard** — statistici live (polling), tab de taskuri programate, tab **Runs** (run ledger: fiecare chat/task cu evenimentele lui — routing, cache, budget, result).
 
 ### Automatizare & operare
@@ -123,7 +123,7 @@ ulterior e rutat la același tier (vot ponderat pe 5 vecini).
 
 **Fișiere cheie:**
 - `orchestrator.py` — aplicația principală FastAPI (rutare, cache, memorie, agenți, backup).
-- `kage.html` — interfața web.
+- `frontend/` — interfața web (Kage Mission Control, Next.js pe `:3001`).
 - `risk_hook.py` — PreToolUse hook cu matricea de risc 3-axis.
 - `telegram_gateway.py` — gateway-ul Telegram.
 - `status_widget.py` — widget-ul macOS.
