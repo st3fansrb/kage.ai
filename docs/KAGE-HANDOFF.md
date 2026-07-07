@@ -718,6 +718,13 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
 
 ### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
 
+**Stare T1 (07.07.2026):** slice 1 (fundația) livrat — pachet `trading/` self-contained:
+`ledger.py` (`trading.db` în `cache_db/`: `experiments`/`paper_trades`/`agent_status`, WAL) +
+`safety.py` (`assert_paper_only` — refuză chei live / `dry_run:false`; e apărarea programatică
+a criteriului „nicio cale spre ordine reale"). Config `trading` (paper-only, fără chei) în
+`kage_config.example.json`. Teste: `tests/test_trading.py` (+16). Următor: slice 2 = integrare
+freqtrade dry-run (venv propriu) → backtest → ledger.
+
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:
 backtest + hyperopt + dry-run + live prin ccxt; proiectul incipient al lui Stefan = sursă

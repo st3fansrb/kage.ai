@@ -20,6 +20,16 @@
 
   "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local, T4 Gemini), fiindcă executorul SDK e Claude-only. Gol = Sonnet.",
   "mission_default_model": "",
+
+  "_comment_trading": "WP-T faza T1: laborator crypto PAPER-ONLY. NU pune aici chei de exchange live — sistemul nu are cod care să plaseze ordine reale, iar prezența oricărei chei live e refuzată de teste. Doar dry-run/backtest. Promovarea pe bani reali e o decizie manuală, în afara Kage.",
+  "trading": {
+    "enabled": false,
+    "exchange": "binance",
+    "pairs": ["BTC/USDT", "ETH/USDT"],
+    "timeframe": "5m",
+    "dry_run_wallet": 1000,
+    "stake_currency": "USDT"
+  },
   "api_token": "CHANGEME-run: openssl rand -hex 20",
 
   "vault_path": "~/Documents/MyVault",
