@@ -8,6 +8,7 @@ import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { ActivityStream } from "@/components/ActivityStream";
 import { ChatPanel } from "@/components/ChatPanel";
 import { CacheMemoryPanel } from "@/components/CacheMemoryPanel";
+import { BriefingPanel } from "@/components/BriefingPanel";
 import { MobileLayout } from "@/components/MobileLayout";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { T } from "@/lib/tokens";
@@ -95,6 +96,7 @@ export default function MissionControl() {
           <AgentsPanel agents={state.agents} runningCount={state.runningCount} />
           <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 2, display: "flex", flexDirection: "column", gap: 14 }}>
             <ApprovalsPanel approvals={state.approvals} />
+            <BriefingPanel briefing={state.briefing} />
             <CacheMemoryPanel cache={state.cache} />
           </div>
         </div>
