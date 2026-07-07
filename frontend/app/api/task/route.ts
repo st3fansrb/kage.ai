@@ -1,4 +1,4 @@
-// Chat → orchestrator POST /v1/chat/completions (SSE), cu token atașat server-side.
+// Task runner (agent autonom) → orchestrator POST /task/run (SSE), token server-side.
 import { forward } from "@/lib/proxy";
 
 export const runtime = "nodejs";
@@ -6,12 +6,11 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const body = await req.text();
-  const sid = req.headers.get("x-session-id") || "default";
   try {
-    const up = await forward("/v1/chat/completions", {
+    const up = await forward("/task/run", {
       method: "POST",
       body,
-      headers: { Accept: "text/event-stream", "X-Session-Id": sid },
+      headers: { Accept: "text/event-stream" },
     });
     if (!up.body) {
       return new Response(JSON.stringify({ error: `orchestrator ${up.status}` }), {

@@ -7,6 +7,7 @@ import { AgentsPanel } from "@/components/AgentsPanel";
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { ActivityStream } from "@/components/ActivityStream";
 import { ChatPanel } from "@/components/ChatPanel";
+import { TaskPanel } from "@/components/TaskPanel";
 import { CacheMemoryPanel } from "@/components/CacheMemoryPanel";
 import { BriefingPanel } from "@/components/BriefingPanel";
 import { MobileLayout } from "@/components/MobileLayout";
@@ -16,6 +17,7 @@ import { T } from "@/lib/tokens";
 export default function MissionControl() {
   const { state, conn } = useMissionState();
   const [chatOpen, setChatOpen] = useState(false);
+  const [taskOpen, setTaskOpen] = useState(false);
   const isMobile = useIsMobile();
 
   useEffect(() => {
@@ -23,8 +25,17 @@ export default function MissionControl() {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "j") {
         e.preventDefault();
         setChatOpen((o) => !o);
+        setTaskOpen(false);
       }
-      if (e.key === "Escape") setChatOpen(false);
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setTaskOpen((o) => !o);
+        setChatOpen(false);
+      }
+      if (e.key === "Escape") {
+        setChatOpen(false);
+        setTaskOpen(false);
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -33,8 +44,9 @@ export default function MissionControl() {
   if (isMobile) {
     return (
       <>
-        <MobileLayout state={state} conn={conn} onOpenChat={() => setChatOpen(true)} />
+        <MobileLayout state={state} conn={conn} onOpenChat={() => setChatOpen(true)} onOpenTask={() => setTaskOpen(true)} />
         <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+        <TaskPanel open={taskOpen} onClose={() => setTaskOpen(false)} />
       </>
     );
   }
@@ -57,7 +69,28 @@ export default function MissionControl() {
         <div style={{ fontSize: 20, fontWeight: 700, color: T.text, textShadow: "3px 3px 0 rgba(255,106,48,.25)" }}>影</div>
         <div style={{ flex: 1 }} />
         <button
-          onClick={() => setChatOpen((o) => !o)}
+          onClick={() => { setTaskOpen((o) => !o); setChatOpen(false); }}
+          title="Task runner ⌘K"
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 4,
+            width: 48,
+            padding: "8px 0",
+            borderRadius: 12,
+            border: "none",
+            cursor: "pointer",
+            marginBottom: 6,
+            background: taskOpen ? "rgba(236,225,210,.08)" : "none",
+            color: taskOpen ? T.text : T.muted,
+          }}
+        >
+          <span style={{ fontSize: 15, lineHeight: 1 }}>▶</span>
+          <span style={{ fontSize: 8.5, letterSpacing: ".08em", textTransform: "uppercase" }}>task</span>
+        </button>
+        <button
+          onClick={() => { setChatOpen((o) => !o); setTaskOpen(false); }}
           title="Chat ⌘J"
           style={{
             display: "flex",
@@ -103,6 +136,7 @@ export default function MissionControl() {
       </main>
 
       <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+      <TaskPanel open={taskOpen} onClose={() => setTaskOpen(false)} />
     </div>
   );
 }

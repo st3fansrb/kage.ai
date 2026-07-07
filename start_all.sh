@@ -57,6 +57,18 @@ else
   port_up 4001 && echo "  ✓ Orchestrator pornit" || echo "  ✗ Orchestrator — eroare, vezi $LOGS/orchestrator.log"
 fi
 
+# ── Mission Control (Next.js) :3001 ───────────────────────────────────────────
+# UI-ul nou (WP10). Non-fatal: dacă lipsește .env.local sau node, sare fără să oprească restul.
+if [[ "$*" != *"--no-ui"* ]]; then
+  if port_up 3001; then
+    echo "  ✓ Mission Control :3001"
+  elif [[ -f "$DIR/frontend/.env.local" ]] && command -v npm >/dev/null 2>&1; then
+    bash "$DIR/scripts/start_frontend.sh" || true
+  else
+    echo "  ! Mission Control sărit (lipsă frontend/.env.local sau npm) — vezi docs/INSTALL.md"
+  fi
+fi
+
 # ── Browser (indiferent dacă tocmai l-am pornit sau era deja up)
 if [[ "$*" != *"--no-browser"* ]]; then
   echo "  → Deschid http://localhost:4001/chat ..."
