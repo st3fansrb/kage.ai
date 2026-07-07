@@ -7,6 +7,7 @@ import { AgentsPanel } from "@/components/AgentsPanel";
 import { ApprovalsPanel } from "@/components/ApprovalsPanel";
 import { ActivityStream } from "@/components/ActivityStream";
 import { ChatPanel } from "@/components/ChatPanel";
+import { CacheMemoryPanel } from "@/components/CacheMemoryPanel";
 import { MobileLayout } from "@/components/MobileLayout";
 import { useIsMobile } from "@/lib/useIsMobile";
 import { T } from "@/lib/tokens";
@@ -92,8 +93,9 @@ export default function MissionControl() {
         >
           <ActivityStream events={state.activity} />
           <AgentsPanel agents={state.agents} runningCount={state.runningCount} />
-          <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 2 }}>
+          <div style={{ minHeight: 0, overflowY: "auto", paddingRight: 2, display: "flex", flexDirection: "column", gap: 14 }}>
             <ApprovalsPanel approvals={state.approvals} />
+            <CacheMemoryPanel cache={state.cache} />
           </div>
         </div>
       </main>

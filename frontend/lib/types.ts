@@ -40,11 +40,21 @@ export interface ActivityRow {
   costUsd: number | null;
 }
 
+export interface Cache {
+  hits: number;
+  misses: number;
+  hitRate: number | null;
+  entries: number;
+  memories: number;
+  routingExamples: number;
+}
+
 export interface MissionState {
   budget: Budget;
   agents: Agent[];
   approvals: Approval[];
   activity: ActivityRow[];
+  cache: Cache;
   runningCount: number;
 }
 
@@ -53,5 +63,6 @@ export const EMPTY_STATE: MissionState = {
   agents: [],
   approvals: [],
   activity: [],
+  cache: { hits: 0, misses: 0, hitRate: null, entries: 0, memories: 0, routingExamples: 0 },
   runningCount: 0,
 };

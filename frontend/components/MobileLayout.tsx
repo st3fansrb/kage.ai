@@ -6,8 +6,9 @@ import { ConnState } from "@/lib/useMissionState";
 import { T } from "@/lib/tokens";
 import { AgentsPanel } from "./AgentsPanel";
 import { ApprovalsPanel } from "./ApprovalsPanel";
+import { CacheMemoryPanel } from "./CacheMemoryPanel";
 
-type Tab = "approvals" | "agents";
+type Tab = "approvals" | "agents" | "cache";
 
 export function MobileLayout({
   state,
@@ -40,8 +41,10 @@ export function MobileLayout({
       <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 14 }}>
         {tab === "approvals" ? (
           <ApprovalsPanel approvals={state.approvals} />
-        ) : (
+        ) : tab === "agents" ? (
           <AgentsPanel agents={state.agents} runningCount={state.runningCount} />
+        ) : (
+          <CacheMemoryPanel cache={state.cache} />
         )}
       </div>
 
@@ -49,6 +52,7 @@ export function MobileLayout({
       <nav style={{ flex: "none", display: "flex", gap: 6, padding: "8px 12px 14px", borderTop: `1px solid ${T.border}`, background: T.rail }}>
         <TabButton icon="!" label="aprobă" active={tab === "approvals"} badge={state.approvals.length} onClick={() => setTab("approvals")} />
         <TabButton icon="◎" label="agenți" active={tab === "agents"} badge={0} onClick={() => setTab("agents")} />
+        <TabButton icon="⌘" label="cache" active={tab === "cache"} badge={0} onClick={() => setTab("cache")} />
       </nav>
     </div>
   );

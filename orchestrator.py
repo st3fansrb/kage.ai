@@ -1329,6 +1329,20 @@ def _mc_budget() -> dict:
     }
 
 
+def _mc_cache() -> dict:
+    """Panou cache/memorie: hit-rate cache semantic + dimensiunile colecțiilor ChromaDB."""
+    hits, misses = _cache_hits, _cache_misses
+    total = hits + misses
+    return {
+        "hits": hits,
+        "misses": misses,
+        "hitRate": round(hits / total, 3) if total else None,
+        "entries": _cache_collection.count() if _cache_collection else 0,
+        "memories": _memory_collection.count() if _memory_collection else 0,
+        "routingExamples": _routing_collection.count() if _routing_collection else 0,
+    }
+
+
 def _mc_state() -> dict:
     """Starea completă a Mission Control-ului, consumată de frontend prin STATE_SNAPSHOT."""
     runs = _mc_runs()
@@ -1338,6 +1352,7 @@ def _mc_state() -> dict:
         "agents": agents,
         "approvals": _mc_approvals(),
         "activity": _mc_activity(runs),
+        "cache": _mc_cache(),
         "runningCount": sum(1 for a in agents if a["status"] == "running"),
     }
 
