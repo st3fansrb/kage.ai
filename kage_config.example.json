@@ -38,8 +38,9 @@
     "calibration_cron": "0 4 * * 1",
     "openrouter_api_key": "",
     "actor": {
-      "litellm_name": "tier-2-worker",
-      "max_proposals": 3
+      "litellm_name": "trading-actor",
+      "max_proposals": 3,
+      "timeout_s": 900
     },
     "critic": {
       "provider": "openrouter",

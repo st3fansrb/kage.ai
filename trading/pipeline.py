@@ -77,8 +77,11 @@ class NightlyPipeline:
         critic_cfg = trading.get("critic", {}) if isinstance(trading.get("critic"), dict) else {}
         eur_usd = float(config.get("eur_usd_rate", 0.92))
 
+        # Timeout generos: e job nocturn, iar Qwen 35B poate avea cold-start de minute.
+        local_timeout = float(actor_cfg.get("timeout_s", 600))
         actor_model = str(actor_cfg.get("litellm_name", "tier-2-worker"))
-        local = ChatClient(f"{litellm_url}/v1", actor_model, api_key=litellm_key, poster=poster_local)
+        local = ChatClient(f"{litellm_url}/v1", actor_model, api_key=litellm_key,
+                           poster=poster_local, timeout=local_timeout)
         local_chat = local.as_callable(temperature=0.3)
         local_critic_chat = local.as_callable(temperature=0.2)
 
@@ -89,6 +92,7 @@ class NightlyPipeline:
                 str(critic_cfg.get("base_url", "https://openrouter.ai/api/v1")),
                 str(critic_cfg.get("model", "deepseek/deepseek-chat")),
                 api_key=openrouter_key, poster=poster_openrouter,
+                timeout=float(critic_cfg.get("timeout_s", 120)),
             )
             critic_chat = critic_client.as_callable(temperature=0.2)
             budget = ApiBudget(ledger, cap_eur=float(critic_cfg.get("monthly_cap_eur", 7.0)), eur_usd=eur_usd)

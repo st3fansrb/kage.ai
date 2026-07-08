@@ -11,6 +11,7 @@ OpenAI-like fără rețea. Fără dependințe grele — doar stdlib `urllib`.
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
@@ -36,8 +37,16 @@ def _urllib_poster(url: str, headers: dict, payload: dict, timeout: float = 120.
     req = urllib.request.Request(
         url, data=data, headers={**headers, "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Corpul răspunsului de eroare (LiteLLM/OpenRouter îl pun în JSON) — esențial la debugging.
+        try:
+            body = exc.read().decode("utf-8", "replace")[:500]
+        except Exception:
+            body = ""
+        raise LLMError(f"HTTP {exc.code} de la {url}: {body}") from exc
 
 
 class ChatClient:

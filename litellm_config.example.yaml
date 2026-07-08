@@ -9,6 +9,14 @@ model_list:
       model: ollama/KAGE_TIER2_MODEL
       api_base: KAGE_OLLAMA_URL
 
+  # WP-T (opțional): Actorul nocturn — același model ca tier-2, dar cu timeout mare (cold-start
+  # 35B + generare lungă depășesc cei 120s interactivi). Referit de trading.actor.litellm_name.
+  - model_name: trading-actor
+    litellm_params:
+      model: ollama/KAGE_TIER2_MODEL
+      api_base: KAGE_OLLAMA_URL
+      timeout: 900
+
 router_settings:
   num_retries: 2
   timeout: 120
