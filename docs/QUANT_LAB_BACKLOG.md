@@ -42,9 +42,11 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
   `current_drawdown` pe equity paper, `check()` declanșează halt la ≤ −15% + Telegram (injectabil),
   idempotent; `trip/clear/is_halted` în ledger (tabel `killswitch` singleton); `decay_candidates`
   (heuristică). CLI `python -m trading.killswitch`. Ridicarea = manuală. Teste (+8).
-- `[ ]` **2.3 Buget API pentru Critic — AMÂNAT la Etapa 5** (Criticul nu există încă). Prin
-  **OpenRouter** (decizia Stefan), plafon 5–10€/lună, contor cost SQLite; peste plafon ⇒ fallback
-  Qwen 35B local. Se leagă natural când construim Actor→Critic.
+- `[x]` **2.3 Buget API pentru Critic.** ✅ `trading/budget.py` + tabel `api_costs` în ledger:
+  `ApiBudget(cap_eur, eur_usd)` cu `over_budget()`, `record()`, `status()`; `estimate_usd` din
+  tokeni × preț/milion (config `price_per_mtok_in/out`), sau cost real dacă OpenRouter îl întoarce
+  în `usage.cost`. Peste plafon ⇒ Criticul cade pe fallback local (vezi 5.2). Plafon default 7€/lună
+  (interval aprobat 5–10€). Teste în `test_trading_pipeline.py`.
 
 ## Etapa 3 — bucla de context zilnic
 
@@ -75,17 +77,27 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
 
 ## Etapa 5 — Actor–Critic refactorizat + routing LLM
 
-- `[ ]` **5.1 Actor** (Qwen 35B nocturn): ≤3 propuneri/noapte, format impus
-  `{mecanism_cauzal, predictie_cu_interval, criteriu_falsificare, implementare_schita}`;
-  refuză output incomplet. **NU scrie cod de execuție.**
-  **Acceptare:** output ne-conform e respins; propunerile intră ca `hypotheses` pre-înregistrate.
-- `[ ]` **5.2 Critic** (API ieftin, 1 trecere, aprobă ≤1): filtrează plauzibilitatea, întreabă
-  „cine ar arbitra asta imediat?". Nu validează statistic.
-  **Acceptare:** aprobă ≤1/noapte; fallback local la buget depășit; test pe format.
-- `[ ]` **5.3 Pipeline complet nocturn**: Actor → Critic → backtest costuri stresate → validare
-  (Etapa 1) → raport dimineața. **Promovare la paper = MANUALĂ, doar Stefan.**
-  **Acceptare:** un ciclu nocturn complet fără intervenție produce un raport; NIMIC nu se
-  promovează automat; pytest verde; nicio cale spre ordine reale (garda T1).
+- `[x]` **5.1 Actor** (Qwen 35B nocturn). ✅ `trading/actor.py`: `propose`/`register`, format impus
+  `{mecanism_cauzal, predictie_cu_interval, criteriu_falsificare, implementare_schita}`, parser
+  tolerant la fence-uri markdown, `validate_proposal` refuză output incomplet (`ActorFormatError`).
+  **NU scrie cod.** Propunerile valide se pre-înregistrează ca `hypotheses` (invariant #2). Teste (+6).
+- `[x]` **5.2 Critic** (OpenRouter, 1 trecere, aprobă ≤1). ✅ `trading/critic.py`: `critique` aprobă
+  cel mult una (index clamp-uit), înregistrează costul în buget; **peste plafon ⇒ fallback pe
+  `local_chat` (Qwen local), zero cost.** Nu validează statistic (invariant #5). Teste (+5).
+- `[x]` **5.3 Pipeline complet nocturn.** ✅ `trading/pipeline.py` `NightlyPipeline.run_once`:
+  Actor → pre-înregistrare → Critic (≤1) → validare la **costuri stresate** (`trading/costs.py`,
+  slippage dublat) → raport de dimineață. `assert PAPER_ONLY`; `promoted=False` mereu; test confirmă
+  că niciun experiment nu devine `paper` automat. `trading/llm.py` = client chat injectabil. Teste (+2 pipeline).
+
+## Etapa 6 (post-proiect) — audit de utilizare a modelelor
+
+- `[ ]` **6.1 Audit „ce model unde".** La finalul proiectului: inventar al tuturor punctelor unde
+  Kage folosește un model — **local** (Qwen 8B/35B via LiteLLM/Ollama), **Claude prin abonament**
+  (tier-urile Claude, misiuni SDK), **OpenRouter prin API** (Criticul). Pentru fiecare: rol, volum,
+  cost, sensibilitate la calitate. Decide unde merită **upgrade spre calitate** (ex. Criticul pe un
+  model mai bun, sinteza bias pe API în loc de local) și unde local e suficient. Sursă de date:
+  `api_costs` (OpenRouter) + contorul de budget Kage (#7) pentru Claude + rutarea 6-tier din
+  `orchestrator.py`. **Acceptare:** un tabel model×rol×cost×recomandare, decizii de upgrade explicite.
 
 ---
 

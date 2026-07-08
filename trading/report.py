@@ -15,39 +15,51 @@ from __future__ import annotations
 import argparse
 from typing import Optional, Sequence
 
+from trading.costs import stress_pnls
 from trading.ledger import TradingLedger
 from trading.validation import Verdict, classify, sharpe_ratio
 
 
-def _closed_pnls(ledger: TradingLedger, experiment_id: int) -> list[float]:
-    """PnL-urile tranzacțiilor închise ale unui experiment (seria de returns)."""
-    trades = ledger.get_paper_trades(experiment_id=experiment_id, limit=1_000_000)
-    return [t["pnl"] for t in trades if t.get("status") == "closed" and t.get("pnl") is not None]
+def _closed_pnls(ledger: TradingLedger, experiment_id: int, stressed: bool = False) -> list[float]:
+    """PnL-urile tranzacțiilor închise ale unui experiment (seria de returns).
+
+    `stressed=True` aplică costuri stresate (invariant #4: slippage dublat pe noțional).
+    """
+    trades = [t for t in ledger.get_paper_trades(experiment_id=experiment_id, limit=1_000_000)
+              if t.get("status") == "closed" and t.get("pnl") is not None]
+    if stressed:
+        return stress_pnls(trades)
+    return [t["pnl"] for t in trades]
 
 
-def collect_trial_sharpes(ledger: TradingLedger, experiments: Sequence[dict]) -> list[float]:
+def collect_trial_sharpes(
+    ledger: TradingLedger, experiments: Sequence[dict], stressed: bool = False
+) -> list[float]:
     """Sharpe-urile tuturor experimentelor cu serie calculabilă = populația de trial-uri."""
     sharpes: list[float] = []
     for e in experiments:
-        sr = sharpe_ratio(_closed_pnls(ledger, e["id"]))
+        sr = sharpe_ratio(_closed_pnls(ledger, e["id"], stressed=stressed))
         if sr is not None:
             sharpes.append(sr)
     return sharpes
 
 
-def verdicts_for_ledger(ledger: TradingLedger, min_trades: int = 20) -> list[Verdict]:
+def verdicts_for_ledger(
+    ledger: TradingLedger, min_trades: int = 20, stressed: bool = False
+) -> list[Verdict]:
     """Verdict SEMNAL/ZGOMOT/INSUFICIENT pentru fiecare experiment din ledger.
 
     N pentru deflatarea DSR = contorul GLOBAL de trial-uri (invariant #3) dacă e populat;
-    altfel fallback pe numărul de experimente cu Sharpe calculabil.
+    altfel fallback pe numărul de experimente cu Sharpe calculabil. `stressed=True` rulează
+    verdictul pe PnL cu costuri stresate (invariant #4).
     """
     experiments = ledger.get_experiments(limit=1000)
-    trial_sharpes = collect_trial_sharpes(ledger, experiments)
+    trial_sharpes = collect_trial_sharpes(ledger, experiments, stressed=stressed)
     global_trials = ledger.count_trials()
     n_trials = global_trials if global_trials >= len(trial_sharpes) and global_trials > 0 else None
     out: list[Verdict] = []
     for e in experiments:
-        pnls = _closed_pnls(ledger, e["id"])
+        pnls = _closed_pnls(ledger, e["id"], stressed=stressed)
         out.append(classify(
             returns=pnls, trial_sharpes=trial_sharpes, pnls=pnls,
             experiment_id=e["id"], strategy=e["strategy"], min_trades=min_trades,
@@ -91,12 +103,12 @@ def format_report(verdicts: Sequence[Verdict], n_trials: int) -> str:
     return "\n".join(lines)
 
 
-def run(db_path: Optional[str] = None, min_trades: int = 20) -> str:
+def run(db_path: Optional[str] = None, min_trades: int = 20, stressed: bool = False) -> str:
     ledger = TradingLedger(db_path) if db_path else TradingLedger()
     try:
         experiments = ledger.get_experiments(limit=1000)
-        n_trials = len(collect_trial_sharpes(ledger, experiments))
-        verdicts = verdicts_for_ledger(ledger, min_trades=min_trades)
+        n_trials = len(collect_trial_sharpes(ledger, experiments, stressed=stressed))
+        verdicts = verdicts_for_ledger(ledger, min_trades=min_trades, stressed=stressed)
         return format_report(verdicts, n_trials)
     finally:
         ledger.close()
@@ -106,5 +118,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Raport de verdict peste trading.db")
     parser.add_argument("--db", type=str, default=None, help="cale trading.db (default: cache_db/)")
     parser.add_argument("--min-trades", type=int, default=20, help="prag minim de trade-uri")
+    parser.add_argument("--stressed", action="store_true",
+                        help="rulează verdictul pe PnL cu costuri stresate (slippage dublat)")
     args = parser.parse_args()
-    print(run(db_path=args.db, min_trades=args.min_trades))
+    print(run(db_path=args.db, min_trades=args.min_trades, stressed=args.stressed))

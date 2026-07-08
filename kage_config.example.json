@@ -21,7 +21,7 @@
   "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local, T4 Gemini), fiindcă executorul SDK e Claude-only. Gol = Sonnet.",
   "mission_default_model": "",
 
-  "_comment_trading": "WP-T faza T1: laborator crypto PAPER-ONLY. NU pune aici chei de exchange live — sistemul nu are cod care să plaseze ordine reale, iar prezența oricărei chei live e refuzată de teste. Doar dry-run/backtest. Promovarea pe bani reali e o decizie manuală, în afara Kage. Slice 2: freqtrade rulează într-un venv separat (.trading-venv) ca subprocess.",
+  "_comment_trading": "WP-T faza T1: laborator crypto PAPER-ONLY. NU pune aici chei de exchange live — sistemul nu are cod care să plaseze ordine reale, iar prezența oricărei chei live e refuzată de teste. Doar dry-run/backtest. Promovarea pe bani reali e o decizie manuală, în afara Kage. Slice 2: freqtrade rulează într-un venv separat (.trading-venv) ca subprocess. Etapa 5: bucla nocturnă Actor→Critic (trading/pipeline.py) — Actorul (Qwen local) propune ipoteze pre-înregistrate (NU cod), Criticul (OpenRouter, buget-gated) aprobă ≤1, apoi validare la costuri stresate. openrouter_api_key = cheie OpenRouter (secret — pune-o DOAR în kage_config.json, nu aici); gol ⇒ Criticul rulează pe fallback local.",
   "trading": {
     "enabled": false,
     "exchange": "binance",
@@ -31,7 +31,21 @@
     "stake_currency": "USDT",
     "freqtrade_venv": ".trading-venv",
     "backtest_days": 90,
-    "fee_rate": 0.001
+    "fee_rate": 0.001,
+    "openrouter_api_key": "",
+    "actor": {
+      "litellm_name": "tier-2-worker",
+      "max_proposals": 3
+    },
+    "critic": {
+      "provider": "openrouter",
+      "base_url": "https://openrouter.ai/api/v1",
+      "model": "deepseek/deepseek-chat",
+      "monthly_cap_eur": 7,
+      "price_per_mtok_in": 0.14,
+      "price_per_mtok_out": 0.28,
+      "fallback_local": true
+    }
   },
   "api_token": "CHANGEME-run: openssl rand -hex 20",
 

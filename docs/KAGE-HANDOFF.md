@@ -751,9 +751,18 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
   `trading/hypotheses.py` — predicție fără ipoteză pre-înregistrată/temporal validă = refuzată,
   invariant #2), **calibrare** (`calibration.py`: Brier + coverage), **baseline** (`validation.
   signal_moves_distribution` KS+permutation) + `event_study`. Teste +10.
-- **Următor:** Etapa 5 — Actor→Critic prin **OpenRouter** (înlocuiește `nocturnal.py`): Actorul
-  propune ipoteze pre-înregistrate (format impus, NU cod), Criticul (OpenRouter, buget 2.3)
-  aprobă ≤1, apoi backtest costuri stresate → validare (Etapa 1) → raport. Promovare = manuală.
+- **Etapa 5 LIVRATĂ (WP-T COMPLET):** bucla nocturnă **Actor→Critic→Validare** înlocuiește
+  `nocturnal.py` naiv. `trading/actor.py` (Qwen local, ≤3 ipoteze în format impus, NU cod,
+  pre-înregistrate — invariant #1+#2), `trading/critic.py` (OpenRouter, aprobă ≤1, **buget-gated**
+  cu fallback local), `trading/budget.py` + tabel `api_costs` (**2.3**: plafon 7€/lună, contor cost),
+  `trading/llm.py` (client chat injectabil), `trading/costs.py` (**costuri stresate**, slippage
+  dublat — invariant #4, cuplat în `report.py --stressed`), `trading/pipeline.py`
+  (`NightlyPipeline.run_once` → raport de dimineață; `promoted=False` mereu, **zero auto-promovare**).
+  Config: bloc `trading.actor`/`trading.critic` + `openrouter_api_key` (secret). Teste +19 → **suita 350 verzi**.
+- **Următor (post-proiect):** Etapa 6 — **audit de utilizare a modelelor** (local / Claude abonament /
+  OpenRouter API): inventar rol×volum×cost×sensibilitate la calitate → decizii de upgrade spre calitate
+  unde merită. Sursa de cost OpenRouter = `api_costs`. Mic rămas: apel `bias_allows` în `SampleStrategy`
+  (gitignored), cablare scheduler pentru calibrare/pipeline nocturn (la integrarea supervisor Kage).
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:

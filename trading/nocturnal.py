@@ -5,9 +5,9 @@ Neutralizată la reorientarea Quant Lab (vezi `docs/QUANT_LAB_DESIGN.md`): aceas
 execuția) și selectează pe **profit in-sample maxim**, fără validare statistică / contor de
 trial-uri (invariant #3/#5) → overfitting garantat.
 
-Rămâne în repo doar ca referință. Rularea e blocată (guard în `run()` + `__main__`); se
-înlocuiește cu pipeline-ul Actor→Critic→Validare (QUANT_LAB_BACKLOG.md, Etapa 5). Pentru a o
-rula totuși (nerecomandat), pasează `--force-legacy`.
+Rămâne în repo doar ca referință. Rularea e blocată (guard în `run()` + `__main__`); a fost
+ÎNLOCUITĂ de `trading/pipeline.py` (`NightlyPipeline` — Actor→Critic→Validare, Etapa 5). Pentru
+a o rula totuși (nerecomandat), pasează `--force-legacy`.
 """
 
 import argparse

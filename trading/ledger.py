@@ -140,6 +140,21 @@ CREATE TABLE IF NOT EXISTS predictions (
     FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(id)
 );
 CREATE INDEX IF NOT EXISTS idx_pred_hyp ON predictions(hypothesis_id);
+
+-- Contor de cost API (Etapa 2.3 + 5): fiecare apel plătit (Criticul prin OpenRouter) scrie un
+-- rând. Agregat pe lună (`month`=YYYY-MM) pentru gardă de buget. Zero LLM aici — pură contabilitate.
+CREATE TABLE IF NOT EXISTS api_costs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider          TEXT NOT NULL DEFAULT 'openrouter',
+    model             TEXT NOT NULL,
+    role              TEXT,                          -- critic | actor | other
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    usd               REAL NOT NULL DEFAULT 0.0,
+    month             TEXT NOT NULL,                 -- YYYY-MM (agregare rapidă)
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_apicost_month ON api_costs(month);
 """
 
 
@@ -461,6 +476,37 @@ class TradingLedger:
         cur = self.conn.execute(
             f"SELECT * FROM predictions{where} ORDER BY id DESC LIMIT ?", tuple(params))
         return [self._pred_row(r) for r in cur.fetchall()]
+
+    # ── api_costs (buget Critic — Etapa 2.3 + 5) ─────────────────────────────
+    def record_api_cost(
+        self, model: str, usd: float, provider: str = "openrouter",
+        role: Optional[str] = None, prompt_tokens: int = 0, completion_tokens: int = 0,
+    ) -> int:
+        """Înregistrează costul unui apel API plătit. `month` = luna curentă (YYYY-MM)."""
+        month = time.strftime("%Y-%m", time.localtime())
+        cur = self.conn.execute(
+            "INSERT INTO api_costs (provider, model, role, prompt_tokens, completion_tokens, "
+            "usd, month, created_at) VALUES (?,?,?,?,?,?,?,?)",
+            (provider, model, role, int(prompt_tokens), int(completion_tokens),
+             float(usd), month, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def api_cost_sum(self, month: Optional[str] = None) -> float:
+        """Suma costurilor (USD) pe o lună (default: toate)."""
+        if month:
+            row = self.conn.execute(
+                "SELECT COALESCE(SUM(usd), 0.0) FROM api_costs WHERE month=?", (month,)
+            ).fetchone()
+        else:
+            row = self.conn.execute("SELECT COALESCE(SUM(usd), 0.0) FROM api_costs").fetchone()
+        return float(row[0])
+
+    def get_api_costs(self, limit: int = 200) -> list[dict]:
+        limit = max(1, min(int(limit), 5000))
+        cur = self.conn.execute("SELECT * FROM api_costs ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
 
     def close(self) -> None:
         self.conn.close()

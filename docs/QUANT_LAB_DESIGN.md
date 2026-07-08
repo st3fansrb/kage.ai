@@ -144,6 +144,10 @@ concurente. Deci:
   Kage); jobul refuză să pornească peste plafon → fallback pe Qwen 35B local.
 - Fallback: dacă API-ul pică, Criticul rulează pe Qwen 35B nocturn (calitate mai slabă acceptată,
   bucla nu moare). Watchdog termic/timp + `caffeinate` + limită de tokens/rulare.
+- **Audit de utilizare a modelelor (post-proiect, Etapa 6 în backlog):** la final, inventariem
+  fiecare punct unde Kage folosește un model — local (Qwen), Claude prin abonament, OpenRouter prin
+  API — cu rol/volum/cost/sensibilitate la calitate, și decidem explicit unde merită **upgrade spre
+  calitate**. Contorul `api_costs` (implementat la 2.3) e sursa de cost pentru partea OpenRouter.
 
 ## 8. Decizii open-source („nu reinventăm roata")
 
