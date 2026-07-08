@@ -759,10 +759,24 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
   dublat — invariant #4, cuplat în `report.py --stressed`), `trading/pipeline.py`
   (`NightlyPipeline.run_once` → raport de dimineață; `promoted=False` mereu, **zero auto-promovare**).
   Config: bloc `trading.actor`/`trading.critic` + `openrouter_api_key` (secret). Teste +19 → **suita 350 verzi**.
-- **Următor (post-proiect):** Etapa 6 — **audit de utilizare a modelelor** (local / Claude abonament /
-  OpenRouter API): inventar rol×volum×cost×sensibilitate la calitate → decizii de upgrade spre calitate
-  unde merită. Sursa de cost OpenRouter = `api_costs`. Mic rămas: apel `bias_allows` în `SampleStrategy`
-  (gitignored), cablare scheduler pentru calibrare/pipeline nocturn (la integrarea supervisor Kage).
+- **Integrare LIVRATĂ (08.07.2026):** cele 3 bucle + calibrarea sunt cablate în scheduler-ul
+  orchestratorului (`orchestrator.py`, activate doar când `trading.enabled`): kill-switch (`*/5`),
+  context zilnic (`0 6`), research nocturn Actor→Critic (`0 3`), calibrare (`0 4 * * 1`). Trigger
+  manual: `POST /admin/trading/{killswitch|context|nightly|calibration}`. `NightlyPipeline.from_config`
+  construiește clienții LLM din config (fără cheie OpenRouter ⇒ Criticul rulează local). Raportul
+  nocturn merge pe Telegram via `_notify`. Rămâne: **daemonul freqtrade dry-run** (Bucla 1 execuție,
+  proces separat, cere `.trading-venv`) + `bias_allows` în `SampleStrategy` (fișier gitignored).
+- **BUG fundație reparat (08.07.2026):** `runner.backtest_to_ledger` înregistra `amount=stake_amount`
+  (noțional USDT), dar `close_paper_trade` face `pnl=(exit−entry)×amount` → pnl umflat cu ~prețul de
+  intrare (kill-switch raporta −126685%). Fix: `amount` = cantitatea în bază (freqtrade `amount`, sau
+  `stake/entry`); fee absolut = `stake×ratie`. Test de regresie în `test_trading.py`. **Datele vechi
+  (305 paper_trades din rulările nocturnal naive) rămân pe scara greșită — decizie de curățare la Stefan.**
+
+**Cross-cutting (Kage-global, post-proiect): audit de utilizare a modelelor.** Inventar al tuturor
+punctelor unde Kage folosește un model — **local** (Qwen via LiteLLM/Ollama), **Claude prin abonament**
+(tier-urile Claude + misiuni SDK), **OpenRouter prin API** (Criticul WP-T) — cu rol×volum×cost×
+sensibilitate la calitate, și decizii explicite de **upgrade spre calitate** unde merită. Surse de cost:
+`trading.api_costs` (OpenRouter) + contorul budget #7 (Claude) + rutarea 6-tier din `orchestrator.py`.
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:

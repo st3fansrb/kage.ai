@@ -32,6 +32,10 @@
     "freqtrade_venv": ".trading-venv",
     "backtest_days": 90,
     "fee_rate": 0.001,
+    "killswitch_cron": "*/5 * * * *",
+    "daily_context_cron": "0 6 * * *",
+    "nightly_cron": "0 3 * * *",
+    "calibration_cron": "0 4 * * 1",
     "openrouter_api_key": "",
     "actor": {
       "litellm_name": "tier-2-worker",

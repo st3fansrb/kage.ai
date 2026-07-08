@@ -408,23 +408,31 @@ class FreqtradeRunner:
         logger.info("Experiment %d creat: %s pe %s", exp_id, exp.strategy, pair_str)
 
         # Scrie tranzacțiile individuale ca paper_trades (virtuale).
+        # IMPORTANT (unități): `close_paper_trade` calculează pnl = (exit−entry)×amount, deci
+        # `amount` TREBUIE să fie cantitatea în BAZĂ (ETH/BTC), nu stake-ul noțional în USDT.
+        # freqtrade dă ambele: `amount` (bază) și `stake_amount` (noțional). Folosim baza; dacă
+        # lipsește, o derivăm din stake/preț. Fee-ul se trece ABSOLUT (ratie freqtrade × noțional).
         trades = result.get("trades_detail", [])
         for trade in trades:
             pair = trade.get("pair", pair_str)
             side = "long" if trade.get("is_short") is not True else "short"
             entry_price = float(trade.get("open_rate", 0.0))
             exit_price = float(trade.get("close_rate", 0.0))
-            amount = float(trade.get("stake_amount", 0.0))
-            fee = float(trade.get("fee_open", 0.0)) + float(trade.get("fee_close", 0.0))
+            stake = float(trade.get("stake_amount", 0.0))
+            base_qty = float(trade.get("amount", 0.0))
+            if base_qty <= 0 and entry_price > 0:
+                base_qty = stake / entry_price  # fallback: derivă cantitatea din noțional
+            fee_ratio = float(trade.get("fee_open", 0.0)) + float(trade.get("fee_close", 0.0))
+            fee_abs = stake * fee_ratio
 
-            if entry_price > 0 and amount > 0:
+            if entry_price > 0 and base_qty > 0:
                 trade_id = ledger.record_paper_trade(
                     pair=pair,
                     side=side,
                     entry_price=entry_price,
-                    amount=amount,
+                    amount=base_qty,
                     experiment_id=exp_id,
-                    fee=fee,
+                    fee=fee_abs,
                     entry_ts=trade.get("open_date"),
                 )
                 if exit_price > 0:

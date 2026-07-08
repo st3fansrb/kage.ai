@@ -89,15 +89,8 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
   slippage dublat) → raport de dimineață. `assert PAPER_ONLY`; `promoted=False` mereu; test confirmă
   că niciun experiment nu devine `paper` automat. `trading/llm.py` = client chat injectabil. Teste (+2 pipeline).
 
-## Etapa 6 (post-proiect) — audit de utilizare a modelelor
-
-- `[ ]` **6.1 Audit „ce model unde".** La finalul proiectului: inventar al tuturor punctelor unde
-  Kage folosește un model — **local** (Qwen 8B/35B via LiteLLM/Ollama), **Claude prin abonament**
-  (tier-urile Claude, misiuni SDK), **OpenRouter prin API** (Criticul). Pentru fiecare: rol, volum,
-  cost, sensibilitate la calitate. Decide unde merită **upgrade spre calitate** (ex. Criticul pe un
-  model mai bun, sinteza bias pe API în loc de local) și unde local e suficient. Sursă de date:
-  `api_costs` (OpenRouter) + contorul de budget Kage (#7) pentru Claude + rutarea 6-tier din
-  `orchestrator.py`. **Acceptare:** un tabel model×rol×cost×recomandare, decizii de upgrade explicite.
+> **Notă:** ideea de *audit de utilizare a modelelor* (local / Claude abonament / OpenRouter) e o
+> preocupare Kage-globală, NU parte din WP-T. E notată în `KAGE-HANDOFF.md` (item cross-cutting).
 
 ---
 

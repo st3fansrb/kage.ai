@@ -220,6 +220,49 @@ def test_pipeline_full_cycle_no_autopromote(ledger):
     assert b.spend_usd() > 0
 
 
+def test_pipeline_from_config_openrouter(ledger):
+    """from_config: cu cheie OpenRouter → Critic pe OpenRouter + buget; posteri injectați."""
+    def local_poster(url, headers, payload):
+        return {"model": "qwen35b", "choices": [{"message": {"content": _GOOD_PROPOSALS}}], "usage": {}}
+
+    def or_poster(url, headers, payload):
+        return {"model": "deepseek", "choices": [{"message": {"content": _APPROVE_0}}],
+                "usage": {"prompt_tokens": 400, "completion_tokens": 80}}
+
+    cfg = {
+        "eur_usd_rate": 0.9,
+        "providers": {"litellm_url": "http://localhost:4000", "litellm_key": "sk-x"},
+        "trading": {
+            "openrouter_api_key": "sk-or-test",
+            "actor": {"litellm_name": "tier-2-worker", "max_proposals": 2},
+            "critic": {"base_url": "https://openrouter.ai/api/v1", "model": "deepseek/deepseek-chat",
+                       "monthly_cap_eur": 7, "price_per_mtok_in": 0.14, "price_per_mtok_out": 0.28},
+        },
+    }
+    pipe = NightlyPipeline.from_config(cfg, ledger, poster_local=local_poster, poster_openrouter=or_poster)
+    assert pipe.budget is not None and pipe.default_n_max == 2
+    out = pipe.run_once(regime="bear")
+    assert out["approved_index"] == 0
+    assert pipe.budget.spend_usd() > 0   # OpenRouter → cost înregistrat
+
+
+def test_pipeline_from_config_no_key_runs_local(ledger):
+    """from_config fără cheie OpenRouter → Criticul rulează local, fără buget/cost."""
+    def local_poster(url, headers, payload):
+        # Actor primește propuneri; Criticul (tot local) primește o aprobare.
+        # Criticul cere „approved_index" (ascii) în instrucțiune → marker de rutare.
+        content = _APPROVE_0 if "approved_index" in json.dumps(payload) else _GOOD_PROPOSALS
+        return {"model": "qwen35b", "choices": [{"message": {"content": content}}], "usage": {}}
+
+    cfg = {"providers": {"litellm_url": "http://localhost:4000"},
+           "trading": {"openrouter_api_key": "", "actor": {"litellm_name": "tier-2-worker"}}}
+    pipe = NightlyPipeline.from_config(cfg, ledger, poster_local=local_poster)
+    assert pipe.budget is None
+    out = pipe.run_once(regime="bull")
+    assert out["critic"]["cost_usd"] == 0.0
+    assert len(ledger.get_hypotheses()) == 2
+
+
 def test_pipeline_fallback_when_over_budget(ledger):
     b = ApiBudget(ledger, cap_eur=1.0, eur_usd=1.0)
     b.record(model="m", usd=5.0)  # depășit

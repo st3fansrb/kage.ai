@@ -409,6 +409,29 @@ class TestBacktestToLedger:
         exp = ledger.get_experiments()[0]
         assert exp["mission_id"] == "nightly-2026-07-07"
 
+    def test_pnl_scale_uses_base_quantity(self, ledger):
+        """Regresie: pnl trebuie calculat pe CANTITATEA în bază, nu pe stake-ul noțional.
+
+        Un stake de 100 USDT în BTC la 40000→40800 (+2%) trebuie să dea pnl ≈ +2 USDT
+        (100 × 0.02), NU +80000 (stake × Δpreț). fee_abs = stake × ratie.
+        """
+        result = {
+            "strategy": "S", "total_trades": 1,
+            "trades_detail": [{
+                "pair": "BTC/USDT", "is_short": False,
+                "open_rate": 40000.0, "close_rate": 40800.0,
+                "amount": 0.0025, "stake_amount": 100.0,     # 0.0025 BTC = 100 USDT noțional
+                "fee_open": 0.0005, "fee_close": 0.0005,       # 0.1% total
+                "open_date": "2026-04-15 10:00:00", "close_date": "2026-04-15 12:30:00",
+            }],
+            "pairs": [{"pair": "BTC/USDT", "trades": 1, "profit_total_abs": 2.0}],
+        }
+        exp_id = FreqtradeRunner.backtest_to_ledger(result, ledger)
+        t = ledger.get_paper_trades(experiment_id=exp_id)[0]
+        # pnl = (40800−40000)×0.0025 − 100×0.001 = 2.0 − 0.1 = 1.9
+        assert t["pnl"] == pytest.approx(1.9)
+        assert abs(t["pnl"]) < 100         # pe scara stake-ului, nu ×preț
+
 
 class TestRunnerCommands:
     """Verificarea comenzilor construite (fără a rula freqtrade real)."""
