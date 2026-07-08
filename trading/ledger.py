@@ -100,6 +100,18 @@ CREATE TABLE IF NOT EXISTS killswitch (
     tripped_at TEXT,
     cleared_at TEXT
 );
+
+-- Context zilnic (bucla 2): regim + bias direcțional (clasificare NON-LLM). Bucla de execuție
+-- citește `bias` ca LIMITATOR. Un rând pe zi (upsert pe date).
+CREATE TABLE IF NOT EXISTS daily_context (
+    date       TEXT PRIMARY KEY,               -- YYYY-MM-DD
+    regime     TEXT NOT NULL,
+    bias       TEXT NOT NULL,                  -- long_only | short_only | neutral | flat
+    confidence REAL NOT NULL DEFAULT 0.0,
+    reasoning  TEXT,
+    features   TEXT NOT NULL DEFAULT '{}',     -- JSON: vol, trend, funding, OI…
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -300,6 +312,38 @@ class TradingLedger:
     def killswitch_state(self) -> dict:
         row = self.conn.execute("SELECT * FROM killswitch WHERE id=1").fetchone()
         return dict(row) if row else {"halted": 0}
+
+    # ── daily_context (bucla 2 — regim + bias) ───────────────────────────────
+    def upsert_daily_context(
+        self, date: str, regime: str, bias: str, confidence: float = 0.0,
+        reasoning: Optional[str] = None, features: Optional[dict] = None,
+    ) -> None:
+        """Scrie/actualizează contextul zilei (un rând per dată)."""
+        self.conn.execute(
+            "INSERT INTO daily_context (date, regime, bias, confidence, reasoning, features, created_at) "
+            "VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(date) DO UPDATE SET regime=excluded.regime, bias=excluded.bias, "
+            "confidence=excluded.confidence, reasoning=excluded.reasoning, features=excluded.features",
+            (date, regime, bias, float(confidence), reasoning,
+             json.dumps(features or {}, ensure_ascii=False), _now()),
+        )
+        self.conn.commit()
+
+    def get_daily_context(self, date: Optional[str] = None) -> Optional[dict]:
+        """Contextul unei zile (default: cel mai recent). None dacă nu există."""
+        if date:
+            row = self.conn.execute("SELECT * FROM daily_context WHERE date=?", (date,)).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT * FROM daily_context ORDER BY date DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        d = dict(row)
+        try:
+            d["features"] = json.loads(d["features"]) if d.get("features") else {}
+        except (json.JSONDecodeError, TypeError):
+            d["features"] = {}
+        return d
 
     def close(self) -> None:
         self.conn.close()

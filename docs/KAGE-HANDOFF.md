@@ -743,8 +743,12 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
 - **Etapa 2 (2.1+2.2) LIVRATĂ:** contor global de trial-uri (`trials`, folosit de DSR) +
   **kill-switch determinist** (`trading/killswitch.py`, −15% drawdown, halt+Telegram, ridicare
   manuală, zero LLM). 2.3 (buget OpenRouter) amânat la Etapa 5 (Criticul nu există încă).
-- **Următor:** Etapa 3 (context zilnic: funding/OI + regime HMM + `daily_context.json`) sau
-  Etapa 4 (registru de ipoteze + calibrare).
+- **Etapa 3 LIVRATĂ:** bucla de context zilnic — `market_data.py` (funding/OI/klines Binance +
+  circuit breaker), `regime.py` (regim + bias NON-LLM: vol realizată + trend EMA200, rule-based;
+  HMM ca upgrade viitor), `daily_context.py` (scrie `daily_context.json` + tabel `daily_context`;
+  `bias_allows(side)` = limitatorul pentru strategii). Teste +11.
+- **Următor:** Etapa 4 (registru de ipoteze cu pre-înregistrare + calibrare) sau Etapa 5
+  (Actor→Critic prin OpenRouter, înlocuiește nocturnal + buget 2.3).
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:

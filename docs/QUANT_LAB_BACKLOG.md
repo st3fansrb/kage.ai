@@ -48,16 +48,17 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
 
 ## Etapa 3 — bucla de context zilnic
 
-- `[ ]` **3.1 Ingestie date derivate.** funding rate + open interest (Binance native, gratis;
-  Coinalyze fallback) prin provider cu circuit breaker (pattern-ul Ollama). Rate-limiting politicos.
-  **Acceptare:** o citire/zi scrisă în `daily_context.features_json`; un provider căzut nu
-  omoară pipeline-ul (test cu mock).
-- `[ ]` **3.2 Regime detection NON-LLM.** HMM (hmmlearn sau statsmodels) pe volatilitate realizată
-  + filtru trend (preț vs EMA200 daily) → `{regime, bias, confidence}`.
-  **Acceptare:** clasificare reproductibilă pe date istorice; NICIUN apel LLM în calea de clasificare.
-- `[ ]` **3.3 `daily_context.json` + limitator freqtrade.** LLM opțional sintetizează JSON strict;
-  bucla 1 citește `bias` ca limitator (bias=short_only ⇒ long nu deschide).
-  **Acceptare:** fișier + rând DB zilnic; test că bias-ul chiar blochează direcția opusă în strategie.
+- `[x]` **3.1 Ingestie date derivate.** ✅ `trading/market_data.py` — funding + OI + klines zilnice
+  de la Binance public, provider cu **circuit breaker** (fetcher injectabil, rate-limiting). Un
+  endpoint căzut → None, nu crapă. Teste cu mock.
+- `[x]` **3.2 Regime detection NON-LLM.** ✅ `trading/regime.py` — volatilitate realizată + trend
+  EMA200 → `{regime, bias, confidence}`, rule-based self-contained (numpy), deterministă. `flat` la
+  spike real (vol ×2 peste tipic), nu la percentila 90. **Upgrade HMM** documentat (aceeași
+  interfață) — hmmlearn evitat acum (posibil nementenat + risc de dependințe).
+- `[x]` **3.3 `daily_context.json` + limitator freqtrade.** ✅ `trading/daily_context.py` — scrie
+  JSON + rând `daily_context` (ledger); `bias_allows(side)` = contractul pe care strategiile îl
+  cheamă în `populate_entry_trend` (short_only ⇒ long nu deschide). Provider jos ⇒ nu suprascrie.
+  Teste (+11 pe Etapa 3). *Rămas mic:* apelul `bias_allows` în `SampleStrategy` (fișier gitignored).
 
 ## Etapa 4 — registrul de ipoteze + calibrare
 
