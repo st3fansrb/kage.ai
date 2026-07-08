@@ -201,6 +201,61 @@ def pbo_cscv(returns_matrix: np.ndarray, n_splits: int = 16, seed: Optional[int]
     return float((np.asarray(logits) <= 0).mean())
 
 
+# ── baseline condiționat & event study (Etapa 4.3) ────────────────────────────
+def ks_statistic(a: Sequence[float], b: Sequence[float]) -> Optional[float]:
+    """Statistica Kolmogorov–Smirnov = max|CDF_a − CDF_b| (distanța dintre distribuții)."""
+    x, y = np.sort(np.asarray(a, float)), np.sort(np.asarray(b, float))
+    if x.size == 0 or y.size == 0:
+        return None
+    allv = np.concatenate([x, y])
+    cdf_x = np.searchsorted(x, allv, side="right") / x.size
+    cdf_y = np.searchsorted(y, allv, side="right") / y.size
+    return float(np.max(np.abs(cdf_x - cdf_y)))
+
+
+def signal_moves_distribution(
+    signal: Sequence[float], baseline: Sequence[float], n: int = 5000, seed: Optional[int] = 42
+) -> dict:
+    """Semnalul MUTĂ distribuția față de piața necondiționată? KS + permutation p.
+
+    Baseline obligatoriu (spec): dacă distribuția condiționată pe semnal ≈ cea necondiționată,
+    ipoteza pică. p mic ⇒ semnalul chiar mută distribuția.
+    """
+    s, b = np.asarray(signal, float), np.asarray(baseline, float)
+    ks_obs = ks_statistic(s, b)
+    if ks_obs is None:
+        return {"ks": None, "p": None}
+    pooled = np.concatenate([s, b])
+    ns = s.size
+    rng = np.random.default_rng(seed)
+    count = 0
+    for _ in range(n):
+        rng.shuffle(pooled)
+        if (ks_statistic(pooled[:ns], pooled[ns:]) or 0.0) >= ks_obs:
+            count += 1
+    return {"ks": ks_obs, "p": float(count / n), "n_signal": int(ns), "n_baseline": int(b.size)}
+
+
+def event_study(windows: Sequence[Sequence[float]]) -> Optional[dict]:
+    """Event study: `windows` = matrice (n_evenimente × L) de randamente aliniate la T=0.
+
+    Întoarce randamentul anormal mediu per offset + interval de încredere (±1.96·SE) și
+    randamentul cumulativ mediu. LLM-ul cataloghează evenimentele; aici e doar numpy.
+    """
+    M = np.asarray(windows, dtype=float)
+    if M.ndim != 2 or M.shape[0] < 2:
+        return None
+    n = M.shape[0]
+    mean = M.mean(axis=0)
+    se = M.std(axis=0, ddof=1) / math.sqrt(n)
+    return {
+        "n_events": int(n),
+        "mean_by_offset": [float(x) for x in mean],
+        "ci95_by_offset": [[float(m - 1.96 * s), float(m + 1.96 * s)] for m, s in zip(mean, se)],
+        "cumulative_mean": [float(x) for x in np.cumsum(mean)],
+    }
+
+
 # ── verdict pe un experiment ──────────────────────────────────────────────────
 @dataclass
 class Verdict:

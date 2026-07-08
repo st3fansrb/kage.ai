@@ -112,6 +112,34 @@ CREATE TABLE IF NOT EXISTS daily_context (
     features   TEXT NOT NULL DEFAULT '{}',     -- JSON: vol, trend, funding, OI…
     created_at TEXT NOT NULL
 );
+
+-- Registrul de IPOTEZE (invariant #2: pre-registration). O ipoteză există doar dacă a fost
+-- scrisă AICI înainte de a putea fi verificată. Explicații post-hoc = storytelling, nu intră.
+CREATE TABLE IF NOT EXISTS hypotheses (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    mechanism           TEXT NOT NULL,          -- cine e forțat să facă ce și de ce atunci
+    prediction          TEXT NOT NULL,          -- JSON: {mean, interval_80:[lo,hi], horizon, kind}
+    falsification       TEXT NOT NULL,          -- criteriul care o infirmă
+    status              TEXT NOT NULL DEFAULT 'open',  -- open | confirmed | falsified | expired
+    regime_at_creation  TEXT,
+    source_model        TEXT,
+    pre_registered_at   TEXT NOT NULL,          -- momentul pre-înregistrării (gardă temporală)
+    created_at          TEXT NOT NULL
+);
+
+-- Instanțele de predicție emise sub o ipoteză + rezultatul realizat (pentru calibrare).
+CREATE TABLE IF NOT EXISTS predictions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    hypothesis_id INTEGER NOT NULL,
+    signal_ts     TEXT NOT NULL,                -- momentul semnalului (≥ pre_registered_at)
+    predicted     TEXT NOT NULL,                -- JSON: {value | prob, interval_80:[lo,hi]}
+    realized      TEXT,                         -- JSON: {value} — completat la rezolvare
+    horizon       TEXT,
+    resolved_at   TEXT,
+    created_at    TEXT NOT NULL,
+    FOREIGN KEY (hypothesis_id) REFERENCES hypotheses(id)
+);
+CREATE INDEX IF NOT EXISTS idx_pred_hyp ON predictions(hypothesis_id);
 """
 
 
@@ -344,6 +372,95 @@ class TradingLedger:
         except (json.JSONDecodeError, TypeError):
             d["features"] = {}
         return d
+
+    # ── hypotheses / predictions (registru — invariant #2) ───────────────────
+    def insert_hypothesis(
+        self, mechanism: str, prediction: dict, falsification: str,
+        pre_registered_at: str, regime_at_creation: Optional[str] = None,
+        source_model: Optional[str] = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO hypotheses (mechanism, prediction, falsification, status, "
+            "regime_at_creation, source_model, pre_registered_at, created_at) "
+            "VALUES (?,?,?, 'open', ?,?,?,?)",
+            (mechanism, json.dumps(prediction, ensure_ascii=False), falsification,
+             regime_at_creation, source_model, pre_registered_at, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    @staticmethod
+    def _hyp_row(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        try:
+            d["prediction"] = json.loads(d["prediction"]) if d.get("prediction") else {}
+        except (json.JSONDecodeError, TypeError):
+            d["prediction"] = {}
+        return d
+
+    def get_hypothesis(self, hypothesis_id: int) -> Optional[dict]:
+        row = self.conn.execute("SELECT * FROM hypotheses WHERE id=?", (hypothesis_id,)).fetchone()
+        return self._hyp_row(row) if row else None
+
+    def get_hypotheses(self, status: Optional[str] = None, limit: int = 200) -> list[dict]:
+        limit = max(1, min(int(limit), 2000))
+        if status:
+            cur = self.conn.execute(
+                "SELECT * FROM hypotheses WHERE status=? ORDER BY id DESC LIMIT ?", (status, limit))
+        else:
+            cur = self.conn.execute(
+                "SELECT * FROM hypotheses ORDER BY id DESC LIMIT ?", (limit,))
+        return [self._hyp_row(r) for r in cur.fetchall()]
+
+    def update_hypothesis_status(self, hypothesis_id: int, status: str) -> None:
+        self.conn.execute("UPDATE hypotheses SET status=? WHERE id=?", (status, hypothesis_id))
+        self.conn.commit()
+
+    def insert_prediction(
+        self, hypothesis_id: int, signal_ts: str, predicted: dict, horizon: Optional[str] = None
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO predictions (hypothesis_id, signal_ts, predicted, horizon, created_at) "
+            "VALUES (?,?,?,?,?)",
+            (hypothesis_id, signal_ts, json.dumps(predicted, ensure_ascii=False), horizon, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def resolve_prediction(self, prediction_id: int, realized: dict) -> None:
+        self.conn.execute(
+            "UPDATE predictions SET realized=?, resolved_at=? WHERE id=?",
+            (json.dumps(realized, ensure_ascii=False), _now(), prediction_id),
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _pred_row(r: sqlite3.Row) -> dict:
+        d = dict(r)
+        for k in ("predicted", "realized"):
+            if d.get(k):
+                try:
+                    d[k] = json.loads(d[k])
+                except (json.JSONDecodeError, TypeError):
+                    d[k] = None
+        return d
+
+    def get_predictions(
+        self, hypothesis_id: Optional[int] = None, resolved: Optional[bool] = None, limit: int = 1000
+    ) -> list[dict]:
+        limit = max(1, min(int(limit), 100000))
+        clauses, params = [], []
+        if hypothesis_id is not None:
+            clauses.append("hypothesis_id=?"); params.append(hypothesis_id)
+        if resolved is True:
+            clauses.append("realized IS NOT NULL")
+        elif resolved is False:
+            clauses.append("realized IS NULL")
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        cur = self.conn.execute(
+            f"SELECT * FROM predictions{where} ORDER BY id DESC LIMIT ?", tuple(params))
+        return [self._pred_row(r) for r in cur.fetchall()]
 
     def close(self) -> None:
         self.conn.close()

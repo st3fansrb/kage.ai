@@ -62,14 +62,16 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
 
 ## Etapa 4 — registrul de ipoteze + calibrare
 
-- `[ ]` **4.1 Pre-registration `hypotheses`/`predictions`.** O ipoteză se scrie ÎNAINTE de
-  verificare (invariant #2), cu predicție cuantificată + interval + criteriu de falsificare.
-  **Acceptare:** o predicție fără pre-înregistrare e refuzată de sistem (test).
-- `[ ]` **4.2 Job săptămânal de calibrare.** Brier score, coverage pe intervale, plot predis-vs-realizat.
-  **Acceptare:** raport pe `predictions` cu rezultate realizate; rulează din scheduler.
-- `[ ]` **4.3 Baseline condiționat + event studies.** KS/permutation semnal vs piață; event study
-  [-5,+5] zile pe evenimente discrete (LLM cataloghează, numpy calculează).
-  **Acceptare:** un „semnal" care nu mută distribuția față de baseline pică; event study cu CI.
+- `[x]` **4.1 Pre-registration `hypotheses`/`predictions`.** ✅ tabele + `trading/hypotheses.py`:
+  `register_hypothesis` (predicție cuantificată + interval + criteriu de falsificare validate),
+  `record_prediction` refuză dacă ipoteza nu e pre-înregistrată SAU semnalul e anterior
+  pre-înregistrării (`PreRegistrationError`). `resolve` + `mark_hypothesis`. Teste (+5).
+- `[x]` **4.2 Job de calibrare.** ✅ `trading/calibration.py`: Brier score (probabilistice) +
+  coverage pe intervale 80% peste `predictions` rezolvate; raport text + CLI. Teste (+2).
+  *Rămas:* cablarea în scheduler (job săptămânal) — la integrarea Kage (supervisor).
+- `[x]` **4.3 Baseline condiționat + event studies.** ✅ în `validation.py`:
+  `signal_moves_distribution` (KS + permutation — semnalul trebuie să MUTE distribuția, altfel
+  pică) + `event_study` (randament anormal mediu per offset + CI95). Teste (+3).
 
 ## Etapa 5 — Actor–Critic refactorizat + routing LLM
 

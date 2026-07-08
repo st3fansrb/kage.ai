@@ -747,8 +747,13 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
   circuit breaker), `regime.py` (regim + bias NON-LLM: vol realizată + trend EMA200, rule-based;
   HMM ca upgrade viitor), `daily_context.py` (scrie `daily_context.json` + tabel `daily_context`;
   `bias_allows(side)` = limitatorul pentru strategii). Teste +11.
-- **Următor:** Etapa 4 (registru de ipoteze cu pre-înregistrare + calibrare) sau Etapa 5
-  (Actor→Critic prin OpenRouter, înlocuiește nocturnal + buget 2.3).
+- **Etapa 4 LIVRATĂ:** registru de ipoteze cu **pre-registration** (`hypotheses`/`predictions` +
+  `trading/hypotheses.py` — predicție fără ipoteză pre-înregistrată/temporal validă = refuzată,
+  invariant #2), **calibrare** (`calibration.py`: Brier + coverage), **baseline** (`validation.
+  signal_moves_distribution` KS+permutation) + `event_study`. Teste +10.
+- **Următor:** Etapa 5 — Actor→Critic prin **OpenRouter** (înlocuiește `nocturnal.py`): Actorul
+  propune ipoteze pre-înregistrate (format impus, NU cod), Criticul (OpenRouter, buget 2.3)
+  aprobă ≤1, apoi backtest costuri stresate → validare (Etapa 1) → raport. Promovare = manuală.
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:
