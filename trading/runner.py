@@ -399,6 +399,12 @@ class FreqtradeRunner:
             notes=notes,
         )
         exp_id = ledger.record_experiment(exp)
+        # Contorul global de trial-uri (invariant #3): fiecare backtest se numără. `cost_profile`
+        # rămâne 'nominal' până adăugăm slippage stresat peste freqtrade (care nu-l modelează).
+        ledger.record_trial(
+            kind="backtest", strategy=exp.strategy, cost_profile="nominal",
+            outcome="ok", experiment_id=exp_id,
+        )
         logger.info("Experiment %d creat: %s pe %s", exp_id, exp.strategy, pair_str)
 
         # Scrie tranzacțiile individuale ca paper_trades (virtuale).

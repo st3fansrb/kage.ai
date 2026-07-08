@@ -35,17 +35,16 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
 
 ## Etapa 2 — kill-switch + contor global de trial-uri + bugete
 
-- `[ ]` **2.1 Contor global de trial-uri.** Orice backtest (inclusiv eșec) inserează în `trials`.
-  `runner.py` incrementează înainte de rulare. DSR/PBO citesc de aici. Nimic nu se șterge.
-  **Acceptare:** N backtests ⇒ N rânduri `trials`; DSR folosește `count(trials)`; test.
-- `[ ]` **2.2 Kill-switch determinist.** `trading/killswitch.py` pur Python, cron 5 min: citește
-  ledger, drawdown global paper > prag ⇒ marchează „flat everything" + Telegram. Decay de alocare:
-  strategie sub prag N zile ⇒ alocare → 0.
-  **Acceptare:** test cu drawdown fabricat declanșează flat + notificare; independent de LLM;
-  rulează chiar dacă restul sistemului e jos.
-- `[ ]` **2.3 Buget API pentru Critic.** Refolosește `#7 Budget v2`; contor cost în SQLite;
-  jobul nocturn refuză să pornească peste plafonul lunar aprobat.
-  **Acceptare:** peste plafon ⇒ Critic sare pe fallback local (Qwen 35B), bucla nu moare; test.
+- `[x]` **2.1 Contor global de trial-uri.** ✅ `trials` în ledger; `runner.py` inserează la fiecare
+  backtest (`record_trial`); `report.py`/DSR folosesc `count_trials()` ca N (fallback pe populația
+  de Sharpe-uri). Nimic nu se șterge. Teste: `test_trading_killswitch.py`.
+- `[x]` **2.2 Kill-switch determinist.** ✅ `trading/killswitch.py` pur Python, ZERO LLM:
+  `current_drawdown` pe equity paper, `check()` declanșează halt la ≤ −15% + Telegram (injectabil),
+  idempotent; `trip/clear/is_halted` în ledger (tabel `killswitch` singleton); `decay_candidates`
+  (heuristică). CLI `python -m trading.killswitch`. Ridicarea = manuală. Teste (+8).
+- `[ ]` **2.3 Buget API pentru Critic — AMÂNAT la Etapa 5** (Criticul nu există încă). Prin
+  **OpenRouter** (decizia Stefan), plafon 5–10€/lună, contor cost SQLite; peste plafon ⇒ fallback
+  Qwen 35B local. Se leagă natural când construim Actor→Critic.
 
 ## Etapa 3 — bucla de context zilnic
 

@@ -738,8 +738,13 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
   50 strategii de zgomot pur = ZGOMOT după deflatare).
 - **Decizii Stefan:** Critic prin **OpenRouter** (model ieftin performant, nu Claude direct),
   buget 5–10€/lună; kill-switch −15%; perechi BTC/ETH 5m.
-- **Următor:** Etapa 1.2 (raport verdict peste ledger real) → Etapa 2 (kill-switch + contor
-  global de trial-uri + buget API).
+- **Etapa 1.2 LIVRATĂ:** `trading/report.py` — verdict peste ledger real (CLI `python -m
+  trading.report`). Pe datele actuale: 0 semnale, 2 ZGOMOT (confirmă teza).
+- **Etapa 2 (2.1+2.2) LIVRATĂ:** contor global de trial-uri (`trials`, folosit de DSR) +
+  **kill-switch determinist** (`trading/killswitch.py`, −15% drawdown, halt+Telegram, ridicare
+  manuală, zero LLM). 2.3 (buget OpenRouter) amânat la Etapa 5 (Criticul nu există încă).
+- **Următor:** Etapa 3 (context zilnic: funding/OI + regime HMM + `daily_context.json`) sau
+  Etapa 4 (registru de ipoteze + calibrare).
 
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:

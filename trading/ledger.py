@@ -76,6 +76,30 @@ CREATE TABLE IF NOT EXISTS agent_status (
     message        TEXT,
     updated_at     TEXT NOT NULL
 );
+
+-- Contorul GLOBAL de trial-uri (invariant #3): fiecare backtest rulat vreodată, INCLUSIV
+-- eșecurile, inserează un rând. Nimic nu se șterge. Fără el, Deflated Sharpe/PBO sunt invalide.
+CREATE TABLE IF NOT EXISTS trials (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT NOT NULL DEFAULT 'backtest', -- backtest | hyperopt
+    strategy      TEXT,
+    params_hash   TEXT,
+    cost_profile  TEXT NOT NULL DEFAULT 'stressed', -- stressed | nominal
+    outcome       TEXT NOT NULL DEFAULT 'ok',        -- ok | failed
+    experiment_id INTEGER,                           -- dacă a produs un experiment
+    created_at    TEXT NOT NULL
+);
+
+-- Kill-switch determinist (invariant #6): stare singleton (id=1). Bucla de execuție o citește
+-- ca „flat everything". Pur descriptiv aici — logica e în killswitch.py, zero LLM.
+CREATE TABLE IF NOT EXISTS killswitch (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    halted     INTEGER NOT NULL DEFAULT 0,
+    reason     TEXT,
+    drawdown   REAL,
+    tripped_at TEXT,
+    cleared_at TEXT
+);
 """
 
 
@@ -223,6 +247,59 @@ class TradingLedger:
         else:
             cur = self.conn.execute("SELECT * FROM agent_status ORDER BY agent")
         return [dict(r) for r in cur.fetchall()]
+
+    # ── trials (contorul global — invariant #3) ──────────────────────────────
+    def record_trial(
+        self, kind: str = "backtest", strategy: Optional[str] = None,
+        params_hash: Optional[str] = None, cost_profile: str = "stressed",
+        outcome: str = "ok", experiment_id: Optional[int] = None,
+    ) -> int:
+        """Înregistrează un trial (backtest rulat). SE APELEAZĂ ȘI PE EȘEC (outcome='failed')."""
+        cur = self.conn.execute(
+            "INSERT INTO trials (kind, strategy, params_hash, cost_profile, outcome, "
+            "experiment_id, created_at) VALUES (?,?,?,?,?,?,?)",
+            (kind, strategy, params_hash, cost_profile, outcome, experiment_id, _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def count_trials(self) -> int:
+        """Numărul total de trial-uri rulate vreodată (denominatorul pentru DSR/PBO)."""
+        return int(self.conn.execute("SELECT COUNT(*) FROM trials").fetchone()[0])
+
+    def get_trials(self, limit: int = 200) -> list[dict]:
+        limit = max(1, min(int(limit), 5000))
+        cur = self.conn.execute("SELECT * FROM trials ORDER BY id DESC LIMIT ?", (limit,))
+        return [dict(r) for r in cur.fetchall()]
+
+    # ── kill-switch (invariant #6) ───────────────────────────────────────────
+    def trip_killswitch(self, reason: str, drawdown: Optional[float] = None) -> None:
+        """Declanșează halt-ul (flat everything). Idempotent (upsert singleton id=1)."""
+        self.conn.execute(
+            "INSERT INTO killswitch (id, halted, reason, drawdown, tripped_at, cleared_at) "
+            "VALUES (1, 1, ?, ?, ?, NULL) "
+            "ON CONFLICT(id) DO UPDATE SET halted=1, reason=excluded.reason, "
+            "drawdown=excluded.drawdown, tripped_at=excluded.tripped_at, cleared_at=NULL",
+            (reason, drawdown, _now()),
+        )
+        self.conn.commit()
+
+    def clear_killswitch(self) -> None:
+        """Ridică halt-ul (decizie manuală). Marchează cleared_at."""
+        self.conn.execute(
+            "INSERT INTO killswitch (id, halted, cleared_at) VALUES (1, 0, ?) "
+            "ON CONFLICT(id) DO UPDATE SET halted=0, cleared_at=excluded.cleared_at",
+            (_now(),),
+        )
+        self.conn.commit()
+
+    def is_halted(self) -> bool:
+        row = self.conn.execute("SELECT halted FROM killswitch WHERE id=1").fetchone()
+        return bool(row and row["halted"])
+
+    def killswitch_state(self) -> dict:
+        row = self.conn.execute("SELECT * FROM killswitch WHERE id=1").fetchone()
+        return dict(row) if row else {"halted": 0}
 
     def close(self) -> None:
         self.conn.close()

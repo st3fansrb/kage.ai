@@ -36,15 +36,22 @@ def collect_trial_sharpes(ledger: TradingLedger, experiments: Sequence[dict]) ->
 
 
 def verdicts_for_ledger(ledger: TradingLedger, min_trades: int = 20) -> list[Verdict]:
-    """Verdict SEMNAL/ZGOMOT/INSUFICIENT pentru fiecare experiment din ledger."""
+    """Verdict SEMNAL/ZGOMOT/INSUFICIENT pentru fiecare experiment din ledger.
+
+    N pentru deflatarea DSR = contorul GLOBAL de trial-uri (invariant #3) dacă e populat;
+    altfel fallback pe numărul de experimente cu Sharpe calculabil.
+    """
     experiments = ledger.get_experiments(limit=1000)
     trial_sharpes = collect_trial_sharpes(ledger, experiments)
+    global_trials = ledger.count_trials()
+    n_trials = global_trials if global_trials >= len(trial_sharpes) and global_trials > 0 else None
     out: list[Verdict] = []
     for e in experiments:
         pnls = _closed_pnls(ledger, e["id"])
         out.append(classify(
             returns=pnls, trial_sharpes=trial_sharpes, pnls=pnls,
             experiment_id=e["id"], strategy=e["strategy"], min_trades=min_trades,
+            n_trials=n_trials,
         ))
     return out
 

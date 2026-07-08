@@ -82,14 +82,18 @@ def probabilistic_sharpe_ratio(returns: Sequence[float], sr_benchmark: float = 0
     return float(_NORM.cdf(z))
 
 
-def expected_max_sharpe(trial_sharpes: Sequence[float]) -> Optional[float]:
+def expected_max_sharpe(trial_sharpes: Sequence[float], n_trials: Optional[int] = None) -> Optional[float]:
     """SR0 = Sharpe-ul maxim AȘTEPTAT sub nul, din N trial-uri (López de Prado).
 
     SR0 = √Var(SR)·[ (1−γ)·Φ⁻¹(1−1/N) + γ·Φ⁻¹(1−1/(N·e)) ], γ = Euler–Mascheroni.
+    Varianța se estimează din `trial_sharpes`; `n_trials` (dacă e dat — ex. contorul global,
+    invariant #3) fixează N, care poate fi mai mare decât câte Sharpe-uri sunt calculabile.
     """
     s = np.asarray(trial_sharpes, dtype=float)
     s = s[np.isfinite(s)]
-    N = s.size
+    if s.size < 2:
+        return None
+    N = int(n_trials) if n_trials is not None else s.size
     if N < 2:
         return None
     var_sr = float(s.var(ddof=1))
@@ -100,13 +104,16 @@ def expected_max_sharpe(trial_sharpes: Sequence[float]) -> Optional[float]:
     return float(math.sqrt(var_sr) * ((1.0 - _EULER_GAMMA) * a + _EULER_GAMMA * b))
 
 
-def deflated_sharpe_ratio(returns: Sequence[float], trial_sharpes: Sequence[float]) -> Optional[float]:
+def deflated_sharpe_ratio(
+    returns: Sequence[float], trial_sharpes: Sequence[float], n_trials: Optional[int] = None
+) -> Optional[float]:
     """DSR = PSR(SR0) — probabilitatea ca Sharpe-ul să fie real DUPĂ deflatarea pe N trial-uri.
 
-    `trial_sharpes` = Sharpe-urile TUTUROR încercărilor (invariant #3), inclusiv cea evaluată.
-    DSR < ~0.95 ⇒ nu putem respinge că e produsul selecției pe multe încercări (zgomot).
+    `trial_sharpes` = Sharpe-urile calculabile ale încercărilor (pentru varianță); `n_trials` =
+    contorul GLOBAL (invariant #3), inclusiv eșecurile. DSR < ~0.95 ⇒ nu putem respinge că e
+    produsul selecției pe multe încercări (zgomot).
     """
-    sr0 = expected_max_sharpe(trial_sharpes)
+    sr0 = expected_max_sharpe(trial_sharpes, n_trials=n_trials)
     if sr0 is None:
         return None
     return probabilistic_sharpe_ratio(returns, sr_benchmark=sr0)
@@ -218,6 +225,7 @@ def classify(
     dsr_threshold: float = 0.95,
     perm_threshold: float = 0.05,
     min_trades: int = 20,
+    n_trials: Optional[int] = None,
 ) -> Verdict:
     """Verdict SEMNAL/ZGOMOT/INSUFICIENT pentru un experiment.
 
@@ -229,7 +237,7 @@ def classify(
     reasons: list[str] = []
     sr = sharpe_ratio(r)
     psr0 = probabilistic_sharpe_ratio(r, 0.0)
-    dsr = deflated_sharpe_ratio(r, trial_sharpes)
+    dsr = deflated_sharpe_ratio(r, trial_sharpes, n_trials=n_trials)
     perm = permutation_test(r)
     boot = bootstrap_pnl(pnls if pnls is not None else r)
     prob_profit = boot.get("prob_profit")
@@ -243,7 +251,8 @@ def classify(
         if dsr is None:
             reasons.append("DSR nedefinit (varianță trial-uri sau denom invalid)")
         elif dsr < dsr_threshold:
-            reasons.append(f"DSR={dsr:.3f} < {dsr_threshold} — nu supraviețuiește deflatării pe {len(list(trial_sharpes))} trial-uri")
+            n_eff = n_trials if n_trials is not None else len(list(trial_sharpes))
+            reasons.append(f"DSR={dsr:.3f} < {dsr_threshold} — nu supraviețuiește deflatării pe {n_eff} trial-uri")
         if perm is not None and perm > perm_threshold:
             reasons.append(f"permutation p={perm:.3f} > {perm_threshold} — indistinct de zgomot")
         if verdict == "SEMNAL":
