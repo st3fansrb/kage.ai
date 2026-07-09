@@ -181,7 +181,8 @@ class NightlyPipeline:
                 f"  {mark} [h{hid}] {p.get('mecanism_cauzal', '')[:80]}\n"
                 f"       predicție: {json.dumps(p.get('predictie_cu_interval', {}), ensure_ascii=False)}"
             )
-        crit_src = "LOCAL (buget depășit)" if verdict["fallback_used"] else verdict["model_used"]
+        _reason = {"budget": "LOCAL (buget depășit)", "error": "LOCAL (OpenRouter a picat)"}
+        crit_src = _reason.get(verdict.get("fallback_reason")) if verdict["fallback_used"] else verdict["model_used"]
         lines.append(f"Critic ({crit_src}): {verdict['reasoning'] or '—'}")
         if approved_hyp_id is not None:
             lines.append(

@@ -86,14 +86,25 @@ def critique(
     """
     if not proposals:
         return {"approved": None, "approved_index": None, "reasoning": "fără propuneri",
-                "model_used": None, "fallback_used": False, "cost_usd": 0.0}
+                "model_used": None, "fallback_used": False, "fallback_reason": None, "cost_usd": 0.0}
 
+    # Fallback pe local în două cazuri: (1) buget lunar depășit; (2) apelul OpenRouter EȘUEAZĂ
+    # (rate-limit, model free dispărut, rețea) — ca noaptea să nu se piardă. Local = Qwen, cost 0.
     use_fallback = bool(budget and budget.over_budget() and local_chat is not None)
+    fallback_reason = "budget" if use_fallback else None
     chat = local_chat if use_fallback else critic_chat
     if chat is None:
         raise CriticError("niciun client de Critic disponibil (nici OpenRouter, nici fallback local)")
 
-    result = chat(build_messages(proposals))
+    messages = build_messages(proposals)
+    try:
+        result = chat(messages)
+    except Exception as exc:  # noqa: BLE001 — orice eșec al Criticului principal → fallback local
+        if use_fallback or local_chat is None:
+            raise CriticError(f"Critic indisponibil și fără fallback local: {exc}") from exc
+        use_fallback = True
+        fallback_reason = "error"
+        result = local_chat(messages)
     verdict = parse_verdict(result.content, len(proposals))
 
     cost = 0.0
@@ -118,5 +129,6 @@ def critique(
         "reasoning": verdict["reasoning"],
         "model_used": model_used,
         "fallback_used": use_fallback,
+        "fallback_reason": fallback_reason,   # None | "budget" | "error"
         "cost_usd": cost,
     }

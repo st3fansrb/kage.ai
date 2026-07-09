@@ -169,6 +169,42 @@ def test_critic_falls_back_local_when_over_budget(ledger):
     assert b.spend_usd() == pytest.approx(2.0)  # neschimbat
 
 
+def test_critic_error_falls_back_local(ledger):
+    """Dacă apelul OpenRouter aruncă (rate-limit, model free dispărut), cade pe local."""
+    proposals = json.loads(_GOOD_PROPOSALS)
+    b = ApiBudget(ledger, cap_eur=7.0, eur_usd=1.0)  # buget OK → încearcă OpenRouter întâi
+
+    def failing_or(messages):
+        raise LLMError("HTTP 429 rate limit")
+
+    local_chat = _chat_returning(_APPROVE_0, model="qwen35b")
+    out = C.critique(proposals, failing_or, local_chat=local_chat, budget=b)
+    assert out["fallback_used"] is True
+    assert out["fallback_reason"] == "error"
+    assert out["approved_index"] == 0
+    assert out["cost_usd"] == 0.0
+    assert b.spend_usd() == 0.0            # eroarea nu a costat nimic
+
+
+def test_critic_error_without_fallback_raises(ledger):
+    proposals = json.loads(_GOOD_PROPOSALS)
+
+    def failing_or(messages):
+        raise LLMError("boom")
+
+    with pytest.raises(C.CriticError):
+        C.critique(proposals, failing_or, local_chat=None)
+
+
+def test_critic_budget_fallback_reason(ledger):
+    proposals = json.loads(_GOOD_PROPOSALS)
+    b = ApiBudget(ledger, cap_eur=1.0, eur_usd=1.0)
+    b.record(model="m", usd=2.0)
+    out = C.critique(proposals, _chat_returning(_APPROVE_0),
+                     local_chat=_chat_returning(_APPROVE_NONE), budget=b)
+    assert out["fallback_used"] is True and out["fallback_reason"] == "budget"
+
+
 def test_critic_none_when_no_proposals():
     out = C.critique([], _chat_returning(_APPROVE_0))
     assert out["approved"] is None

@@ -862,7 +862,9 @@ async def _trading_nightly_job():
         else:
             head += "\nNicio ipoteză aprobată."
         if result.get("critic", {}).get("fallback_used"):
-            head += "\n(ℹ️ Critic pe fallback local — buget OpenRouter depășit.)"
+            _why = {"budget": "buget OpenRouter depășit", "error": "OpenRouter a picat"}.get(
+                result["critic"].get("fallback_reason"), "fallback")
+            head += f"\n(ℹ️ Critic pe Qwen local — {_why}.)"
         _notify("Research nocturn trading", head)
     except Exception as e:
         logger.warning(f"[Trading] research nocturn eșuat: {e}")
