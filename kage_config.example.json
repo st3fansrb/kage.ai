@@ -45,8 +45,8 @@
     "critic": {
       "provider": "openrouter",
       "base_url": "https://openrouter.ai/api/v1",
-      "_comment_model": "Model Critic pe OpenRouter. Pentru cost 0 folosește un model cu sufix ':free' (vezi openrouter.ai/models filtrat pe Free) și lasă prețurile pe 0. La model plătit, pune price_per_mtok_in/out reale ca să funcționeze plafonul monthly_cap_eur. Modelele free se rotesc/dispar → fallback_local=true e plasa de siguranță (cade pe Qwen local la eroare sau buget depășit).",
-      "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "_comment_model": "Model Critic pe OpenRouter. Pentru cost 0 folosește un model cu sufix ':free' (vezi openrouter.ai/models filtrat pe Free) și lasă prețurile pe 0. La model plătit, pune price_per_mtok_in/out reale ca să funcționeze plafonul monthly_cap_eur. Modelele free se rotesc/DEGRADEAZĂ/dispar (verificat 09.07.2026: nemotron-550b era 'DEGRADED', hy3 mergea) → fallback_local=true e plasa de siguranță (cade pe Qwen local la eroare SAU buget depășit).",
+      "model": "tencent/hy3:free",
       "monthly_cap_eur": 7,
       "price_per_mtok_in": 0,
       "price_per_mtok_out": 0,
