@@ -9,6 +9,14 @@ model_list:
       model: ollama/qwen3.6:35b
       api_base: http://localhost:11434
 
+  # WP-T: Actorul nocturn (Qwen 35B). Timeout generos — job de noapte, cold-start ~90s +
+  # generare lungă (ipoteze JSON) depășesc cu ușurință cei 120s ai tier-urilor interactive.
+  - model_name: trading-actor
+    litellm_params:
+      model: ollama/qwen3.6:35b
+      api_base: http://localhost:11434
+      timeout: 900
+
 router_settings:
   num_retries: 2
   timeout: 120

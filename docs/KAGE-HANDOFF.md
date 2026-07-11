@@ -718,6 +718,66 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
 
 ### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
 
+**Stare T1 (07.07.2026):** fundația + REORIENTARE spre Quant Lab.
+
+- **Slice 1 (fundația):** `trading/ledger.py` (`trading.db` în `cache_db/`) + `safety.py`
+  (`assert_paper_only`). Config paper-only în `kage_config.example.json`. (PR #25)
+- **Slice 2 (freqtrade):** `trading/runner.py` — punte subprocess `.trading-venv` → ledger,
+  cu `assert_paper_only` înainte de rulare. **PĂSTRAT.**
+- **Reorientare (spec `quant_lab_claude_code_prompt.md`, aprobat de Stefan 07.07.2026):**
+  abordarea naivă „N backtests + LLM mută strategia" e înlocuită cu **metoda științifică** —
+  edge-ul NU se găsește prin câteva backtests in/out-of-sample. Design:
+  `docs/QUANT_LAB_DESIGN.md` (invarianți, 3 bucle, validare statistică, registru de ipoteze,
+  routing LLM) + `docs/QUANT_LAB_BACKLOG.md` (5 etape).
+- **`trading/nocturnal.py` NAÏV = neutralizat** (guard) — încălca invarianți (LLM scrie execuția,
+  selecție pe profit IS). Se înlocuiește cu Actor→Critic→Validare (Etapa 5).
+- **Etapa 1 (validare statistică — PRIORITATE #1) LIVRATĂ:** `trading/validation.py` — bootstrap,
+  permutation, PSR, **Deflated Sharpe Ratio** + **PBO/CSCV** din papers (numpy +
+  `statistics.NormalDist`, fără mlfinlab comercial). Verdict SEMNAL/ZGOMOT deflatat pe contorul
+  de trial-uri. Teste `tests/test_trading_validation.py` (+14; testul central: cea mai bună din
+  50 strategii de zgomot pur = ZGOMOT după deflatare).
+- **Decizii Stefan:** Critic prin **OpenRouter** (model ieftin performant, nu Claude direct),
+  buget 5–10€/lună; kill-switch −15%; perechi BTC/ETH 5m.
+- **Etapa 1.2 LIVRATĂ:** `trading/report.py` — verdict peste ledger real (CLI `python -m
+  trading.report`). Pe datele actuale: 0 semnale, 2 ZGOMOT (confirmă teza).
+- **Etapa 2 (2.1+2.2) LIVRATĂ:** contor global de trial-uri (`trials`, folosit de DSR) +
+  **kill-switch determinist** (`trading/killswitch.py`, −15% drawdown, halt+Telegram, ridicare
+  manuală, zero LLM). 2.3 (buget OpenRouter) amânat la Etapa 5 (Criticul nu există încă).
+- **Etapa 3 LIVRATĂ:** bucla de context zilnic — `market_data.py` (funding/OI/klines Binance +
+  circuit breaker), `regime.py` (regim + bias NON-LLM: vol realizată + trend EMA200, rule-based;
+  HMM ca upgrade viitor), `daily_context.py` (scrie `daily_context.json` + tabel `daily_context`;
+  `bias_allows(side)` = limitatorul pentru strategii). Teste +11.
+- **Etapa 4 LIVRATĂ:** registru de ipoteze cu **pre-registration** (`hypotheses`/`predictions` +
+  `trading/hypotheses.py` — predicție fără ipoteză pre-înregistrată/temporal validă = refuzată,
+  invariant #2), **calibrare** (`calibration.py`: Brier + coverage), **baseline** (`validation.
+  signal_moves_distribution` KS+permutation) + `event_study`. Teste +10.
+- **Etapa 5 LIVRATĂ (WP-T COMPLET):** bucla nocturnă **Actor→Critic→Validare** înlocuiește
+  `nocturnal.py` naiv. `trading/actor.py` (Qwen local, ≤3 ipoteze în format impus, NU cod,
+  pre-înregistrate — invariant #1+#2), `trading/critic.py` (OpenRouter, aprobă ≤1, **buget-gated**
+  cu fallback local), `trading/budget.py` + tabel `api_costs` (**2.3**: plafon 7€/lună, contor cost),
+  `trading/llm.py` (client chat injectabil), `trading/costs.py` (**costuri stresate**, slippage
+  dublat — invariant #4, cuplat în `report.py --stressed`), `trading/pipeline.py`
+  (`NightlyPipeline.run_once` → raport de dimineață; `promoted=False` mereu, **zero auto-promovare**).
+  Config: bloc `trading.actor`/`trading.critic` + `openrouter_api_key` (secret). Teste +19 → **suita 350 verzi**.
+- **Integrare LIVRATĂ (08.07.2026):** cele 3 bucle + calibrarea sunt cablate în scheduler-ul
+  orchestratorului (`orchestrator.py`, activate doar când `trading.enabled`): kill-switch (`*/5`),
+  context zilnic (`0 6`), research nocturn Actor→Critic (`0 3`), calibrare (`0 4 * * 1`). Trigger
+  manual: `POST /admin/trading/{killswitch|context|nightly|calibration}`. `NightlyPipeline.from_config`
+  construiește clienții LLM din config (fără cheie OpenRouter ⇒ Criticul rulează local). Raportul
+  nocturn merge pe Telegram via `_notify`. Rămâne: **daemonul freqtrade dry-run** (Bucla 1 execuție,
+  proces separat, cere `.trading-venv`) + `bias_allows` în `SampleStrategy` (fișier gitignored).
+- **BUG fundație reparat (08.07.2026):** `runner.backtest_to_ledger` înregistra `amount=stake_amount`
+  (noțional USDT), dar `close_paper_trade` face `pnl=(exit−entry)×amount` → pnl umflat cu ~prețul de
+  intrare (kill-switch raporta −126685%). Fix: `amount` = cantitatea în bază (freqtrade `amount`, sau
+  `stake/entry`); fee absolut = `stake×ratie`. Test de regresie în `test_trading.py`. **Datele vechi
+  (305 paper_trades din rulările nocturnal naive) rămân pe scara greșită — decizie de curățare la Stefan.**
+
+**Cross-cutting (Kage-global, post-proiect): audit de utilizare a modelelor.** Inventar al tuturor
+punctelor unde Kage folosește un model — **local** (Qwen via LiteLLM/Ollama), **Claude prin abonament**
+(tier-urile Claude + misiuni SDK), **OpenRouter prin API** (Criticul WP-T) — cu rol×volum×cost×
+sensibilitate la calitate, și decizii explicite de **upgrade spre calitate** unde merită. Surse de cost:
+`trading.api_costs` (OpenRouter) + contorul budget #7 (Claude) + rutarea 6-tier din `orchestrator.py`.
+
 **Decizii (05.07.2026, Stefan):** paper-only până la criterii clare — promovarea pe bani
 reali e DOAR manuală, niciodată decisă de agent. Crypto pe **freqtrade** (motorul:
 backtest + hyperopt + dry-run + live prin ccxt; proiectul incipient al lui Stefan = sursă
@@ -743,6 +803,15 @@ anti-overfitting** (hyperopt „găsește" cu entuziasm strategii care mor pe da
 validare walk-forward + out-of-sample la orice promovare; fees + slippage modelate mereu;
 o strategie intră în paper doar cu OOS pozitiv; discuția de bani reali abia după ~3 luni de
 paper profitabil. Consiliere cloud: o sinteză săptămânală pe Sonnet, gated pe buget (#7).
+
+**Filozofia de Cercetare (Causalitate vs Corelație):** Edge-ul real nu va fi găsit prin simplă 
+optimizare de parametri pe indicatori tehnici (curve fitting pe o lună de date). Sistemul 
+trebuie să caute **înțelegerea cauzală** ("de ce se întâmplă X și de ce acum?"). Odată 
+ce agentul și Stefan observă un fenomen logic (ne-aleator), acesta trebuie transformat 
+într-o ipoteză. Ipoteza este apoi supusă unor **simulări matematice riguroase (ex: Monte Carlo, distribuții statistice)** 
+pentru a verifica dacă rezultatele converg statistic către așteptările noastre (demonstrând 
+că nu e un simplu *random walk*). Freqtrade e doar executantul matematic, inteligența stă în 
+formularea și dovedirea statistică a ipotezei.
 
 **Faze:** T1 crypto lab (freqtrade dry-run + ledger + buclă nocturnă) → **T2 sports
 betting** (detalii mai jos; tras înaintea Manifold: testul de edge cel mai măsurabil — CLV —

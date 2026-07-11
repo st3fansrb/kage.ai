@@ -296,6 +296,17 @@ BRIEFING_INTRO_LLM     = bool(_briefing_cfg.get("intro_llm", True))
 BRIEFING_VAULT_SECTION = bool(_briefing_cfg.get("vault_section", True))
 BRIEFING_VAULT_DAILY_DIR = str(_briefing_cfg.get("vault_daily_dir", "")).strip()
 
+# WP-T: laborator de trading PAPER-ONLY. Când `trading.enabled`, orchestratorul programează
+# cele 3 bucle pe cadențe diferite (kill-switch 5 min, context zilnic, research nocturn
+# Actor→Critic) + calibrare săptămânală. Crons cu default-uri sănătoase; oricare invalid e sărit.
+_trading_cfg = _cfg.get("trading", {}) if isinstance(_cfg.get("trading"), dict) else {}
+TRADING_ENABLED           = bool(_trading_cfg.get("enabled", False))
+TRADING_PAIRS             = _trading_cfg.get("pairs", ["BTC/USDT"]) or ["BTC/USDT"]
+TRADING_KILLSWITCH_CRON   = str(_trading_cfg.get("killswitch_cron", "*/5 * * * *"))
+TRADING_CONTEXT_CRON      = str(_trading_cfg.get("daily_context_cron", "0 6 * * *"))
+TRADING_NIGHTLY_CRON      = str(_trading_cfg.get("nightly_cron", "0 3 * * *"))
+TRADING_CALIBRATION_CRON  = str(_trading_cfg.get("calibration_cron", "0 4 * * 1"))
+
 # WP6: transcriere voce 100% LOCALĂ (whisper.cpp) pentru voice memos pe Telegram.
 # `bin`   = binarul whisper.cpp (brew: `whisper-cli`); rezolvat prin PATH dacă nu e cale absolută.
 # `model` = calea către modelul GGML (ex. large-v3-turbo, ~1,6GB — descărcat separat).
@@ -778,6 +789,95 @@ async def _handle_scan_command(message: str) -> StreamingResponse:
     return _instant_sse(f"🔎 Scan pornit pentru {scope}. Digestul cu joburi noi vine pe Telegram când e gata.")
 
 
+# ── WP-T: bucle de trading programate (kill-switch / context zilnic / research nocturn) ────
+def _trading_killswitch_run() -> dict:
+    """Sync: kill-switch determinist (zero LLM). Declanșează halt la drawdown ≤ prag."""
+    from trading import killswitch
+    return killswitch.run()
+
+
+def _trading_daily_context_run() -> Optional[dict]:
+    """Sync: bucla de context zilnic (regim + bias NON-LLM) pe prima pereche configurată."""
+    from trading import daily_context
+    pair = TRADING_PAIRS[0] if TRADING_PAIRS else "BTC/USDT"
+    return daily_context.run(pair=pair)
+
+
+def _trading_nightly_run() -> Optional[dict]:
+    """Sync: un ciclu nocturn Actor→Critic→Validare. Întoarce dict-ul de rezultat (cu raport)."""
+    from trading.ledger import TradingLedger
+    from trading.daily_context import read_bias
+    from trading.pipeline import NightlyPipeline
+    try:
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        cfg = {}
+    ledger = TradingLedger()
+    try:
+        pipe = NightlyPipeline.from_config(cfg, ledger)
+        regime = read_bias()
+        recent_failures = [h["mechanism"] for h in ledger.get_hypotheses(status="falsified", limit=5)]
+        return pipe.run_once(regime=regime, recent_failures=recent_failures)
+    finally:
+        ledger.close()
+
+
+def _trading_calibration_run() -> str:
+    """Sync: raport de calibrare (Brier + coverage) peste predicțiile rezolvate."""
+    from trading.calibration import run as calib_run
+    return calib_run()
+
+
+async def _trading_killswitch_job():
+    try:
+        state = await asyncio.to_thread(_trading_killswitch_run)
+        if state.get("tripped_now"):
+            _notify("🛑 Kill-switch trading", f"Halt declanșat: drawdown {state.get('drawdown', 0)*100:.1f}%", "high")
+    except Exception as e:
+        logger.warning(f"[Trading] kill-switch job eșuat: {e}")
+
+
+async def _trading_daily_context_job():
+    try:
+        ctx = await asyncio.to_thread(_trading_daily_context_run)
+        if ctx:
+            logger.info(f"[Trading] context zilnic: regime={ctx.get('regime')} bias={ctx.get('bias')}")
+    except Exception as e:
+        logger.warning(f"[Trading] context zilnic eșuat: {e}")
+
+
+async def _trading_nightly_job():
+    try:
+        result = await asyncio.to_thread(_trading_nightly_run)
+        if not result:
+            return
+        logger.info("[Trading] raport nocturn:\n" + result.get("report", ""))
+        crit = result.get("critic", {})
+        approved = crit.get("approved")
+        n_hyp = len(result.get("hypothesis_ids", []))
+        head = f"🌙 <b>Research nocturn trading</b>\n{n_hyp} ipoteze pre-înregistrate."
+        if approved:
+            head += f"\n✅ Aprobată (h{result.get('approved_hypothesis_id')}): {approved.get('mecanism_cauzal', '')[:180]}"
+            head += "\n→ Implementare MANUALĂ în cod; promovarea la paper e manuală."
+        else:
+            head += "\nNicio ipoteză aprobată."
+        if result.get("critic", {}).get("fallback_used"):
+            _why = {"budget": "buget OpenRouter depășit", "error": "OpenRouter a picat"}.get(
+                result["critic"].get("fallback_reason"), "fallback")
+            head += f"\n(ℹ️ Critic pe Qwen local — {_why}.)"
+        _notify("Research nocturn trading", head)
+    except Exception as e:
+        logger.warning(f"[Trading] research nocturn eșuat: {e}")
+
+
+async def _trading_calibration_job():
+    try:
+        rep = await asyncio.to_thread(_trading_calibration_run)
+        logger.info("[Trading] calibrare:\n" + rep)
+    except Exception as e:
+        logger.warning(f"[Trading] calibrare eșuată: {e}")
+
+
 @app.on_event("startup")
 async def startup_scheduler():
     global _scheduler
@@ -823,6 +923,19 @@ async def startup_scheduler():
                 logger.info(f"[Briefing] programat: {BRIEFING_CRON}")
             except Exception as e:
                 logger.warning(f"[Briefing] cron invalid ({BRIEFING_CRON!r}): {e}")
+        # WP-T: bucle de trading (paper-only) — doar dacă `trading.enabled`.
+        if TRADING_ENABLED:
+            for cron, fn, jid, label in (
+                (TRADING_KILLSWITCH_CRON, _trading_killswitch_job, "__trading_killswitch__", "kill-switch"),
+                (TRADING_CONTEXT_CRON, _trading_daily_context_job, "__trading_context__", "context zilnic"),
+                (TRADING_NIGHTLY_CRON, _trading_nightly_job, "__trading_nightly__", "research nocturn"),
+                (TRADING_CALIBRATION_CRON, _trading_calibration_job, "__trading_calibration__", "calibrare"),
+            ):
+                try:
+                    _scheduler.add_job(fn, "cron", id=jid, **_parse_cron(cron))
+                    logger.info(f"[Trading] {label} programat: {cron}")
+                except Exception as e:
+                    logger.warning(f"[Trading] {label} cron invalid ({cron!r}): {e}")
         _scheduler.start()
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
@@ -1666,6 +1779,29 @@ async def admin_backup():
     try:
         path = await _backup_cache_db()
         return JSONResponse({"status": "ok", "archive": path})
+    except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+@app.post("/admin/trading/{loop}")
+async def admin_trading(loop: str):
+    """Trigger manual al buclelor de trading (paper-only): killswitch | context | nightly | calibration.
+    Util pentru test on-demand fără să aștepți cron-ul. Protejat de auth_middleware."""
+    try:
+        if loop == "killswitch":
+            return JSONResponse({"status": "ok", "result": await asyncio.to_thread(_trading_killswitch_run)})
+        if loop == "context":
+            return JSONResponse({"status": "ok", "result": await asyncio.to_thread(_trading_daily_context_run)})
+        if loop == "calibration":
+            return JSONResponse({"status": "ok", "report": await asyncio.to_thread(_trading_calibration_run)})
+        if loop == "nightly":
+            result = await asyncio.to_thread(_trading_nightly_run)
+            if not result:
+                return JSONResponse({"status": "ok", "report": None})
+            return JSONResponse({"status": "ok", "report": result.get("report"),
+                                 "approved_hypothesis_id": result.get("approved_hypothesis_id"),
+                                 "promoted": result.get("promoted")})
+        return JSONResponse({"status": "error", "error": f"buclă necunoscută: {loop}"}, status_code=400)
     except Exception as e:
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
