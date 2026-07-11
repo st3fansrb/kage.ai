@@ -185,6 +185,29 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
   echivalentul legal de testare a edge-ului = Manifold play-money. Vezi WP-T.
 - **Bugetul se afișează în EUR** (05.07.2026) — intern USD, conversie doar la afișare,
   `eur_usd_rate` static în config. Vezi #7.
+- **Advisor-in-the-loop (09.07.2026, Stefan):** un al doilea model, cu **context minimal**
+  (nu conversația orchestratorului — un advisor care vede tot raționamentul se ancorează în
+  el), contrazice argumentat orchestratorul în punctele cheie: planul de misiune, diff-ul
+  unui WP înainte de ✅, și „anti-rabbit-hole" (după N eșecuri: direcția asta poate
+  funcționa?). **Consultativ, nu blocant** — dezacord persistent → escaladare la Stefan pe
+  Telegram, niciodată deadlock model↔model. Vezi WP13.
+- **Telecomandă prin Telegram (09.07.2026, Stefan):** direcția de utilizare principală devine
+  „Stefan la lucru, laptopul acasă" — misiunile se creează, aprobă și revizuiesc de pe
+  telefon (Telegram + GitHub mobile). Vezi WP12; atinge trigger-ul WP-G2 (rulări zilnice
+  nesupravegheate).
+- **Mod de execuție pe partea ML din WP-T (09.07.2026, Stefan):** proiectul e (și) material
+  de CV pentru un rol în direcția AI, iar valoarea de CV = capacitatea de a-l APĂRA la
+  interviu, nu codul. De aceea părțile cu valoare de interviu le implementează **Stefan,
+  ghidat** — metoda: modelul scrie scheletul + testele (contractul), Stefan scrie corpul
+  funcțiilor, review de senior după, explicația variantei alternative abia DUPĂ încercare
+  (niciodată „privește-mă cum fac"). Ce implementează Stefan: **HMM-ul de regim de la zero**
+  (numpy, EM, 2–3 stări — NU hmmlearn), **Dixon-Coles** (T2 sports), **purged CV +
+  meta-labeling**, interpretarea rapoartelor de validare. Ce rămâne la model: plumbing
+  (scheduler, endpoint-uri, config, Telegram, migrări, dashboard) — zero valoare de interviu.
+  Regula generală: algoritmii standard = plug-and-play (sklearn/statsmodels/numpy), stratul
+  de domeniu (features, etichetare, anti-leakage, evaluare) = de mână. Framing:
+  neprofitabilitatea NU e eșecul proiectului, e rezultatul lui — „N din M ipoteze LLM erau
+  zgomot, demonstrat cu validare deflatată" e povestea de interviu, nu „bot profitabil".
 
 ---
 
@@ -198,6 +221,56 @@ apoi #12, #14, #6, #9.
 (WP-B/WP-J/WP-D sunt independente — pot fi trase oricând după WP2. Reordonări
 05.07.2026: #7 tras între WP8 și WP9 — agenții WP-J/WP11 ard bani nesupravegheați,
 failover-ul API din WP11 nu are sens fără plafon; WP7 Phoenix amânat lângă WP10.)
+
+### Reordonare completă (09.07.2026) — ordinea restului, de unde suntem acum
+
+**Stare:** WP1–WP11, WP-G1, WP-B/J/D, WP6, WP-T (bucla de cercetare, integrată în scheduler)
+= livrate. Ordinea de mai jos ÎNLOCUIEȘTE ordonările anterioare pentru tot ce a rămas:
+
+**#7(plafon EUR) → WP12(telecomandă Telegram) → T1-exec(daemon freqtrade dry-run) →
+WP13(advisor + HITL v2) → WP-G2(izolare) → WP10(dashboard + WP7 Phoenix + tab Trading T5 +
+Cloudflare Tunnel) → #6(memorie v2) → #12(skills) → #9(tools locale T2) →
+WP-T T2(sports betting) → T3(Manifold) → T4(forex/OANDA) → evaluare
+NDX → #14(voice push-to-talk) → RAG(înainte de ian. 2027) → audit modele(post-proiect).**
+**WP-V (video intel)** e în afara lanțului — independent, felie de 1–2 seri, poate fi tras
+oricând după WP12 + setup-ul Whisper (WP6). **§8 (pista de învățare)** rulează în paralel.
+
+Raționament:
+
+1. **#7 primul** — e cel mai mic item (cost_usd per run se colectează deja din WP9; lipsește
+   doar plafonul-gate în EUR) și e precondiția de siguranță pentru orice rulare
+   nesupravegheată. Spec-ul rămâne în §Restul.
+2. **WP12 imediat** — valoarea imediată cerută de Stefan: lucrul de la birou prin Telegram cu
+   laptopul acasă. Construiește doar pe WP11 (există), felie mică.
+3. **T1-exec devreme** fiindcă e dependent de calendar, nu de efort: criteriul „~3 luni de
+   paper profitabil" înseamnă că fiecare zi fără daemon amână discuția de bani reali cu o zi.
+   Independent de restul — poate rula în paralel cu WP12/WP13.
+4. **WP13 înainte de rulările zilnice nesupravegheate** — advisorul + reviewer pass sunt
+   plasa de calitate pentru misiuni pe care Stefan nu le mai urmărește live; **acestea ating
+   trigger-ul WP-G2** (declarat în §6: „rulări zilnice autonome nesupravegheate") → WP-G2
+   urmează imediat.
+5. **WP10 abia după** — dashboard-ul are valoare când există date de afișat (paper trades din
+   T1-exec, misiuni din WP12/13); Cloudflare Tunnel intră aici (acces remote la UI).
+6. **#6 → #12** în ordinea asta: auto-distilarea de skills consumă run ledger-ul prin
+   memoria consolidată; ambele înaintea fazelor noi de piață WP-T (care sunt proiecte de
+   conținut, nu de infrastructură).
+
+#### Restanțe din faze „terminate" (nu le pierde — fiecare e alocată unui WP de mai sus)
+
+- `_briefing_missions()` întoarce încă `None` (promis „după WP11") → cablare la tabelele
+  `missions`/`mission_wps` în **WP12**.
+- Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`
+  (fișier gitignored) → **T1-exec**.
+- `.venv-py39` — de șters (3.12 rulează stabil din 06.07) → housekeeping la **#7/WP12**.
+- Fallback-ul LiteLLM→CLI încă pe subprocess (WP9, cale rară) → oportunist, nu blochează.
+- WP6 voice: setup whisper-cpp + model GGML (pas manual Stefan; endpoint dă 503 grațios
+  până atunci). **Nu mai e opțional:** e precondiție pentru WP-V (transcrierea clipurilor).
+- WP-B: `vault_git_remote` de completat în config (pas manual Stefan) — push-ul nocturn al
+  vault-ului e no-op până atunci.
+- WP-J: setup career-ops + `jobs.enabled` (opt-in, pas manual Stefan), dacă nu e făcut deja.
+- OANDA practice: depanarea token/endpoint (eșuată la prima încercare) → intră în **T4**.
+- WP11 fază 2 (agent care întreabă singur + failover Gemini la limită) → absorbit în **WP13**.
+- #7 e doar parțial: colectarea `cost_usd` + afișarea EUR există; **plafonul-gate lipsește**.
 
 Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > Citește CLAUDE.md și KAGE-HANDOFF.md (§0–§4 integral + secțiunea pachetului: §5 pentru
@@ -716,6 +789,207 @@ manual cu acest fișier (plan cu WP-uri → sesiune per WP → verificare criter
 orchestrator mid-mission → la restart reia din WP-ul corect · limită simulată → resume
 programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde.
 
+### WP12 — Telecomandă: construirea lui Kage prin Telegram, de la distanță · efort: o seară–un weekend · după WP11 + #7
+
+**Scop (09.07.2026, Stefan):** fluxul de lucru principal devine „Stefan la birou, laptopul
+acasă" — misiunile se creează, aprobă, urmăresc și revizuiesc integral de pe telefon
+(Telegram + GitHub mobile), fără acces fizic la mașină.
+
+**Stare: LIVRAT COMPLET (Slice 1 + 2, 10.07.2026).**
+
+- **Slice 1** (pașii 2, 5 + checklist mașină): `!mission new <direcție>` (orchestrator
+  redactează `mission.md` cu MISSION_DRAFT_MODEL prin `_agent_complete` fără tools → salvează ca
+  status `draft` → card Telegram cu butoane ✅/✏️/🗑), `!mission revise` + captura reply-ului
+  după ✏️ (gateway), endpoint `POST /mission/draft/{id}/{start|discard}`, `_briefing_missions()`
+  cablat (draft/active/pauzate + terminate în 24h), checklist `pmset -c sleep 0` în `INSTALL.md`.
+- **Slice 2 pasul 3** (branch+push per WP): misiunea rulează pe `mission/<slug>` (creat din HEAD,
+  working tree neschimbat); `_mission_mark_and_commit` comite acum **întregul diff** (nu doar
+  mission.md), apoi `_mission_git_push` (opt-in `remote.mission_git_push`) + notificare cu link
+  de **compare GitHub** (`_github_compare_url`). Atribuirea = git config-ul repo-ului (Stefan),
+  fără trailer Claude.
+- **Slice 2 pasul 4** (watchdog): heartbeat extern opt-in (`remote.heartbeat_url`, dead-man's-
+  switch) + mesaj `🟢 Kage online` la startup; tabel `job_runs` + `_tracked_job` peste scanul
+  programat + `_recover_interrupted_jobs()` la startup — **rezolvă exact cazul din 09.07**
+  (scan de 19:00 tăiat de restart, pierdut tăcut): îl detectează, re-declanșează, alertează.
+- Config nou: `mission_draft_model`, bloc `remote` (mission_git_branch/push/remote,
+  heartbeat_url/interval_min, startup_online_message). Teste: `tests/test_mission_remote.py`
+  (28) → suită **383 verzi**. Neutralizat git-ul real în `test_mission_orchestration`.
+
+**Pași:**
+
+1. **Checklist mașină (manual, Stefan, ~2 min):** laptop pe priză + `sudo pmset -c sleep 0`
+   (clamshell pe AC e ok). Fără asta nimic nu funcționează: `caffeinate -s` din WP11 ține
+   Mac-ul treaz DOAR cât rulează o misiune; idle → sleep → polling-ul Telegram moare și
+   mașina nu mai e trezibilă remote. Documentează în README/RESTORE.
+2. **`!mission new <direcție>`:** T5 redactează `missions/<slug>/mission.md` în formatul
+   deja validat (`## WP` + `### Acceptare` cu criterii verificabile între backtick-uri),
+   trimite pe Telegram rezumatul + planul cu butoane: ✅ pornește · ✏️ revizuiește (reply
+   text = instrucțiuni de modificare, T5 rescrie) · 🗑 renunță. (După WP13, draftul trece
+   întâi prin advisor.)
+3. **Branch + push per WP:** misiunea rulează pe branch `mission/<slug>` din `dev`; după
+   fiecare WP verificat → commit **întregul diff** (azi `_mission_mark_and_commit` comite
+   doar mission.md) + push → notificare Telegram cu link de compare GitHub. Stefan
+   revizuiește din GitHub mobile și face merge de acolo. Atenție: autorul commit-urilor =
+   emailul lui Stefan (regula de atribuire existentă), nu `kage@localhost`.
+4. **Watchdog extern:** heartbeat din scheduler (ping periodic la un healthcheck extern —
+   healthchecks.io sau echivalent, config opt-in) care alertează când Kage TACE (orchestrator
+   mort, net picat, mașină adormită) — launchd repornește procesul, dar nu te anunță când
+   nu poate. Plus mesaj „🟢 Kage online" pe Telegram la startup.
+   **Caz confirmat 09.07.2026:** restart de proces la 19:04 (fără excepție în log — semnal
+   extern, cauză neconfirmată) a întrerupt scanul de joburi de 19:00 la ~4 min; procesul a
+   revenit singur în câteva secunde, dar jobul întrerupt a murit tăcut — fără notificare, fără
+   retry azi (`next run` = mâine 07:00; scanul de seară a fost recuperat manual via
+   `POST /jobs/scan`). Watchdog-ul trebuie să acopere și acest caz mai subtil, nu doar
+   „orchestratorul e mort": **la startup, verifică dacă vreun job cron avea `next run` ÎN
+   TRECUT** (comparat cu ora curentă) — semn de rulare întreruptă mid-execuție — și fie
+   îl re-declanșează imediat, fie trimite alertă „⚠️ job X întrerupt la restart, reîncerc/
+   aștept următoarea rulare".
+5. **Restanță WP-D:** cablează `_briefing_missions()` (azi `None`) la tabelele
+   `missions`/`mission_wps` din WP11 — briefingul de dimineață listează misiunile
+   active/terminate/pauzate.
+
+**Acceptare:** de pe telefon, fără laptop: `!mission new` → plan primit → ✏️ o revizie →
+✅ pornește → notificare cu link de diff după primul WP → o întrebare de misiune primită și
+răspunsă → misiunea se termină → briefingul de a doua zi o listează · mașina nu adoarme
+idle (test: 1h fără activitate, polling viu) · heartbeat-ul alertează la o oprire simulată ·
+commit-urile de misiune au autorul corect · pytest verde.
+
+### WP13 — Advisor-in-the-loop + bucla completă HITL v2 · efort: un weekend+ · după WP12
+
+**Concept (decizia din §4):** un al doilea model care se **ceartă argumentat** cu
+orchestratorul — îl împiedică să omită criterii, să halucineze („am făcut X" fără dovadă)
+sau să sape prea adânc într-o direcție care nu poate funcționa. Principii nenegociabile:
+
+- **Context minimal by design:** advisorul primește DOAR obiectivul + artefactul (plan sau
+  diff) + criteriile + capcanele relevante din §3 — NU conversația orchestratorului. Un
+  advisor care vede tot raționamentul se ancorează în el și aprobă din inerție; unul care
+  vede doar artefactul judecă artefactul.
+- **Consultativ, nu blocant:** verdictul advisorului nu poate opri singur misiunea.
+  Dezacord persistent (orchestratorul respinge obiecția, advisorul o menține) → ambele
+  argumente merg la Stefan pe Telegram, el decide. Niciodată deadlock model↔model.
+- **Model: diversitate reală.** Recomandare: **Gemini** (T4 — deja cablat, alt „creier"
+  decât Claude → dezacord genuin, cost marginal zero) cu fallback Qwen local. NU modele
+  free OpenRouter pentru review de diff — diff-urile conțin codul proiectului, iar free-ul
+  se plătește cu training pe input.
+
+**Punctele de cuplare (3):**
+
+1. **Review de plan** — la `!mission new`, înainte de a-i trimite lui Stefan: advisorul
+   primește direcția + draftul → listă de obiecții (omisiuni, criterii neverificabile,
+   dependențe ignorate, scope prea mare); orchestratorul corectează sau contra-argumentează;
+   rezumatul dezacordurilor nerezolvate se atașează planului trimis lui Stefan.
+2. **Reviewer pass pe diff** — înainte de ✅ pe un WP: diff + criteriile de acceptare +
+   capcanele §3 → verdict `ok / obiecții`; obiecțiile se întorc în sesiunea agentului (o
+   singură iterație de fix, apoi escaladare). Replică ce face Stefan manual: cititul
+   diff-ului, nu doar exit code-ul de la pytest.
+3. **Anti-rabbit-hole** — după N încercări eșuate pe același WP (sau X minute), advisorul
+   primește istoricul comprimat al încercărilor → „direcția asta poate funcționa?" →
+   recomandă `continuă / pivotează / întreabă-l pe Stefan`. Oprește scenariul „ne dăm seama
+   după 3 ore că lucrul ăla nu avea cum să meargă".
+
+**Plus, în același WP (absorbite din WP11 fază 2):**
+
+- **Tool `ask_user`** — agentul blocat pe o decizie de design întreabă SINGUR pe Telegram
+  mid-WP (extinde puntea `_mission_ask` existentă; azi ea se declanșează doar determinist,
+  la verificare picată). Miezul lui „human-in-the-loop la decizii".
+- **Coadă de misiuni** — `!mission queue add/list/clear`; la finalul unei misiuni,
+  următoarea pornește automat DOAR dacă precedenta a trecut criteriile + reviewer pass-ul,
+  cu notificare la fiecare tranziție. O singură misiune ACTIVĂ rămâne invariant.
+- **Propunerea următorului pas** — la final de misiune (sau coadă goală), Kage propune pe
+  Telegram următoarea felie din acest handoff (ordinea din §5), Stefan confirmă cu un buton.
+
+**Acceptare:** un plan cu un criteriu lipsă primește obiecție de la advisor înainte să
+ajungă la Stefan · un WP cu diff care nu acoperă un criteriu NU primește ✅ la primul pass
+(test cu fixture) · după N eșecuri simulate advisorul recomandă pivot și Stefan primește
+întrebarea · agentul pune o întrebare `ask_user` mid-WP și răspunsul deblochează sesiunea ·
+două misiuni în coadă rulează în serie cu notificări · dezacord persistent simulat → ambele
+argumente ajung pe Telegram · pytest verde.
+
+### WP-V — Video intel: analiza clipurilor trimise de pe telefon · efort: 1–2 seri · independent, recomandat după WP12 · precondiție: setup-ul Whisper din WP6
+
+**Ideea (09.07.2026, Stefan):** trimite pe Telegram, de pe telefon, link-uri video (YouTube,
+TikTok, Reels, X — oameni care explică concepte de finance/AI/agents/trading) → Kage extrage
+conținutul și îl analizează sceptic: e informația valoroasă și reală, sau marketing/fals?
+Azi Stefan descrie manual ce vede pe TikTok — ineficient + „telefonul fără fir".
+
+**De ce e felie mică: 80% există deja.** Gateway-ul Telegram (intrare), endpoint-ul Whisper
+din WP6 (transcriere locală — construit, dar NESETAT: cere `brew install whisper-cpp` +
+modelul GGML ~1,6GB → setup-ul WP6 devine precondiție, nu mai e opțional), T2 local pentru
+analiză (cost 0), vault-ul (salvare), quant lab-ul (verdict pe strategii). Piesa nouă e
+subțire: **yt-dlp** (open source, ~1800 site-uri) + promptul de analiză + cardul Telegram.
+
+**Pipeline:**
+
+1. **Detecție URL video** în gateway (`_dispatch`): domenii cunoscute (youtube/youtu.be/
+   tiktok/instagram/x.com…) → intră pe fluxul video, nu pe chat.
+2. **Extracție (`video_intel.py`, subprocess yt-dlp):** metadata (titlu/autor/durată/
+   descriere) + **subtitrările existente ÎNTÂI** (`--write-auto-subs` — la YouTube există
+   aproape mereu → zero transcriere, instant, gratuit). Fără subtitrări (TikTok, de regulă) →
+   descarcă DOAR audio → endpoint-ul Whisper local (WP6) → transcript. Limită de durată în
+   config (ex. ≤30 min) ca un podcast de 3h să nu blocheze pipeline-ul.
+3. **Pasul vizual (extensie 09.07.2026** — multe clipuri ARATĂ, nu doar spun: grafice,
+   cod pe ecran, slide-uri, demo-uri): descarcă video-ul → **ffmpeg extrage keyframes** pe
+   detecție de schimbare de scenă (`select='gt(scene,0.3)'`, plafon ~20 cadre) →
+   descriere + OCR per cadru, cu timestamp, îmbinate cu transcriptul.
+   **Modelul vision — arbore de decizie (decis 09.07.2026 cu Stefan):**
+   - **Default: `gemini-2.5-flash-lite` prin OpenRouter** (sau flash-lite-ul curent la
+     implementare). Motive: Gemini e etalonul la OCR (grafice dense, cifre, text mic —
+     exact ce ne trebuie), iar la volum realist (1–3 clipuri/zi cu pas vizual, NU 10) un
+     clip de 20 cadre = 0.1–0.3 cenți → **~0.10–0.15 $/LUNĂ** — a „economisi" asta cu
+     inferență locală = calitate mai slabă + cod mai complicat pentru nimic. Privacy nu
+     joacă: clipurile sunt conținut public, nu date proprii. Cost în bugetul #7 (intră în
+     sub-plafonul advisor/misc). E și mai rapid decât bucla locală per cadru.
+   - **Fallback: T2 rezident (Qwen3.6-35B-A3B), un apel per cadru** — la eroare API, offline
+     sau buget depășit (același pattern ca la Criticul de trading: API + fallback local).
+     Notă contra-intuitivă: T2 NU e lent (MoE cu 3B activi) și memoria e deja plătită
+     (rezident); capcana e contextul — cadrele se trimit UN APEL PER CADRU, nu toate odată
+     (20 cadre într-un apel = 20–40k tokeni = prefill de minute). Verifică la implementare
+     suportul vision prin Ollama/LiteLLM.
+   - **NU se instalează al doilea model vision local** (ex. qwen3-vl-8b): +5–8GB RAM,
+     decodare mai lentă decât MoE-ul cu 3B activi, și cel mai slab OCR din cele trei opțiuni.
+
+   **Gating de cost/timp:** automat pentru clipuri scurte (≤5 min, tipic TikTok); pentru
+   clipuri lungi doar la cerere — buton 🖼 „analiză vizuală" pe card — sau când transcriptul
+   trădează conținut vizual („uite aici", „cum se vede pe grafic").
+4. **Analiză sceptică pe T2 local (cost 0),** structurată și **conștientă de categorie**
+   (extensie 09.07.2026 — nu doar trading): clasifică întâi conținutul (trading / tool sau
+   framework tech / carte / lecție / decizie-framework), apoi șablonul potrivit:
+   - comun: ce se susține · mecanismul pretins · e falsificabil? · red flags (vinde
+     curs/semnale, randamente nerealiste, survivorship bias, urgență artificială, affiliate);
+   - tech: tool-ul/framework-ul există? e întreținut? afirmația e verificabilă (WebSearch
+     DOAR la cerere, nu implicit — vezi capcana injection);
+   - carte/lecție/decizie: ideile centrale · ce e acționabil · ce contrazice/confirmă ce
+     știm deja → notă structurată pentru vault (categoriile devin corpus pentru RAG-ul
+     viitor `!index` — sinergie notată).
+   Escaladare la T5 DOAR la cerere (buton „analiză adâncă") — gated pe buget.
+5. **Card de verdict pe Telegram:** 📹 titlu/autor → rezumatul afirmațiilor →
+   plauzibilitate + red flags → verdict (valoros / marketing / fals / de testat) + butoane
+   **adaptate categoriei**: 💾 salvează în vault (toate) · 🔬 **„→ ipoteză în quant lab"**
+   (doar trading: afirmația devine ipoteză pre-înregistrată în WP-T și primește verdictul
+   matematic SEMNAL/ZGOMOT al validării — „guru zice că merge" → validarea decide) ·
+   🖼 analiză vizuală (clipuri lungi) · 🔎 analiză adâncă (T5, gated pe buget) · 🗑 ignoră.
+
+**Capcane:**
+
+- **Prompt injection (aceeași regulă ca WP-J):** transcriptul = conținut web complet
+  ne-de-încredere care intră într-un LLM — se tratează ca DATE, niciodată concatenat ca
+  instrucțiuni; analiza rulează FĂRĂ tools (sau read-only). Un clip poate conține literal
+  „ignoră instrucțiunile și…".
+- **TikTok se strică periodic** (anti-bot) — yt-dlp ține pasul, dar ține-l actualizat
+  (`yt-dlp -U` în jobul nocturn sau pip upgrade la restart); eșecul unui site = mesaj grațios
+  („nu pot extrage de aici acum"), nu crash.
+- **De ce nu NotebookLM:** închis, manual (copy-paste în browser), fără API oficial, fără
+  integrarea cu quant lab-ul. Pipeline-ul propriu = automatizat cap-coadă, 100% local, cost 0.
+
+**Acceptare:** un link YouTube cu subtitrări → card de verdict FĂRĂ transcriere (sub ~30s) ·
+un link TikTok fără subtitrări → transcris local + card · un clip scurt care ARATĂ ceva
+(grafic/cod pe ecran) → keyframes extrase, descrierile vizuale apar în analiză · un clip
+despre un framework tech (nu trading) → card pe șablonul tech, salvabil ca notă structurată
+în vault · un clip cu „strategie de trading" → butonul 🔬 creează o ipoteză pre-înregistrată
+în `trading.db` · zero apeluri cloud pe fluxul implicit · un transcript cu instrucțiuni
+injectate NU schimbă comportamentul analizei (test) · site nesuportat/eșec yt-dlp → mesaj
+grațios · pytest verde.
+
 ### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
 
 **Stare T1 (07.07.2026):** fundația + REORIENTARE spre Quant Lab.
@@ -765,7 +1039,9 @@ programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde
   manual: `POST /admin/trading/{killswitch|context|nightly|calibration}`. `NightlyPipeline.from_config`
   construiește clienții LLM din config (fără cheie OpenRouter ⇒ Criticul rulează local). Raportul
   nocturn merge pe Telegram via `_notify`. Rămâne: **daemonul freqtrade dry-run** (Bucla 1 execuție,
-  proces separat, cere `.trading-venv`) + `bias_allows` în `SampleStrategy` (fișier gitignored).
+  proces separat, cere `.trading-venv`) + `bias_allows` în `SampleStrategy` (fișier gitignored) —
+  **= felia „T1-exec" din reordonarea 09.07.2026** (devreme: criteriul „~3 luni de paper" e timp
+  calendaristic — ceasul pornește abia când daemonul rulează).
 - **BUG fundație reparat (08.07.2026):** `runner.backtest_to_ledger` înregistra `amount=stake_amount`
   (noțional USDT), dar `close_paper_trade` face `pnl=(exit−entry)×amount` → pnl umflat cu ~prețul de
   intrare (kill-switch raporta −126685%). Fix: `amount` = cantitatea în bază (freqtrade `amount`, sau
@@ -813,10 +1089,44 @@ pentru a verifica dacă rezultatele converg statistic către așteptările noast
 că nu e un simplu *random walk*). Freqtrade e doar executantul matematic, inteligența stă în 
 formularea și dovedirea statistică a ipotezei.
 
+**Harta ML vs LLM (09.07.2026)** — ce e fiecare strat, ca să nu se confunde rolurile:
+LLM = DOAR Actor + Critic (by design, invariant #5). Statistică deterministă (nu ML, nu se
+antrenează nimic) = `validation.py` (DSR/PBO/bootstrap/permutation), `killswitch`, `costs`,
+`calibration`. Rule-based = `regime.py` (azi). **ML clasic intră în exact 3 locuri, toate
+planificate:** (1) upgrade-ul HMM la regime detection (3.2 în backlog); (2) Dixon-Coles/
+Poisson la T2 sports betting; (3) opțional, mai târziu: meta-labeling (López de Prado) +
+purged cross-validation peste semnalele primare. Regula build-vs-buy: algoritmi standard
+plug-and-play (sklearn/statsmodels), stratul de domeniu de mână; excepție deliberată HMM-ul
+(de la zero, în modul de execuție ghidat din §4 — cine implementează și cum).
+
 **Faze:** T1 crypto lab (freqtrade dry-run + ledger + buclă nocturnă) → **T2 sports
 betting** (detalii mai jos; tras înaintea Manifold: testul de edge cel mai măsurabil — CLV —
 și cele mai bune date istorice gratuite) → T3 agent Manifold (predicții pe mana + scor de
 calibrare) → T4 forex (date istorice → OANDA practice) → T5 tab-ul din Mission Control.
+
+**Piață candidată: Nasdaq 100 / index equities (idee 09.07.2026, Stefan).** De evaluat ca
+piață mai promițătoare decât forexul pentru metoda Actor→Critic→Validare, din motive
+*structurale*, nu de „ușurință de predicție":
+
+- **Joc cu sumă pozitivă** — spre deosebire de forex (sumă zero/negativă după spread, fără
+  drift), equities au equity risk premium (drift ~13–14%/an istoric pe NDX). Expectanță de
+  bază pozitivă fără să bați piața; forexul nu oferă acest cadou și e cea mai eficientă piață
+  (contraparte = bănci/macro cu informație de flux inaccesibilă retailului).
+- **Anomalii documentate, cu contraparte economică clară** (exact „mecanismul cauzal" cerut
+  Actorului): efectul overnight (aproape tot randamentul NDX vine din gap-ul close→open),
+  fluxuri de rebalansare la final de lună/trimestru, gamma hedging dealer pe opțiuni 0DTE,
+  bias comportamental retail concentrat pe tech.
+- **Cost practic:** date daily gratuite bune; intraday de calitate costă. Paper trading gratuit
+  prin **Alpaca API** (include QQQ) — înlocuiește stratul de date Binance→Alpaca, restul
+  arhitecturii WP-T e agnostic la piață (Actor/Critic/validare/pre-înregistrare identice).
+- **Capcană de backtest:** piața e închisă 17.5h/24 — strategiile intraday arată artificial
+  bine dacă backtestul ignoră că nu poți ieși în gap-ul overnight; kill-switch-ul determinist
+  trebuie regândit pentru o piață cu program (nu 24/7 ca crypto).
+- **Verdict de prioritizare:** forex < crypto ≈ NDX. Crypto = cel mai bun mediu de *cercetare*
+  (date gratuite perfecte, 24/7, piață încă retail-dominată — de-asta laboratorul e construit
+  pe el); NDX = cea mai bună *expectanță de bază*. Nu urgent: se extinde la NDX doar dacă
+  metodologia își dovedește valoarea pe crypto (ipoteze care supraviețuiesc validării), ca felie
+  de lucru separată — nu rescriere.
 
 **T2 — sports betting (design decis 05.07.2026):** legal — pariurile sportive sunt permise
 în RO prin operatori licențiați ONJN; agentul DOAR analizează și ține pariuri virtuale.
@@ -883,19 +1193,43 @@ gap-uri de paritate care blocau ștergerea au fost portate în Mission Control �
 Config nou: `mission_control_port` în `kage_config.json` (default 3001). UI-ul web al proiectului
 e acum exclusiv `frontend/` (Next.js).
 
-### Restul (după WP10, ordine: #12 → #14 → #6 → #9; #7 a fost tras în față)
+### Restul (ordinea de aici e ÎNLOCUITĂ de „Reordonare completă 09.07.2026" din capul §5 — #7 e acum PRIMUL item; specurile rămân valabile)
 
 - **#12 Skills**: folder `skills/` cu 3–5 SKILL.md scrise de mână; symlink în `.claude/skills`
   la cwd-ul rulărilor; `!skill list/new`; auto-distilare abia după WP8/WP9, draft + aprobare.
 - **#14 Push-to-talk Mac → „Hey Jarvis"**: etapa 1 hotkey în widget (pynput + sounddevice →
   `/v1/audio/transcriptions` → TTS Piper ro_RO/`say -v Ioana`); etapa 2 `voice_daemon.py` cu
   RealtimeSTT + openWakeWord.
-- **#7 Budget v2 — TRAS ÎN FAȚĂ (05.07.2026): între WP8 și WP9** (exact scenariul „agenții
-  încep să fie folosiți intens" — WP-J/WP11): parsează `total_cost_usd` din evenimentul
-  `result` → buget în bani/zi; gate pe `task_run` și pe fallback-ul LiteLLM→cloud.
+- **#7 Budget v2 — acum PRIMUL item (reordonare 09.07.2026;** tras inițial în față pe
+  05.07.2026): parsează `total_cost_usd` din evenimentul `result` → buget în bani/zi; gate pe
+  `task_run` și pe fallback-ul LiteLLM→cloud. **Stare 09.07.2026: parțial** — colectarea
+  `cost_usd` per run (WP9) și afișarea EUR există; lipsește plafonul-gate.
   **Afișare în EUR** (decizia lui Stefan — plătește în EUR): intern totul rămâne USD (așa
   raportează API-urile), conversia doar la afișare, curs configurabil `eur_usd_rate` în
   `kage_config.json` (default static, ex. 0.92; nu chema API de curs valutar pentru asta).
+
+  **Structura de sub-bugete + modele per rol (decizia lui Stefan, 09.07.2026** — pe prețuri
+  OpenRouter verificate live 09.07.2026; consumul real estimat e de 5–10× sub plafoane,
+  fiindcă la volum single-user calitatea e practic gratuită — NU optimiza prețul, alege
+  modelul potrivit rolului):
+
+  - **Total credite API: 10–15 €/lună plafon; top-up practic: 10 $ o dată** (creditele
+    OpenRouter nu expiră; ajung estimat 3–6 luni fără failover).
+  - **Trading (Critic): 7 €/lună** — plafonul `monthly_cap_eur` EXISTĂ deja (`trading/budget.py`).
+    Model: `tencent/hy3:free` până pe **21.07.2026** (expiră gratuitatea), apoi
+    **`deepseek/deepseek-v4-pro`** (0.435/0.87 $/M — raționament economic tăios, ieftin;
+    consum real ~0.10 $/lună). Notat și în `kage_config.example.json` (`_comment_model_plan`).
+  - **Advisor (WP13): ~3 €/lună.** Model: **`google/gemini-3-flash-preview`** (0.50/3.00 $/M,
+    context 1M) — criteriul principal e DIVERSITATEA (misiunile rulează pe Claude → advisorul
+    trebuie să fie alt „creier"); alternativă mai ieftină tot ne-Claude: `z-ai/glm-5.2`
+    (0.55/1.72 $/M, 1M). Consum real estimat ~0.6–0.9 $/lună la ~90 apeluri.
+  - **Failover misiuni (opțional, WP12/13): ~5 €/lună sub-plafon separat** — singurul rol care
+    poate arde bani real (bucle agentice = sute de mii de tokeni/WP). Model:
+    `anthropic/claude-sonnet` prin API (aceeași familie ca abonamentul → continuitate de
+    comportament la resume). Dezactivat până există plafonul.
+  - **Sinteza săptămânală de trading: 0 €** — pe abonamentul Claude, nu pe API.
+  - **Ce rămâne local (nu se cumpără):** Actorul (Qwen — diversitatea față de Critic e o
+    virtute), embeddings, chat-ul de zi cu zi pe tier-urile existente.
 - **#6 Memorie v2**: extracție de fapte pe T2 la final de conversație + job de consolidare la
   03:00 (dedup global, fuziune, bloc `user_profile` injectat mereu) — pipeline nocturn coerent
   cu vacuum 04:00 / backup 05:00.
@@ -1021,3 +1355,47 @@ pentru profilul de risc real.
 2. Commit pe branch + PR spre `dev`; mesaj cu referință la WP și D-uri rezolvate.
 3. Marchează în acest fișier WP-ul ca `✅ (data)` în titlul secțiunii — fișierul e checklist
    viu, nu doar plan.
+
+---
+
+## 8. Pista de învățare & verificarea înțelegerii (mod interviu) — adăugată 09.07.2026
+
+**Scop:** proiectul e material de CV pentru un rol în direcția AI; valoarea = capacitatea lui
+Stefan de a-l APĂRA la interviu (vezi decizia „mod de execuție ML" din §4). Această secțiune
+acoperă două goluri: (a) subsistemele deja construite de model, pe care Stefan trebuie să le
+stăpânească retroactiv; (b) subsistemele viitoare cu valoare de interviu, care se construiesc
+în mod ghidat. Rulează în PARALEL cu ordinea din §5 — nu e un WP, e un mod de lucru.
+
+**Metoda — 3 niveluri per subsistem, bifate aici:**
+
+1. **Explică** — Stefan descrie mecanismul + DE CE e așa (nu doar ce face); modelul corectează.
+2. **Apără** — modelul joacă intervievatorul: întrebări adversariale de profunzime
+   („de ce k-NN ponderat și nu 1-NN?", „ce se strică fără purged CV?"). Un subsistem/sesiune.
+3. **Extinde** — Stefan face SINGUR o modificare mică țintită (dovada înțelegerii);
+   modelul doar revizuiește.
+
+**Subsistemele DEJA construite — de recuperat prin înțelegere (ordinea = valoarea de interviu):**
+
+| Subsistem | Concepte de interviu | Exercițiu „Extinde" propus | E/A/X |
+| --- | --- | --- | --- |
+| Rutare semantică + cache semantic + memorie (`decide_tier`, `_semantic_classify`, `_cache_policy`, ChromaDB) | embeddings, vector DB, k-NN ponderat, praguri de similaritate, TTL, cache invalidation | scrie un test care demonstrează capcana follow-up-ului din cache (de ce >1 tură = skip) | ☐ ☐ ☐ |
+| Executorul pe Agent SDK (`agent_runner.py`: buclă tool-use, streaming, hooks, resume, inactivity timeout) | agents, tool calling, HITL gates, session state | adaugă un tip nou de eveniment normalizat + testul lui | ☐ ☐ ☐ |
+| Actor→Critic→Validare (WP-T: invarianți, DSR, PBO, pre-registration) | LLM-as-judge, overfitting statistic, multiple testing | rulează manual un ciclu și explică verdictul fiecărei ipoteze din raport | ☐ ☐ ☐ |
+| Risk gate + aprobări HITL (`risk_hook.evaluate_risk`, fluxul Telegram, fail-closed) | AI safety patterns, deny/allow/escalate, prompt injection | adaugă un pattern nou de risc cu test (inclusiv un false-positive evitat) | ☐ ☐ ☐ |
+| Run ledger + decision trace (WP8) | observabilitate LLM, trace schema, cost tracking | scrie un query care răspunde la o întrebare de debugging reală din `runs`/`run_events` | ☐ ☐ ☐ |
+
+**Subsistemele VIITOARE — se construiesc ghidat (schelet+teste de la model, corp de la Stefan):**
+
+| Subsistem | Când | Concepte de interviu |
+| --- | --- | --- |
+| Logica Advisorului (WP13): promptul adversarial, context minimal, structura verdictului | la WP13 | LLM-as-judge, evaluare, debate patterns, anchoring |
+| HMM de regim de la zero (numpy, EM) | la upgrade 3.2 | EM, MLE, modele generative (decis în §4) |
+| Dixon-Coles + CLV (T2 sports) | la T2 | fitare de model, verosimilitate, calibrare probabilistică |
+| Purged CV + meta-labeling | la nevoie în WP-T | leakage temporal, overfitting, evaluare |
+| Memorie v2 (#6): extracție de fapte + consolidare/dedup | la #6 | RAG, memorie de agent, deduplicare semantică |
+| RAG pe documente (`!index`) | înainte de ian. 2027 | chunking, retrieval, evaluare de retrieval |
+
+**Reguli:** plumbing-ul (endpoint-uri, scheduler, config, UI) NU intră pe pistă — zero valoare
+de interviu. Nu se reconstruiește nimic deja funcțional doar de dragul exercițiului —
+înțelegerea se dovedește prin „Extinde", nu prin rescriere. O sesiune de „Apără" picată se
+reprogramează după re-citire, nu se treacă cu vederea.

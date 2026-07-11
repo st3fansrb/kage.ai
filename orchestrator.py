@@ -324,6 +324,17 @@ CONFIRM_TIMEOUT_SECS = int(_cfg.get("confirm_timeout_secs", 300))
 # lung dar activ NU e ucis (repară deadline-ul fix 120s / D5).
 AGENT_INACTIVITY_TIMEOUT = float(_cfg.get("agent_inactivity_timeout", 180))
 
+# WP12: telecomandă. Missions rulează pe un branch propriu + push pentru review din GitHub
+# mobile; watchdog extern (heartbeat) ca să afli când Kage TACE (proces mort/net picat/mașină
+# adormită). Toate opt-in și best-effort — niciuna nu blochează bucla dacă eșuează.
+_remote_cfg = _cfg.get("remote", {}) if isinstance(_cfg.get("remote"), dict) else {}
+MISSION_GIT_BRANCH     = bool(_remote_cfg.get("mission_git_branch", True))   # rulează pe mission/<slug>
+MISSION_GIT_PUSH       = bool(_remote_cfg.get("mission_git_push", False))    # push (cere remote+auth)
+MISSION_GIT_REMOTE     = str(_remote_cfg.get("mission_git_remote", "origin")).strip() or "origin"
+HEARTBEAT_URL          = str(_remote_cfg.get("heartbeat_url", "")).strip()   # ping extern periodic
+HEARTBEAT_INTERVAL_MIN = max(int(_remote_cfg.get("heartbeat_interval_min", 15)), 1)
+STARTUP_ONLINE_MESSAGE = bool(_remote_cfg.get("startup_online_message", True))
+
 # Curs EUR/USD folosit pentru afișarea costurilor în EUR (felia de afișare din #7).
 EUR_USD_RATE = float(_cfg.get("eur_usd_rate", 0.92))
 
@@ -878,6 +889,111 @@ async def _trading_calibration_job():
         logger.warning(f"[Trading] calibrare eșuată: {e}")
 
 
+# ── WP12: watchdog — heartbeat extern + recuperarea joburilor cron întrerupte ──
+def _ensure_job_runs_table(conn) -> None:
+    """Urmă a rulărilor de joburi PROGRAMATE (nu manuale): start + finish. Un rând cu
+    `finished_at IS NULL` la startup = job întrerupt de un restart (cazul din 09.07)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS job_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL, started_at TEXT NOT NULL,
+            finished_at TEXT, status TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_job_runs_open ON job_runs(job_id, finished_at)")
+
+
+def _job_run_begin(job_id: str) -> Optional[int]:
+    if _db_conn is None:
+        return None
+    try:
+        cur = _db_conn.execute(
+            "INSERT INTO job_runs (job_id, started_at) VALUES (?, ?)",
+            (job_id, datetime.datetime.now().isoformat()))
+        _db_conn.commit()
+        return cur.lastrowid
+    except Exception as e:
+        logger.debug(f"[watchdog] job_run_begin eșuat: {e}")
+        return None
+
+
+def _job_run_end(rid: Optional[int], status: str) -> None:
+    if _db_conn is None or rid is None:
+        return
+    try:
+        _db_conn.execute("UPDATE job_runs SET finished_at=?, status=? WHERE id=?",
+                         (datetime.datetime.now().isoformat(), status, rid))
+        _db_conn.commit()
+    except Exception as e:
+        logger.debug(f"[watchdog] job_run_end eșuat: {e}")
+
+
+async def _tracked_job(job_id: str, coro) -> None:
+    """Rulează o corutină de job programat înregistrându-i start/finish în `job_runs`.
+    Dacă procesul moare mid-run, finish-ul nu se scrie → recuperat la următorul startup."""
+    rid = _job_run_begin(job_id)
+    try:
+        await coro
+        _job_run_end(rid, "done")
+    except Exception:
+        _job_run_end(rid, "failed")
+        raise
+
+
+async def _job_scan_scheduled() -> None:
+    """Wrapper PROGRAMAT (tracked) peste scanul de joburi. `!scan`/endpoint-ul cheamă direct
+    `_job_scan_all` (netracked — manualul nu se auto-recuperează)."""
+    await _tracked_job("__job_scan__", _job_scan_all())
+
+
+# Joburi care se RE-declanșează dacă au fost întrerupte (job_id → factory de corutină BRUTĂ;
+# `_recover_interrupted_jobs` o înfășoară el în `_tracked_job`, deci NU pune aici wrapper-ul
+# tracked, altfel s-ar urmări de două ori).
+def _recoverable_jobs() -> dict:
+    return {"__job_scan__": _job_scan_all}
+
+
+def _recover_interrupted_jobs() -> None:
+    """La startup: joburi programate care au ÎNCEPUT dar nu s-au terminat (proces ucis
+    mid-run) → marchează `interrupted`, re-declanșează cele recuperabile + alertă Telegram.
+    Rezolvă cazul din 09.07 (scan de 19:00 tăiat de un restart, pierdut tăcut până a doua zi)."""
+    if _db_conn is None:
+        return
+    try:
+        rows = _db_conn.execute(
+            "SELECT id, job_id, started_at FROM job_runs WHERE finished_at IS NULL").fetchall()
+    except Exception:
+        return
+    recoverable = _recoverable_jobs()
+    for rid, job_id, started in rows:
+        try:
+            _db_conn.execute("UPDATE job_runs SET finished_at=?, status='interrupted' WHERE id=?",
+                             (datetime.datetime.now().isoformat(), rid))
+            _db_conn.commit()
+        except Exception:
+            pass
+        fn = recoverable.get(job_id)
+        logger.warning(f"[watchdog] job {job_id} întrerupt (start {started}) — "
+                       f"{'re-declanșez' if fn else 'fără recuperare automată'}")
+        if fn is not None:
+            asyncio.create_task(_tracked_job(job_id, fn()))
+            asyncio.create_task(_mission_notify(
+                f"⚠️ Jobul <code>{job_id}</code> fusese întrerupt de un restart — îl reiau acum."))
+
+
+async def _heartbeat_ping() -> None:
+    """Ping periodic la un monitor extern (opt-in `heartbeat_url`). Un monitor de tip
+    dead-man's-switch (healthchecks.io etc.) te alertează când pingurile SE OPRESC — adică
+    exact când Kage tace și nu se poate anunța singur. Best-effort."""
+    if not HEARTBEAT_URL:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.get(HEARTBEAT_URL)
+    except Exception as e:
+        logger.debug(f"[watchdog] heartbeat eșuat: {e}")
+
+
 @app.on_event("startup")
 async def startup_scheduler():
     global _scheduler
@@ -909,7 +1025,7 @@ async def startup_scheduler():
         if JOBS_ENABLED and JOBS_PROFILES:
             try:
                 _scheduler.add_job(
-                    _job_scan_all, "cron", id="__job_scan__", **_parse_cron(JOBS_SCAN_CRON)
+                    _job_scan_scheduled, "cron", id="__job_scan__", **_parse_cron(JOBS_SCAN_CRON)
                 )
                 logger.info(f"[Jobs] scan programat: {JOBS_SCAN_CRON}")
             except Exception as e:
@@ -936,6 +1052,11 @@ async def startup_scheduler():
                     logger.info(f"[Trading] {label} programat: {cron}")
                 except Exception as e:
                     logger.warning(f"[Trading] {label} cron invalid ({cron!r}): {e}")
+        # WP12: heartbeat extern (opt-in) — dead-man's-switch care alertează când Kage tace.
+        if HEARTBEAT_URL:
+            _scheduler.add_job(_heartbeat_ping, "interval", minutes=HEARTBEAT_INTERVAL_MIN,
+                               id="__heartbeat__")
+            logger.info(f"[watchdog] heartbeat la {HEARTBEAT_INTERVAL_MIN} min → {HEARTBEAT_URL}")
         _scheduler.start()
         logger.info(f"APScheduler started — {loaded} tasks loaded")
     except Exception as e:
@@ -951,6 +1072,12 @@ async def startup_telegram():
         if gw:
             _tg_gateway = gw
             await _tg_gateway.start()
+            # WP12: semnal de viață la pornire — ca să știi când Kage a revenit după un restart.
+            if STARTUP_ONLINE_MESSAGE:
+                try:
+                    await _tg_gateway.send("🟢 Kage online.")
+                except Exception:
+                    pass
         else:
             logger.info("[TelegramGateway] dezactivat (telegram_bot_token/chat_id neconfigurate)")
     except Exception as e:
@@ -1047,6 +1174,8 @@ async def startup_cache():
         _ensure_agent_sessions_table(_db_conn)
         # WP11: mission runner — stare care supraviețuiește restartului.
         _ensure_missions_table(_db_conn)
+        # WP12: urmă a rulărilor de joburi programate (recuperare după restart).
+        _ensure_job_runs_table(_db_conn)
         _db_conn.commit()
         _load_pending_approvals()
 
@@ -1073,6 +1202,8 @@ async def startup_cache():
 
     # WP11: relansează misiunile întrerupte de un restart (după scheduler + telegram).
     _mission_resume_on_startup()
+    # WP12: recuperează joburile PROGRAMATE tăiate de un restart mid-run (cazul din 09.07).
+    _recover_interrupted_jobs()
 
 
 async def _seed_routing_examples() -> None:
@@ -1558,6 +1689,20 @@ async def mission_answer(request_id: str, request: Request):
     if request_id in pending_mission_q:
         pending_mission_q[request_id].set()
     return {"ok": True, "answer": answer}
+
+
+@app.post("/mission/draft/{mission_id}/{action}")
+async def mission_draft_action(mission_id: str, action: str):
+    """WP12: butoanele de sub cardul de schiță (Telegram) → pornește sau renunță la un draft."""
+    if action == "start":
+        ok, info = _mission_draft_start(mission_id)
+        if ok:
+            asyncio.create_task(_mission_notify(f"🚀 Misiune pornită: «{info}»."))
+        return {"ok": ok, "detail": info}
+    if action == "discard":
+        ok, info = _mission_draft_discard(mission_id)
+        return {"ok": ok, "detail": info}
+    return {"ok": False, "detail": f"acțiune necunoscută: {action}"}
 
 
 @app.get("/api/missions")
@@ -2694,6 +2839,10 @@ _MISSION_UPDATABLE = {"status", "current_idx", "sdk_session_id"}
 # Model implicit pentru missions dacă router-ul cade pe un tier ne-Claude (executorul
 # SDK e Claude-only). Sonnet = echilibrul cost/capabilitate pentru muncă autonomă.
 MISSION_DEFAULT_MODEL = str(_cfg.get("mission_default_model", "") or (TIER_MODELS[5][1] or "claude-sonnet-4-6"))
+# Model care REDACTEAZĂ planul unei misiuni la `!mission new` (WP12). Calitate contează
+# (e planul pe care agentul îl va executa) → un tier Claude, nu local. Default = același ca
+# executorul.
+MISSION_DRAFT_MODEL = str(_cfg.get("mission_draft_model", "") or MISSION_DEFAULT_MODEL)
 
 
 async def _mission_pick_model(prompt: str):
@@ -2835,6 +2984,233 @@ def _mission_create(slug_or_path: str, cwd: Optional[str] = None):
     return mission_id, None
 
 
+# ── WP12: redactarea unei misiuni de pe telefon (`!mission new`) ────────────────
+_MISSION_DRAFT_SYS = (
+    "Ești Kage, un planificator riguros. Primești o DIRECȚIE de la Stefan și produci un "
+    "plan de misiune în format `mission.md`, pe care un agent autonom îl va executa cap-coadă. "
+    "Reguli STRICTE de format (respectă-le exact, altfel planul e inutilizabil):\n"
+    "- Prima linie: `# Mission: <titlu scurt>`.\n"
+    "- Fiecare pachet de lucru începe cu `## <titlu WP>` (NU `###`).\n"
+    "- Sub fiecare WP: câteva bullet-uri cu pașii concreți.\n"
+    "- Apoi un sub-antet `### Acceptare` cu bullet-uri de criterii. Criteriile VERIFICABILE "
+    "  automat se scriu ca o singură comandă shell între backtick-uri pe un rând, ex. "
+    "  `pytest -q` sau `curl -s localhost:4001/health`. Pune cel puțin unul verificabil per WP "
+    "  când e posibil; restul pot fi în text liber.\n"
+    "- Împarte munca în 1–4 pachete mici, fiecare livrabil independent.\n"
+    "- Scrie în română. NU adăuga explicații în afara documentului. NU învălui în ```."
+)
+
+
+def _extract_mission_md(raw: str) -> str:
+    """Scoate un eventual gard ```markdown ...``` din output-ul modelului; altfel textul brut."""
+    m = re.search(r"```(?:markdown|md)?\s*\n(.*?)```", raw, re.DOTALL)
+    return (m.group(1) if m else raw).strip()
+
+
+def _mission_slugify(direction: str) -> str:
+    """Slug scurt kebab din direcție + amprentă de timp (unicitate între drafturi)."""
+    base = re.sub(r"[^a-z0-9]+", "-", direction.lower()).strip("-")[:32] or "misiune"
+    return f"{base}-{datetime.datetime.now().strftime('%m%d-%H%M%S')}"
+
+
+async def _agent_complete(prompt: str, *, model: str, system: Optional[str] = None) -> str:
+    """Completare text one-shot prin AgentRunner, FĂRĂ tools (redactare read-only, nu execuție).
+    Colectează evenimentele `text`. Ridică RuntimeError la eroare din runner."""
+    full = f"{system}\n\n{prompt}" if system else prompt
+    chunks: list = []
+    async for ev in _agent_runner.run(
+        full, user_message="draft", model=model, cwd=str(PROJECT_ROOT),
+        allowed_tools=[], disallowed_tools=["*"], permission_mode="default",
+        inactivity_timeout=AGENT_INACTIVITY_TIMEOUT, autonomous=False,
+    ):
+        if ev["type"] == "text":
+            chunks.append(ev["text"])
+        elif ev["type"] == "error":
+            raise RuntimeError(ev["error"])
+    text = "".join(chunks).strip()
+    if not text:
+        raise RuntimeError("modelul nu a produs text")
+    return text
+
+
+async def _mission_draft_text(direction: str, prior_md: Optional[str] = None,
+                              revise: Optional[str] = None) -> str:
+    """Redactează (sau revizuiește) textul `mission.md` cu MISSION_DRAFT_MODEL. Validează că
+    parsează și are ≥1 pachet de lucru, altfel ridică. Întoarce markdown-ul curat."""
+    if revise and prior_md:
+        prompt = (
+            f"Direcția inițială: «{direction}».\n\nPlanul curent:\n{prior_md}\n\n"
+            f"Revizuiește planul conform acestei cereri: {revise}\n"
+            "Întoarce documentul `mission.md` COMPLET actualizat."
+        )
+    else:
+        prompt = (f"Direcția lui Stefan: «{direction}».\n\n"
+                  "Produ documentul `mission.md` complet.")
+    raw = await _agent_complete(prompt, model=MISSION_DRAFT_MODEL, system=_MISSION_DRAFT_SYS)
+    md = _extract_mission_md(raw)
+    mission = _mr.parse_mission(md)
+    if not mission.wps:
+        raise RuntimeError("draftul nu conține pachete de lucru (`## ...`)")
+    return md
+
+
+def _mission_insert_wps(mission_id: str, wps) -> None:
+    """(Re)scrie rândurile mission_wps pentru un draft — toate `pending`."""
+    _db_conn.execute("DELETE FROM mission_wps WHERE mission_id=?", (mission_id,))
+    for i, wp in enumerate(wps):
+        _db_conn.execute(
+            "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (?, ?, ?, 'pending')",
+            (mission_id, i, wp.title))
+
+
+async def _mission_new(direction: str, cwd: Optional[str] = None):
+    """`!mission new`: redactează planul, îl scrie în `missions/<slug>/mission.md` și
+    inserează un rând de misiune cu status `draft` (NU pornește). Întoarce (mission_id, err)."""
+    if _db_conn is None:
+        return None, "DB indisponibil"
+    try:
+        md = await _mission_draft_text(direction)
+    except Exception as e:
+        return None, f"redactarea planului a eșuat: {e}"
+    mission = _mr.parse_mission(md)
+    slug = _mission_slugify(direction)
+    path = MISSIONS_DIR / slug / "mission.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(md, encoding="utf-8")
+    except Exception as e:
+        return None, f"nu pot scrie mission.md: {e}"
+    workspace = _validate_task_cwd(cwd or str(PROJECT_ROOT)) or str(PROJECT_ROOT)
+    mission_id = uuid.uuid4().hex
+    now = datetime.datetime.now().isoformat()
+    try:
+        _db_conn.execute(
+            "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?)",
+            (mission_id, slug, mission.title, str(path), workspace, now, now))
+        _mission_insert_wps(mission_id, mission.wps)
+        _db_conn.commit()
+    except Exception as e:
+        return None, f"insert draft eșuat: {e}"
+    return mission_id, None
+
+
+def _latest_draft_id() -> Optional[str]:
+    """Cel mai recent draft (status `draft`), pentru `!mission revise` fără id explicit."""
+    if _db_conn is None:
+        return None
+    try:
+        r = _db_conn.execute(
+            "SELECT id FROM missions WHERE status='draft' ORDER BY created_at DESC LIMIT 1").fetchone()
+    except Exception:
+        return None
+    return r[0] if r else None
+
+
+async def _mission_revise(mission_id: str, instructions: str):
+    """Revizuiește un draft existent conform instrucțiunilor; rescrie fișierul + WP-urile.
+    Întoarce (mission_id, err). Refuză dacă misiunea nu mai e `draft` (deja pornită)."""
+    row = _mission_row(mission_id)
+    if row is None:
+        return None, "draft negăsit"
+    if row["status"] != "draft":
+        return None, "misiunea nu mai e draft (deja pornită)"
+    try:
+        prior = Path(row["path"]).read_text(encoding="utf-8")
+    except Exception:
+        prior = ""
+    try:
+        md = await _mission_draft_text(row.get("title", ""), prior_md=prior, revise=instructions)
+    except Exception as e:
+        return None, f"revizuirea a eșuat: {e}"
+    mission = _mr.parse_mission(md)
+    try:
+        Path(row["path"]).write_text(md, encoding="utf-8")
+    except Exception as e:
+        return None, f"nu pot scrie mission.md: {e}"
+    try:
+        _db_conn.execute("UPDATE missions SET title=?, updated_at=? WHERE id=?",
+                         (mission.title, datetime.datetime.now().isoformat(), mission_id))
+        _mission_insert_wps(mission_id, mission.wps)
+        _db_conn.commit()
+    except Exception as e:
+        return None, f"update draft eșuat: {e}"
+    return mission_id, None
+
+
+def _mission_draft_start(mission_id: str):
+    """Pornește un draft aprobat: draft → running + lansează bucla. Întoarce (ok, titlu|motiv)."""
+    row = _mission_row(mission_id)
+    if row is None:
+        return False, "draft negăsit"
+    if row["status"] != "draft":
+        return False, "nu e un draft (poate deja pornit)"
+    if _active_mission_id is not None:
+        act = _mission_row(_active_mission_id)
+        return False, f"altă misiune rulează deja: «{(act or {}).get('title', '?')}»"
+    _mission_update(mission_id, status="running")
+    _mission_launch(mission_id)
+    return True, row["title"]
+
+
+def _mission_draft_discard(mission_id: str):
+    """Șterge un draft (rând + WP-uri + fișierul mission.md). Întoarce (ok, titlu|motiv)."""
+    row = _mission_row(mission_id)
+    if row is None:
+        return False, "draft negăsit"
+    if row["status"] != "draft":
+        return False, "nu e un draft"
+    title = row["title"]
+    try:
+        _db_conn.execute("DELETE FROM mission_wps WHERE mission_id=?", (mission_id,))
+        _db_conn.execute("DELETE FROM missions WHERE id=?", (mission_id,))
+        _db_conn.commit()
+    except Exception as e:
+        return False, str(e)
+    try:
+        p = Path(row["path"])
+        if p.exists() and MISSIONS_DIR in p.parents:
+            p.unlink()
+            if p.parent != MISSIONS_DIR and not any(p.parent.iterdir()):
+                p.parent.rmdir()
+    except Exception:
+        pass
+    return True, title
+
+
+async def _send_mission_draft_card(mission_id: str) -> None:
+    """Trimite schița pe Telegram cu butoane ✅/✏️/🗑 (best-effort)."""
+    row = _mission_row(mission_id)
+    if row is None or _tg_gateway is None:
+        return
+    wps = [w["title"] for w in _mission_wps(mission_id)]
+    try:
+        await _tg_gateway.send_mission_draft(mission_id, row["title"], wps)
+    except Exception as e:
+        logger.debug(f"[mission] card draft eșuat: {e}")
+
+
+async def _mission_new_and_card(direction: str) -> None:
+    """Task de fundal: redactează + trimite cardul (drafting-ul poate lua zeci de secunde)."""
+    mission_id, err = await _mission_new(direction)
+    if err:
+        await _mission_notify(f"❌ Nu am putut redacta misiunea: {err}")
+        return
+    await _send_mission_draft_card(mission_id)
+
+
+async def _mission_revise_and_card(instructions: str) -> None:
+    mid = _latest_draft_id()
+    if mid is None:
+        await _mission_notify("Nu există niciun draft de revizuit. Creează unul cu `!mission new`.")
+        return
+    mission_id, err = await _mission_revise(mid, instructions)
+    if err:
+        await _mission_notify(f"❌ Revizuire eșuată: {err}")
+        return
+    await _send_mission_draft_card(mission_id)
+
+
 def _mission_build_prompt(mission, wp, idx: int) -> str:
     criteria = "\n".join(f"- {c}" for c in wp.criteria) or "- (fără criterii explicite)"
     return (
@@ -2868,8 +3244,80 @@ async def _mission_verify(wp, cwd: str):
     return True, "toate verificările trec"
 
 
-def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> None:
-    """Marchează WP-ul ca ✅ în mission.md (checklist viu) + commit doar acel fișier."""
+def _mission_git(*args: str) -> subprocess.CompletedProcess:
+    """git în repo-ul proiectului (unde trăiește mission.md + codul misiunii)."""
+    return subprocess.run(["git", *args], cwd=str(PROJECT_ROOT),
+                          capture_output=True, text=True, timeout=60)
+
+
+def _mission_branch_name(slug: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", slug or "").strip("-") or "misiune"
+    return f"mission/{safe}"
+
+
+def _mission_git_ensure_branch(slug: str) -> Optional[str]:
+    """WP12: creează/comută pe branch-ul misiunii (`mission/<slug>`) din HEAD-ul curent —
+    working tree-ul rămâne neschimbat la creare, deci nu deranjează procesul care rulează.
+    Best-effort; None dacă e dezactivat, nu e repo git, sau eșuează."""
+    if not MISSION_GIT_BRANCH or not (PROJECT_ROOT / ".git").exists():
+        return None
+    branch = _mission_branch_name(slug)
+    try:
+        cur = _mission_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        if cur == branch:
+            return branch
+        exists = _mission_git("rev-parse", "--verify", "--quiet", branch).returncode == 0
+        res = _mission_git("checkout", branch) if exists else _mission_git("checkout", "-b", branch)
+        if res.returncode != 0:
+            logger.warning(f"[mission] checkout {branch} eșuat: {res.stderr.strip()[:150]}")
+            return None
+        logger.info(f"[mission] branch {branch}")
+        return branch
+    except Exception as e:
+        logger.warning(f"[mission] branch eșuat: {e}")
+        return None
+
+
+def _github_repo_slug() -> Optional[str]:
+    """`user/repo` din URL-ul remote-ului configurat, pentru linkul de compare. None dacă
+    nu e GitHub / fără remote."""
+    try:
+        url = _mission_git("remote", "get-url", MISSION_GIT_REMOTE).stdout.strip()
+    except Exception:
+        return None
+    m = re.search(r"github\.com[:/]+([^/]+/[^/]+?)(?:\.git)?/?$", url)
+    return m.group(1) if m else None
+
+
+def _github_compare_url(branch: str) -> Optional[str]:
+    slug = _github_repo_slug()
+    return f"https://github.com/{slug}/compare/{branch}?expand=1" if slug else None
+
+
+def _mission_git_push(branch: str) -> dict:
+    """Push branch-ul misiunii pe remote (opt-in `mission_git_push`). Best-effort: un push
+    eșuat (offline/auth) NU pică misiunea. Întoarce {pushed, compare_url}."""
+    out = {"pushed": False, "compare_url": None}
+    if not MISSION_GIT_PUSH or not branch:
+        return out
+    try:
+        res = _mission_git("push", "-u", MISSION_GIT_REMOTE, branch)
+        if res.returncode == 0:
+            out["pushed"] = True
+            out["compare_url"] = _github_compare_url(branch)
+            logger.info(f"[mission] push ok → {MISSION_GIT_REMOTE}/{branch}")
+        else:
+            logger.warning(f"[mission] push eșuat: {res.stderr.strip()[:200]}")
+    except Exception as e:
+        logger.warning(f"[mission] push eroare: {e}")
+    return out
+
+
+def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> Optional[dict]:
+    """Marchează WP-ul ✅ în mission.md + comite ÎNTREGUL diff al misiunii (WP12: nu doar
+    mission.md — și codul scris de agent) pe branch-ul misiunii, apoi push (opt-in).
+    Atribuirea = git config-ul repo-ului (Stefan). Întoarce {branch, pushed, compare_url}
+    sau None (best-effort — nu pică bucla)."""
     try:
         p = Path(path)
         p.write_text(_mr.mark_wp_done(p.read_text(encoding="utf-8"), idx,
@@ -2877,11 +3325,20 @@ def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> None:
     except Exception as e:
         logger.debug(f"[mission] mark ✅ eșuat: {e}")
     try:
-        subprocess.run(["git", "add", path], cwd=str(PROJECT_ROOT), capture_output=True, timeout=30)
-        subprocess.run(["git", "commit", "-m", f"mission: ✅ {wp_title[:60]}", "--", path],
-                       cwd=str(PROJECT_ROOT), capture_output=True, timeout=30)
+        _mission_git("add", "-A")
+        res = _mission_git("commit", "-m", f"mission: ✅ {wp_title[:60]}")
+        if res.returncode != 0 and "nothing to commit" not in (res.stdout + res.stderr).lower():
+            logger.debug(f"[mission] commit: {res.stderr.strip()[:150]}")
     except Exception as e:
         logger.debug(f"[mission] commit eșuat: {e}")
+        return None
+    try:
+        branch = _mission_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    except Exception:
+        branch = ""
+    info = {"branch": branch, "pushed": False, "compare_url": None}
+    info.update(_mission_git_push(branch))
+    return info
 
 
 async def _mission_ask(question: str, options: list, timeout: Optional[float] = None) -> Optional[str]:
@@ -2960,6 +3417,10 @@ async def _mission_run(mission_id: str) -> None:
     _active_mission_id = mission_id
     _mission_caffeinate_start()
     row0 = _mission_row(mission_id)
+    # WP12: misiunea lucrează pe branch propriu (review din GitHub mobile). O singură dată.
+    branch = _mission_git_ensure_branch((row0 or {}).get("slug", ""))
+    if branch:
+        await _mission_notify(f"🌿 Lucrez pe branch <code>{branch}</code>.")
     run_id = _run_start("mission", channel="mission",
                         input_text=(row0 or {}).get("title", mission_id))
     _mission_cost = 0.0
@@ -3034,8 +3495,10 @@ async def _mission_run(mission_id: str) -> None:
             ok, detail = await _mission_verify(wp, row["cwd"])
             if ok:
                 _mission_wp_set(mission_id, idx, "done", detail=detail)
-                _mission_mark_and_commit(row["path"], idx, wp.title)
+                info = _mission_mark_and_commit(row["path"], idx, wp.title)
                 await _mission_notify(f"✅ {wp.title}")
+                if info and info.get("compare_url"):
+                    await _mission_notify(f"🔎 Revizuiește diff-ul: {info['compare_url']}")
             else:
                 answer = await _mission_ask(
                     f"Pachetul «{wp.title}» n-a trecut verificarea:\n{detail[:400]}\nCe fac?",
@@ -3787,9 +4250,24 @@ def _briefing_scheduled_today() -> list:
 
 
 def _briefing_missions() -> Optional[list]:
-    """Starea misiunilor Mission Runner (WP11). Nu există încă → None (secțiune omisă).
-    Punct de extindere: când WP11 aduce tabelul/directorul de misiuni, întoarce lista lor."""
-    return None
+    """Starea misiunilor pentru briefing (WP12): schițe + cele active/pauzate + cele
+    terminate/eșuate în ultimele 24h. None dacă nu există niciuna relevantă (secțiune omisă).
+    Fiecare element: {name, status} — consumat de `_briefing_render`."""
+    if _db_conn is None:
+        return None
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat()
+    try:
+        rows = _db_conn.execute(
+            "SELECT title, status FROM missions "
+            "WHERE status IN ('draft', 'running', 'paused') "
+            "   OR (status IN ('done', 'failed') AND updated_at >= ?) "
+            "ORDER BY updated_at DESC LIMIT 5",
+            (cutoff,)).fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    return [{"name": t or "(fără titlu)", "status": s} for t, s in rows]
 
 
 def _briefing_vault_today() -> Optional[str]:
@@ -4700,7 +5178,8 @@ def _help_response() -> StreamingResponse:
         "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!scan [profil]` → Caută joburi noi (WP-J) — digest pe Telegram",
         "  `!briefing` → Briefing zilnic acum (joburi, buget, taskuri, vault)",
-        "  `!mission start <slug>` → Rulează o misiune autonom (WP11); `status`/`pause`/`resume`/`stop`",
+        "  `!mission new <direcție>` → Kage redactează un plan și ți-l trimite pe Telegram spre aprobare (WP12)",
+        "  `!mission start <slug>` → Rulează o misiune autonom (WP11); `revise`/`status`/`pause`/`resume`/`stop`",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
         "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",
@@ -4739,6 +5218,19 @@ async def _handle_mission_command(message: str) -> StreamingResponse:
     parts = message.strip().split(maxsplit=2)
     sub = (parts[1].lower() if len(parts) > 1 else "status")
     arg = parts[2].strip() if len(parts) > 2 else ""
+
+    if sub == "new":
+        if not arg:
+            return _sse_text_response("Folosire: `!mission new <ce vrei să construiască>`.")
+        asyncio.create_task(_mission_new_and_card(arg))
+        return _sse_text_response("✍️ Redactez planul misiunii — îți trimit schița pe Telegram "
+                                  "cu butoane (pornește / revizuiește / renunță).")
+
+    if sub == "revise":
+        if not arg:
+            return _sse_text_response("Folosire: `!mission revise <ce să modific în plan>`.")
+        asyncio.create_task(_mission_revise_and_card(arg))
+        return _sse_text_response("✍️ Revizuiesc schița — îți trimit varianta nouă pe Telegram.")
 
     if sub == "start":
         if not arg:
@@ -4805,7 +5297,8 @@ async def _handle_mission_command(message: str) -> StreamingResponse:
             return _sse_text_response("Nicio misiune încă.")
         return _sse_text_response("**Misiuni:**\n" + "\n".join(f"  • {t} — `{s}`" for t, s in rows))
 
-    return _sse_text_response("Subcomenzi: `start <slug>` · `status` · `pause` · `resume` · `stop` · `list`.")
+    return _sse_text_response("Subcomenzi: `new <direcție>` · `revise <schimbare>` · "
+                              "`start <slug>` · `status` · `pause` · `resume` · `stop` · `list`.")
 
 
 def _port_up(port: int) -> bool:

@@ -144,6 +144,53 @@ bash scripts/start_tunnel.sh     # starts the Cloudflare tunnel
 Then open `https://kage.example.com` on any device. Logs: `.logs/frontend.log`,
 `.logs/tunnel.log`.
 
+## Operating Kage from your phone (WP12)
+
+The whole point of the Telegram remote workflow is "Stefan at work, laptop at home":
+you create, approve and review missions from the phone. Two things must hold for this to work.
+
+**Keep the machine awake (mandatory).** The Telegram gateway only polls while the process
+runs, and macOS sleeps an idle laptop — which kills polling, and a sleeping Mac can't be woken
+remotely. On AC power, disable idle sleep:
+
+```bash
+sudo pmset -c sleep 0        # never sleep on charger (clamshell/lid-closed on AC is fine)
+pmset -g | grep sleep        # verify
+```
+
+`caffeinate -s` (held automatically while a mission runs, WP11) only covers active missions —
+`pmset -c sleep 0` is what keeps Kage reachable when nothing is running.
+
+**Create missions remotely.** From Telegram:
+
+- `!mission new <direction>` — Kage drafts a `mission.md` plan and sends it back as a card with
+  buttons: **✅ Pornește** (start), **✏️ Revizuiește** (reply with changes → it re-drafts),
+  **🗑 Renunță** (discard). The draft is saved under `missions/<slug>/` with status `draft`
+  until you approve it.
+- `!mission revise <change>` — revise the most recent draft without pressing the button.
+- `!mission status` / `!mission stop` — as before (WP11). The morning briefing (WP-D) now also
+  lists active/paused/draft missions.
+
+**Review missions from GitHub mobile (opt-in).** Set `remote.mission_git_branch: true` (default)
+so each mission runs on its own `mission/<slug>` branch and commits the *full* diff (not just
+`mission.md`). With `remote.mission_git_push: true` and a remote that has push auth (SSH key or
+credential helper), Kage pushes after each work package and sends you a GitHub **compare** link
+on Telegram — review the diff and merge from your phone. Commits use the repo's git identity
+(Stefan), no Claude co-author trailer.
+
+**Know when Kage goes silent (watchdog).** launchd restarts a dead process, but it can't tell
+you when the network drops or the machine sleeps. Two safety nets:
+
+- **Heartbeat** — set `remote.heartbeat_url` to a dead-man's-switch check (e.g.
+  [healthchecks.io](https://healthchecks.io), free): Kage pings it every
+  `remote.heartbeat_interval_min` minutes, and the external service alerts *you* when the pings
+  stop. This is the only way to learn Kage is down when Kage itself can't message you.
+- **Interrupted-job recovery** — a scheduled job (e.g. the job scan) that was killed mid-run by
+  a restart is detected at the next startup, re-triggered, and announced on Telegram — no more
+  silent losses like the 19:00 scan cut short by a restart.
+- A `🟢 Kage online` message on Telegram at every startup (disable with
+  `remote.startup_online_message: false`).
+
 ## Troubleshooting
 
 **`is the orchestrator running on :4001?`** — run `bash start_all.sh` first.

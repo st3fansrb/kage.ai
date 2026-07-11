@@ -47,6 +47,11 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
   tokeni × preț/milion (config `price_per_mtok_in/out`), sau cost real dacă OpenRouter îl întoarce
   în `usage.cost`. Peste plafon ⇒ Criticul cade pe fallback local (vezi 5.2). Plafon default 7€/lună
   (interval aprobat 5–10€). Teste în `test_trading_pipeline.py`.
+  **Plan model Critic (decizie 09.07.2026):** `tencent/hy3:free` până pe **21.07.2026** (expiră
+  gratuitatea), apoi **`deepseek/deepseek-v4-pro`** (0.435/0.87 $/M, prețuri OpenRouter
+  09.07.2026 — reverifică la comutare; consum estimat ~0.10 $/lună, plafonul 7€ rămâne larg).
+  La comutare: setează `model` + `price_per_mtok_in/out` în `kage_config.json` (vezi
+  `_comment_model_plan` din example).
 
 ## Etapa 3 — bucla de context zilnic
 
@@ -57,6 +62,10 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
   EMA200 → `{regime, bias, confidence}`, rule-based self-contained (numpy), deterministă. `flat` la
   spike real (vol ×2 peste tipic), nu la percentila 90. **Upgrade HMM** documentat (aceeași
   interfață) — hmmlearn evitat acum (posibil nementenat + risc de dependințe).
+  **Decizie 09.07.2026:** la upgrade, HMM-ul se scrie **de la zero** (numpy, EM, 2–3 stări
+  gaussiene, ~120 linii) și îl implementează **Stefan în mod ghidat** (schelet + teste de la
+  model, corpul funcțiilor de la Stefan) — parte din strategia de CV; vezi decizia „mod de
+  execuție pe partea ML" din `KAGE-HANDOFF.md` §4.
 - `[x]` **3.3 `daily_context.json` + limitator freqtrade.** ✅ `trading/daily_context.py` — scrie
   JSON + rând `daily_context` (ledger); `bias_allows(side)` = contractul pe care strategiile îl
   cheamă în `populate_entry_trend` (short_only ⇒ long nu deschide). Provider jos ⇒ nu suprascrie.
