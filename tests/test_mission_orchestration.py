@@ -62,6 +62,8 @@ def mdb(monkeypatch, tmp_path):
     commits = []
     monkeypatch.setattr(orchestrator, "_mission_mark_and_commit",
                         lambda path, idx, title: commits.append((idx, title)))
+    # WP12: nu atinge git-ul real în teste (branch-ul misiunii).
+    monkeypatch.setattr(orchestrator, "_mission_git_ensure_branch", lambda slug: None)
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
     orchestrator._commits = commits  # expus pentru assert
 

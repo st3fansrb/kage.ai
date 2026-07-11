@@ -40,6 +40,8 @@ class TelegramGateway:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._client: Optional[httpx.AsyncClient] = None
+        # WP12: după ✏️ pe cardul de schiță, următorul mesaj liber = instrucțiuni de revizie.
+        self._pending_revise = False
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -109,6 +111,24 @@ class TelegramGateway:
         row = [{"text": _escape(str(o))[:32], "callback_data": f"mission:{o}:{request_id}"}
                for o in (options or ["ok"])[:4]]
         await self.send(text, reply_markup={"inline_keyboard": [row]})
+
+    async def send_mission_draft(self, mission_id: str, title: str, wp_titles: list) -> None:
+        """WP12: schița unei misiuni redactate de Kage (`!mission new`), cu butoane
+        ✅ Pornește / ✏️ Revizuiește / 🗑 Renunță. La ✏️ următorul mesaj liber devine
+        instrucțiuni de revizie."""
+        lines = [f"📝 <b>Schiță de misiune</b>: {_escape(str(title))}", ""]
+        for i, t in enumerate(wp_titles[:12], 1):
+            lines.append(f"  {i}. {_escape(str(t))}")
+        if not wp_titles:
+            lines.append("  <i>(niciun pachet de lucru — revizuiește)</i>")
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "✅ Pornește", "callback_data": f"missiondraft:start:{mission_id}"},
+                {"text": "✏️ Revizuiește", "callback_data": f"missiondraft:revise:{mission_id}"},
+                {"text": "🗑 Renunță", "callback_data": f"missiondraft:discard:{mission_id}"},
+            ]]
+        }
+        await self.send("\n".join(lines), reply_markup=keyboard)
 
     async def send_job_card(self, job: dict) -> None:
         """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
@@ -213,6 +233,14 @@ class TelegramGateway:
         if text == "/status":
             text = "!status"
 
+        # WP12: dacă tocmai s-a cerut o revizie de schiță (✏️), primul mesaj liber (nu comandă)
+        # devine instrucțiunile de revizie. O comandă (`!`/`/`) anulează așteptarea.
+        if self._pending_revise:
+            self._pending_revise = False
+            if not text.startswith(("!", "/")):
+                await self._forward_to_orchestrator(f"!mission revise {text}")
+                return
+
         # Rutare la orchestrator
         await self._forward_to_orchestrator(text)
 
@@ -278,6 +306,8 @@ class TelegramGateway:
             await self._handle_risk_callback(data)
         elif data.startswith("job:"):
             await self._handle_job_callback(data)
+        elif data.startswith("missiondraft:"):
+            await self._handle_mission_draft_callback(data)
         elif data.startswith("mission:"):
             await self._handle_mission_callback(data)
 
@@ -334,6 +364,39 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] mission callback failed: {e}")
             await self.send("⚠️ Eroare internă la procesare decizie.")
+
+    async def _handle_mission_draft_callback(self, data: str) -> None:
+        """WP12: butoanele cardului de schiță — missiondraft:start|revise|discard:<id>.
+        `revise` doar armează captura următorului mesaj liber; start/discard → endpoint."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, action, mission_id = parts
+        if action == "revise":
+            self._pending_revise = True
+            await self.send("✏️ Răspunde cu ce să modific în plan (un singur mesaj).")
+            return
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{self._orchestrator_url}/mission/draft/{mission_id}/{action}",
+                    headers=headers,
+                )
+            body = resp.json() if resp.status_code == 200 else {}
+            if resp.status_code == 200 and body.get("ok"):
+                if action == "start":
+                    await self.send(f"🚀 Pornesc misiunea: <b>{_escape(str(body.get('detail', '')))}</b>.")
+                else:
+                    await self.send(f"🗑 Schiță ștearsă: {_escape(str(body.get('detail', '')))}.")
+            else:
+                detail = body.get("detail") if body else f"HTTP {resp.status_code}"
+                await self.send(f"⚠️ Nu am putut {action}: {_escape(str(detail))}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] mission draft callback failed: {e}")
+            await self.send("⚠️ Eroare internă la procesarea schiței.")
 
     async def _handle_job_callback(self, data: str) -> None:
         """Butoane job (WP-J): job:save|apply|ignore:<hash> → endpoint /jobs/*."""
