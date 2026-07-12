@@ -208,6 +208,17 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
   de domeniu (features, etichetare, anti-leakage, evaluare) = de mână. Framing:
   neprofitabilitatea NU e eșecul proiectului, e rezultatul lui — „N din M ipoteze LLM erau
   zgomot, demonstrat cu validare deflatată" e povestea de interviu, nu „bot profitabil".
+- **Executor Codex = direct varianta multi-executor post-G2 (12.07.2026, Stefan):** al doilea
+  executor (Codex CLI / GPT-5.6) intră în Kage DOAR în forma cu valoare de CV —
+  **multi-executor cu governance unificat la nivel de container** (deci după WP-G2), NU prin
+  duplicarea matricei de risc pe hooks: Codex nu are echivalent PreToolUse (are propriul
+  sandbox OS-level, Seatbelt), iar două modele de governance în paralel = stratul greșit +
+  mentenanță dublă. Se sare peste pașii intermediari (advisor pluggable pe Codex); WP13
+  rămâne pe specul lui (Gemini 3 Flash). **Declanșator: startul abonamentului ChatGPT Plus**
+  (luna de probă Codex + GPT-5.6) — notează data aici când începe: `__.__.2026`; precondiție
+  tehnică: WP-G2 livrat. Până atunci Codex se folosește doar MANUAL, de Stefan, în ferestrele
+  de rate-limit Claude (cote necorelate). Povestea de interviu (§8): „orchestrator
+  multi-executor cu governance executor-agnostic la nivel de container". Vezi WP-CX în §5.
 
 ---
 
@@ -234,6 +245,9 @@ WP-T T2(sports betting) → T3(Manifold) → T4(forex/OANDA) → evaluare
 NDX → #14(voice push-to-talk) → RAG(înainte de ian. 2027) → audit modele(post-proiect).**
 **WP-V (video intel)** e în afara lanțului — independent, felie de 1–2 seri, poate fi tras
 oricând după WP12 + setup-ul Whisper (WP6). **§8 (pista de învățare)** rulează în paralel.
+**WP-CX (executor Codex — multi-executor cu governance pe containere)** e condiționat și în
+afara lanțului: intră abia DUPĂ WP-G2 și startul abonamentului Codex (decizia, declanșatorul
+și data startului în §4). Specul se scrie abia după luna de probă — nu-l detalia acum.
 
 Raționament:
 
