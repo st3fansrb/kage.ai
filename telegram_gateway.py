@@ -17,6 +17,8 @@ from typing import Optional
 
 import httpx
 
+import video_intel as _vi
+
 logger = logging.getLogger(__name__)
 
 _PREVIEW_MAX_CHARS = 800
@@ -130,6 +132,16 @@ class TelegramGateway:
         }
         await self.send("\n".join(lines), reply_markup=keyboard)
 
+    async def send_video_card(self, vid: str, card: dict) -> None:
+        """WP-V: card de verdict pentru un clip analizat. `card` are cheile `text` și
+        `buttons` (listă de {text, action}); butoanele devin callback `video:<action>:<vid>`."""
+        row = [
+            {"text": b.get("text", "?"), "callback_data": f"video:{b.get('action')}:{vid}"}
+            for b in card.get("buttons", [])[:6]
+        ]
+        markup = {"inline_keyboard": [row]} if row else None
+        await self.send(card.get("text", "📹 (card gol)"), reply_markup=markup)
+
     async def send_job_card(self, job: dict) -> None:
         """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
         `job` are cheile: hash, title, company, location, url, score."""
@@ -241,8 +253,36 @@ class TelegramGateway:
                 await self._forward_to_orchestrator(f"!mission revise {text}")
                 return
 
+        # WP-V: un link video (YouTube/TikTok/…) intră pe fluxul de analiză, nu pe chat.
+        video_url = _vi.find_video_url(text)
+        if video_url and not text.startswith(("!", "/")):
+            await self._handle_video(video_url)
+            return
+
         # Rutare la orchestrator
         await self._forward_to_orchestrator(text)
+
+    async def _handle_video(self, url: str) -> None:
+        """WP-V: trimite URL-ul la /video/analyze și afișează cardul de verdict cu butoane."""
+        await self.send("📹 Analizez clipul… (subtitrări/transcript local)")
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=360) as client:
+                resp = await client.post(
+                    f"{self._orchestrator_url}/video/analyze",
+                    json={"url": url}, headers=headers,
+                )
+            body = resp.json() if resp.status_code == 200 else {}
+            if resp.status_code == 200 and body.get("ok"):
+                await self.send_video_card(body["id"], body["card"])
+            else:
+                detail = body.get("error") if body else f"HTTP {resp.status_code}"
+                await self.send(f"⚠️ {_escape(str(detail))}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] video analyze failed: {e}")
+            await self.send("⚠️ Eroare internă la analiza clipului.")
 
     async def _handle_voice(self, file_id: str) -> None:
         """WP6: descarcă voice memo-ul, îl transcrie local (endpoint orchestrator)
@@ -304,6 +344,8 @@ class TelegramGateway:
 
         if data.startswith("risk:"):
             await self._handle_risk_callback(data)
+        elif data.startswith("video:"):
+            await self._handle_video_callback(data)
         elif data.startswith("job:"):
             await self._handle_job_callback(data)
         elif data.startswith("missiondraft:"):
@@ -397,6 +439,43 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] mission draft callback failed: {e}")
             await self.send("⚠️ Eroare internă la procesarea schiței.")
+
+    async def _handle_video_callback(self, data: str) -> None:
+        """WP-V: butoanele cardului de verdict — video:<action>:<vid> → /video/<action>/<vid>.
+        `visual` re-analizează cu note vizuale (răspunde cu un card nou); restul dau confirmare."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, action, vid = parts
+        if action not in ("save", "hypothesis", "visual", "deep", "ignore"):
+            return
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            timeout = 360 if action == "visual" else 20
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(
+                    f"{self._orchestrator_url}/video/{action}/{vid}", headers=headers
+                )
+            body = resp.json() if resp.status_code in (200, 404) else {}
+            if body.get("ok"):
+                if action == "visual" and body.get("card"):
+                    await self.send(f"🖼 {body.get('frames', 0)} cadre analizate.")
+                    await self.send_video_card(body["id"], body["card"])
+                else:
+                    msg = {
+                        "save": "💾 Salvat în vault.",
+                        "hypothesis": f"🔬 Ipoteză pre-înregistrată (h{body.get('hypothesis_id')}).",
+                        "ignore": "🗑 Ignorat.",
+                    }.get(action, "✅ Gata.")
+                    await self.send(msg)
+            else:
+                detail = body.get("error") if body else f"HTTP {resp.status_code}"
+                await self.send(f"⚠️ {_escape(str(detail))}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] video callback failed: {e}")
+            await self.send("⚠️ Eroare internă la procesarea butonului.")
 
     async def _handle_job_callback(self, data: str) -> None:
         """Butoane job (WP-J): job:save|apply|ignore:<hash> → endpoint /jobs/*."""
