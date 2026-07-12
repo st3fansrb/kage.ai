@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from typing import Callable, Optional, Sequence
 
+from api_budget import SpendGate
 from trading import actor as actor_mod
 from trading import critic as critic_mod
 from trading import report as report_mod
@@ -41,6 +42,7 @@ class NightlyPipeline:
         critic_price_in: float = 0.0,
         critic_price_out: float = 0.0,
         default_n_max: int = 3,
+        gate_reason: Optional[str] = None,
     ):
         # Garda paper-only: pipeline-ul nu are voie să existe într-un build cu PAPER_ONLY compromis.
         assert PAPER_ONLY is True, "PAPER_ONLY compromis — pipeline-ul de research refuză să ruleze"
@@ -54,6 +56,7 @@ class NightlyPipeline:
         self.critic_price_in = critic_price_in
         self.critic_price_out = critic_price_out
         self.default_n_max = default_n_max
+        self.gate_reason = gate_reason   # #7: de ce a refuzat plafonul global apelul plătit
 
     @classmethod
     def from_config(
@@ -87,7 +90,15 @@ class NightlyPipeline:
 
         openrouter_key = str(trading.get("openrouter_api_key", "")).strip()
         fallback_local = bool(critic_cfg.get("fallback_local", True))
-        if openrouter_key:
+        price_in = float(critic_cfg.get("price_per_mtok_in", 0.0))
+        price_out = float(critic_cfg.get("price_per_mtok_out", 0.0))
+        # #7: plafonul GLOBAL pe bani reali. Model gratuit (ambele prețuri 0) trece mereu;
+        # model plătit trece doar cu `api_budget.enabled: true` și sub plafoane.
+        gate_decision = SpendGate.from_config(config, ledger).allows(
+            free=(price_in == 0.0 and price_out == 0.0)
+        )
+        gate_reason = None
+        if openrouter_key and gate_decision.allowed:
             critic_client = ChatClient(
                 str(critic_cfg.get("base_url", "https://openrouter.ai/api/v1")),
                 str(critic_cfg.get("model", "deepseek/deepseek-chat")),
@@ -98,10 +109,13 @@ class NightlyPipeline:
             budget = ApiBudget(ledger, cap_eur=float(critic_cfg.get("monthly_cap_eur", 7.0)), eur_usd=eur_usd)
             critic_model = str(critic_cfg.get("model", "openrouter"))
         else:
-            # Fără cheie OpenRouter → Criticul rulează LOCAL (fără buget, fără cost).
+            # Fără cheie OpenRouter sau plafon global închis → Criticul rulează LOCAL
+            # (fără buget, fără cost — bucla nu moare, calitate mai slabă acceptată).
             critic_chat = local_critic_chat
             budget = None
             critic_model = f"{actor_model}-local"
+            if openrouter_key and not gate_decision.allowed:
+                gate_reason = gate_decision.reason
 
         return cls(
             ledger,
@@ -111,9 +125,10 @@ class NightlyPipeline:
             budget=budget,
             actor_model=actor_model,
             critic_model=critic_model,
-            critic_price_in=float(critic_cfg.get("price_per_mtok_in", 0.0)),
-            critic_price_out=float(critic_cfg.get("price_per_mtok_out", 0.0)),
+            critic_price_in=price_in,
+            critic_price_out=price_out,
             default_n_max=int(actor_cfg.get("max_proposals", 3)),
+            gate_reason=gate_reason,
         )
 
     def run_once(
@@ -197,6 +212,14 @@ class NightlyPipeline:
                 f"Buget Critic: {st['spend_eur']:.4f}€ / {st['cap_eur']:.2f}€ "
                 f"(rămas {st['remaining_eur']:.4f}€)"
             )
+        if self.gate_reason:
+            _gate_why = {
+                "disabled": "cheltuielile API sunt OPRITE din config (api_budget.enabled=false)",
+                "monthly_cap": "plafonul LUNAR global e atins",
+                "daily_cap": "plafonul ZILNIC global e atins",
+                "error": "cheltuielile nu au putut fi citite (fail-closed)",
+            }.get(self.gate_reason, self.gate_reason)
+            lines.append(f"Plafon global #7: Critic ținut pe LOCAL — {_gate_why}.")
         lines.append("-" * 60)
         lines.append("VALIDARE la costuri stresate (slippage dublat):")
         lines.append(report_mod.format_report(list(stressed_verdicts), len(stressed_verdicts)))

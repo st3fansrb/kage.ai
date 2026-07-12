@@ -331,6 +331,21 @@ WP-uri → sesiune per WP → verifică criterii → următorul) e acum automat�
 - Comenzi `!mission start/status/pause/resume/stop/list` + `/api/missions`.
 - Teste: 190 → **217 verzi** (27 noi). Exemplu rulabil în `missions/exemplu/`.
 
+### #7 — Budget v2: plafonul-gate global în EUR ✅ (12.07.2026)
+
+Garda hard pe bani reali (top-up-ul OpenRouter trebuie să reziste luni de zile):
+
+- `api_budget.py` (`SpendGate`): kill-switch `api_budget.enabled` (**implicit false** = niciun
+  apel plătit nu pleacă), plafon lunar (10€) + plafon zilnic anti-buclă (1€), fail-closed.
+- Modelele gratuite (prețuri 0 în config, ex. sufix `:free` pe OpenRouter) trec și cu
+  switch-ul oprit — nu ard credite.
+- Enforcement: `trading/pipeline.from_config` — Criticul plătit cade pe Qwen local când
+  gate-ul refuză (bucla nocturnă nu moare), cu motivul afișat în raportul de dimineață.
+- Stare vizibilă în header-ul Mission Control (`_mc_budget()["api"]`). Sursa cheltuielilor:
+  tabela `api_costs` din `cache_db/trading.db` (rolurile viitoare scriu tot acolo).
+- Căile pe abonament (Claude) / free-tier (Gemini) rămân pe bugetul de apeluri/zi existent.
+- Teste: 384 → **401 verzi** (17 noi). Housekeeping: `.venv-py39` șters (3.12 stabil din 06.07).
+
 ---
 
 ## Viziune business (toamnă 2026)

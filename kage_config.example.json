@@ -15,6 +15,13 @@
   "eur_usd_rate": 0.92,
   "max_cloud_calls_per_day": 20,
 
+  "_comment_api_budget": "#7 Budget v2, felia de enforcement (12.07.2026): plafonul-gate GLOBAL pe bani reali (OpenRouter azi; advisor WP13 / failover mâine). enabled=false (default) = NICIUN apel plătit nu pleacă — modelele gratuite (price_per_mtok_in/out = 0, ex. sufix ':free') trec și așa, nu ard credite. Activează abia când vrei să cheltui: enabled=true + plafoanele. monthly_cap_eur = plafonul global lunar peste TOATE rolurile plătite (sub-plafoanele per rol, ex. trading.critic.monthly_cap_eur, rămân valabile în plus). daily_cap_eur = gard anti-buclă pe zi. Fail-closed: secțiune lipsă = dezactivat.",
+  "api_budget": {
+    "enabled": false,
+    "monthly_cap_eur": 10,
+    "daily_cap_eur": 1
+  },
+
   "_comment_ui": "WP10: portul UI-ului web Mission Control (Next.js). /chat redirectează aici (kage.html retras).",
   "mission_control_port": 3001,
 

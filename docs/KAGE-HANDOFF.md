@@ -224,8 +224,9 @@ failover-ul API din WP11 nu are sens fără plafon; WP7 Phoenix amânat lângă 
 
 ### Reordonare completă (09.07.2026) — ordinea restului, de unde suntem acum
 
-**Stare:** WP1–WP11, WP-G1, WP-B/J/D, WP6, WP-T (bucla de cercetare, integrată în scheduler)
-= livrate. Ordinea de mai jos ÎNLOCUIEȘTE ordonările anterioare pentru tot ce a rămas:
+**Stare:** WP1–WP12, WP-G1, WP-B/J/D, WP6, WP-T (bucla de cercetare, integrată în scheduler)
+și #7 (plafon EUR, 12.07.2026) = livrate. Ordinea de mai jos ÎNLOCUIEȘTE ordonările
+anterioare pentru tot ce a rămas:
 
 **#7(plafon EUR) → WP12(telecomandă Telegram) → T1-exec(daemon freqtrade dry-run) →
 WP13(advisor + HITL v2) → WP-G2(izolare) → WP10(dashboard + WP7 Phoenix + tab Trading T5 +
@@ -261,7 +262,7 @@ Raționament:
   `missions`/`mission_wps` în **WP12**.
 - Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`
   (fișier gitignored) → **T1-exec**.
-- `.venv-py39` — de șters (3.12 rulează stabil din 06.07) → housekeeping la **#7/WP12**.
+- ~~`.venv-py39` — de șters (3.12 rulează stabil din 06.07)~~ ✅ șters la #7 (12.07.2026).
 - Fallback-ul LiteLLM→CLI încă pe subprocess (WP9, cale rară) → oportunist, nu blochează.
 - WP6 voice: setup whisper-cpp + model GGML (pas manual Stefan; endpoint dă 503 grațios
   până atunci). **Nu mai e opțional:** e precondiție pentru WP-V (transcrierea clipurilor).
@@ -270,7 +271,8 @@ Raționament:
 - WP-J: setup career-ops + `jobs.enabled` (opt-in, pas manual Stefan), dacă nu e făcut deja.
 - OANDA practice: depanarea token/endpoint (eșuată la prima încercare) → intră în **T4**.
 - WP11 fază 2 (agent care întreabă singur + failover Gemini la limită) → absorbit în **WP13**.
-- #7 e doar parțial: colectarea `cost_usd` + afișarea EUR există; **plafonul-gate lipsește**.
+- ~~#7 e doar parțial: colectarea `cost_usd` + afișarea EUR există; **plafonul-gate
+  lipsește**.~~ ✅ (12.07.2026) plafonul-gate livrat (`api_budget.py`, vezi specul #7 în §Restul).
 
 Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > Citește CLAUDE.md și KAGE-HANDOFF.md (§0–§4 integral + secțiunea pachetului: §5 pentru
@@ -1200,10 +1202,23 @@ e acum exclusiv `frontend/` (Next.js).
 - **#14 Push-to-talk Mac → „Hey Jarvis"**: etapa 1 hotkey în widget (pynput + sounddevice →
   `/v1/audio/transcriptions` → TTS Piper ro_RO/`say -v Ioana`); etapa 2 `voice_daemon.py` cu
   RealtimeSTT + openWakeWord.
-- **#7 Budget v2 — acum PRIMUL item (reordonare 09.07.2026;** tras inițial în față pe
-  05.07.2026): parsează `total_cost_usd` din evenimentul `result` → buget în bani/zi; gate pe
-  `task_run` și pe fallback-ul LiteLLM→cloud. **Stare 09.07.2026: parțial** — colectarea
-  `cost_usd` per run (WP9) și afișarea EUR există; lipsește plafonul-gate.
+- **#7 Budget v2 ✅ (12.07.2026) — plafonul-gate livrat** (era PRIMUL item, reordonare
+  09.07.2026; tras inițial în față pe 05.07.2026). Spec inițial: parsează `total_cost_usd`
+  din evenimentul `result` → buget în bani/zi; gate pe `task_run` și pe fallback-ul
+  LiteLLM→cloud. Stare 09.07.2026: parțial — colectarea `cost_usd` per run (WP9) și afișarea
+  EUR existau; lipsea plafonul-gate.
+  **Cum s-a livrat (12.07.2026, decizia lui Stefan: top-up ~10 € OpenRouter care trebuie să
+  reziste luni — implicit NU se cheltuie nimic):** `api_budget.py` (`SpendGate`) = gardă
+  GLOBALĂ pe bani reali, fail-closed: `api_budget.enabled: false` (default) → niciun apel
+  plătit; modelele gratuite (prețuri 0, ex. `:free`) trec și cu switch-ul oprit; plafoane
+  `monthly_cap_eur` (10) + `daily_cap_eur` (1, anti-buclă). Sursa cheltuielilor = tabela
+  `api_costs` (`cache_db/trading.db`); rolurile viitoare (advisor WP13, failover) înregistrează
+  tot acolo cu `role` propriu și moștenesc gate-ul. Enforcement azi în
+  `trading/pipeline.from_config` (Criticul plătit → local când gate-ul refuză, cu motivul în
+  raportul de dimineață) + stare în `_mc_budget()["api"]` (header MC). **Scope conștient:**
+  gate-ul acoperă căile pe bani reali (OpenRouter azi, API failover mâine); `task_run`/rutarea
+  Claude rămân pe abonament (cost marginal 0) sub bugetul de apeluri `max_cloud_calls_per_day`
+  — gate-ul în bani pe ele ar fi teatru. Teste: 384 → 401.
   **Afișare în EUR** (decizia lui Stefan — plătește în EUR): intern totul rămâne USD (așa
   raportează API-urile), conversia doar la afișare, curs configurabil `eur_usd_rate` în
   `kage_config.json` (default static, ex. 0.92; nu chema API de curs valutar pentru asta).
