@@ -3,12 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { T } from "@/lib/tokens";
 
-type Mode = "claude" | "gemini" | "swarm" | "sysrun";
+type Mode = "claude" | "sysrun";
 
 const MODES: { value: Mode; label: string }[] = [
   { value: "claude", label: "Claude" },
-  { value: "gemini", label: "Gemini" },
-  { value: "swarm", label: "Swarm (Claude+Gemini)" },
   { value: "sysrun", label: "Sysrun (cod Kage)" },
 ];
 
@@ -17,10 +15,6 @@ const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
 // Construiește textul de task în forma așteptată de /task/run (vezi _prepare_and_launch_task).
 function buildTask(mode: Mode, text: string): string {
   switch (mode) {
-    case "gemini":
-      return "gemini " + text;
-    case "swarm":
-      return "!swarm " + text;
     case "sysrun":
       return "!sysrun " + text;
     default:
