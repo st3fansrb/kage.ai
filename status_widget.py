@@ -42,7 +42,7 @@ SERVICES = [
     ("Orchestrator",  4001),
 ]
 
-TIER_SHORT = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+TIER_SHORT = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini-retras", 5: "sonnet", 6: "opus"}
 
 
 def _port_up(port: int) -> bool:

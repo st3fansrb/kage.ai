@@ -12,7 +12,7 @@
 - **inactivity timeout** (reset la fiecare eveniment) în loc de deadline fix 120s.
 
 Runtime: **Python 3.12** (SDK cere ≥3.10). `risk_hook.py` rămâne intact ca hook
-CLI pentru căile ne-SDK (gemini + compatibilitate).
+CLI pentru căile ne-SDK (fallback-ul Claude CLI).
 
 Decuplat de `orchestrator.py`: primește gate-ul de aprobare ca `approval_cb`
 injectat, ca să nu creeze un import cycle și să rămână testabil izolat.

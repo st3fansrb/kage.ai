@@ -39,7 +39,13 @@ def test_build_tier_models_override():
 
 def test_build_tier_short_defaults():
     s = orchestrator._build_tier_short({})
-    assert s == {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+    assert s == {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini-retras", 5: "sonnet", 6: "opus"}
+
+
+def test_build_tier_models_tier4_is_retired_tombstone():
+    # WP-RMG: tier 4 (Gemini CLI) retras — rămâne doar ca etichetă moartă, nu se mai rutează.
+    m = orchestrator._build_tier_models({})
+    assert m[4] == ("retired", "gemini-retras")
 
 
 # ── decide_tier — prefixe forțate ─────────────────────────────────────────────
@@ -67,16 +73,20 @@ async def test_decide_tier_plan_minimum_tier2(monkeypatch):
     assert tier >= 2 and forced is True
 
 
-# ── decide_tier — prefixe noi WP3 (!opus / !gemini / !retry cap 6) ────────────
+# ── decide_tier — prefixe noi WP3 (!opus / !retry cap 6) ──────────────────────
 
 async def test_decide_tier_opus_forces_tier6():
     tier, forced, _, method = await orchestrator.decide_tier("!opus rezolvă problema grea")
     assert (tier, forced, method) == (6, True, "forced")
 
 
-async def test_decide_tier_gemini_forces_tier4():
+async def test_decide_tier_gemini_prefix_no_longer_special(monkeypatch):
+    # WP-RMG: !gemini retras — nu mai forțează nimic, mesajul cade pe clasificarea normală.
+    async def fake_classify(msg):
+        return 2, 0.8, "sem"
+    monkeypatch.setattr(orchestrator, "_classify", fake_classify)
     tier, forced, _, method = await orchestrator.decide_tier("!gemini rezumă documentul")
-    assert (tier, forced, method) == (4, True, "forced")
+    assert (tier, forced, method) == (2, False, "sem")
 
 
 async def test_decide_tier_retry_caps_at_6(monkeypatch, tmp_path):
@@ -85,6 +95,24 @@ async def test_decide_tier_retry_caps_at_6(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "STATUS_FILE", status)
     tier, forced, _, _ = await orchestrator.decide_tier("!retry mai bine")
     assert (tier, forced) == (6, True)  # min(6+1, 6) == 6, nu 7
+
+
+async def test_decide_tier_retry_skips_retired_tier4(monkeypatch, tmp_path):
+    # WP-RMG: de la tier 3, retry ar ateriza pe 4 (retras) — trebuie să sară la 5.
+    status = tmp_path / "status.json"
+    status.write_text('{"tier": 3}')
+    monkeypatch.setattr(orchestrator, "STATUS_FILE", status)
+    tier, forced, _, _ = await orchestrator.decide_tier("!retry mai bine")
+    assert (tier, forced) == (5, True)
+
+
+async def test_classify_clamps_tier4_to_tier3(monkeypatch):
+    # WP-RMG: dacă un vector vechi din ChromaDB (sau Qwen) mai votează tier 4, clamp la 3.
+    async def fake_semantic(msg):
+        return 4, 0.9
+    monkeypatch.setattr(orchestrator, "_semantic_classify", fake_semantic)
+    tier, conf, method = await orchestrator._classify("orice")
+    assert (tier, method) == (3, "sem")
 
 
 # ── _strip_routing_prefixes (pur) ─────────────────────────────────────────────
