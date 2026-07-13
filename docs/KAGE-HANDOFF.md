@@ -942,8 +942,11 @@ rescrisă în română pentru schema noastră JSON (afirmație → dovezi → re
 Flash-Lite prin OpenRouter) și analiza adâncă 🔎 T5. Ambele ating plafonul #7, care nu e încă
 în dev — până atunci: keyframes se extrag, dar descrierea vizuală plătită și T5 dau mesaj
 onest „se cablează în slice 2". Fallback-ul vizual pe T2 local (per cadru) rămâne tot pentru
-slice 2 (necesită verificarea suportului vision prin Ollama/LiteLLM). Precondiția yt-dlp:
-`brew install yt-dlp` (ffmpeg + Whisper large-v3-turbo sunt deja instalate).
+slice 2 (necesită verificarea suportului vision prin Ollama/LiteLLM). **Precondiții
+rezolvate (13.07.2026):** yt-dlp instalat în `.venv` (cale absolută în config); ffmpeg +
+Whisper `large-v3-turbo` deja instalate; **gaura de PATH din `start_all.sh` reparată**
+(launchd pornea cu PATH minimal fără `/opt/homebrew/bin` → ffmpeg/whisper/yt-dlp/ollama
+picau după reboot) + auto-upgrade yt-dlp throttled la 24h (anti-bot TikTok).
 
 **Ideea (09.07.2026, Stefan):** trimite pe Telegram, de pe telefon, link-uri video (YouTube,
 TikTok, Reels, X — oameni care explică concepte de finance/AI/agents/trading) → Kage extrage

@@ -7,6 +7,23 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 LOGS="$DIR/.logs"
 mkdir -p "$LOGS"
 
+# ── PATH ──────────────────────────────────────────────────────────────────────
+# launchd pornește cu un PATH minimal (/usr/bin:/bin:/usr/sbin:/sbin), FĂRĂ
+# /opt/homebrew/bin — deci binarele instalate cu brew (ffmpeg, whisper-cli, ollama,
+# yt-dlp) nu se găsesc după reboot, doar la pornire manuală din terminal. Prepend
+# Homebrew (Apple Silicon + Intel) ca toate serviciile copil să le vadă uniform.
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+# ── yt-dlp la zi (WP-V) ───────────────────────────────────────────────────────
+# Site-urile video (TikTok etc.) se strică periodic la anti-bot; yt-dlp ține pasul
+# doar actualizat. Upgrade best-effort în .venv, în FUNDAL, throttled la max o dată/24h
+# (stamp file), NEBLOCANT — fără rețea la boot pur și simplu sare, nu afectează pornirea.
+_YTDLP_STAMP="$LOGS/.ytdlp_last_upgrade"
+if [[ -x "$DIR/.venv/bin/python" ]] && { [[ ! -f "$_YTDLP_STAMP" ]] || [[ -n "$(find "$_YTDLP_STAMP" -mmin +1440 2>/dev/null)" ]]; }; then
+  ( "$DIR/.venv/bin/python" -m pip install -q -U yt-dlp >> "$LOGS/ytdlp_upgrade.log" 2>&1 \
+      && touch "$_YTDLP_STAMP" ) &
+fi
+
 port_up() { nc -z 127.0.0.1 "$1" 2>/dev/null; }
 
 echo "=== AI Orchestration System v2 ==="
