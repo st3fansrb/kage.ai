@@ -3,6 +3,11 @@
 > Însoțește `QUANT_LAB_DESIGN.md`. Ordinea respectă principiul „fiecare pas util independent,
 > chiar dacă următorul nu se construiește niciodată". Cod de producție începe DOAR după ce
 > Stefan aprobă designul + răspunde la întrebările din §9 (design doc).
+>
+> **14.07.2026:** propunerile T1–T8 din `CODEX-PROPUNERI.md` (HypothesisSpec/DSL, holdout
+> blocat, validation v2 pentru serii dependente, cost models per piață) rămân `proposed` —
+> rigoare quant reală, dar nu cerută de JD-ul Revolut (vezi `KAGE-HANDOFF.md` §4). Singura
+> excepție e T3 (point-in-time lineage), acceptată și integrată în WP-ETL din handoff.
 
 Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are **Acceptare**.
 
