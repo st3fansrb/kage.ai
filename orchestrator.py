@@ -76,7 +76,6 @@ VAULT        = Path(_cfg.get("vault_path", str(Path.home() / "Documents" / "Kage
 # WP-B: remote git pentru vault (GitHub privat). Gol = fără push (doar commit local).
 VAULT_GIT_REMOTE = str(_cfg.get("vault_git_remote", "")).strip()
 CLAUDE_CLI   = _find_cli("claude")
-GEMINI_CLI   = _find_cli("gemini")
 
 RISK_SETTINGS        = PROJECT_ROOT / "risk_settings.json"
 STATUS_FILE          = PROJECT_ROOT / "status.json"
@@ -106,7 +105,7 @@ ALLOWED_TASK_ROOTS = [
 ]
 
 def _validate_task_cwd(cwd: str) -> Optional[str]:
-    """Validează cwd-ul unui task de agent (!run/!sysrun/!swarm) față de allowed_task_roots.
+    """Validează cwd-ul unui task de agent (!run/!sysrun) față de allowed_task_roots.
 
     Returnează calea canonică (str) dacă e permisă, altfel None.
     Dacă allowed_task_roots e gol → confinement dezactivat (returnează cwd canonic).
@@ -365,14 +364,18 @@ def _build_tier_models(cfg: dict) -> dict:
         1: m.get("tier1", {}).get("litellm_name", "tier-1-orchestrator"),
         2: m.get("tier2", {}).get("litellm_name", "tier-2-worker"),
         3: _t("tier3", "claude",  "claude-haiku-4-5"),
-        4: _t("tier4", "gemini",  ""),
+        # WP-RMG (13.07.2026): Tier 4 (Gemini CLI) retras — Google a deprecat contul folosit
+        # pentru autentificare. Etichetă „moartă" păstrată doar ca să nu crape afișarea unor
+        # rânduri istorice din DB cu tier=4; nimic nu mai rutează spre tier 4 (`decide_tier`
+        # clamp-ează defensiv orice rezultat de clasificare la tier 3).
+        4: ("retired", "gemini-retras"),
         5: _t("tier5", "claude",  "claude-sonnet-4-6"),
         6: _t("tier6", "claude",  "claude-opus-4-8"),
     }
 
 def _build_tier_short(cfg: dict) -> dict:
     m = cfg.get("models", {})
-    _defaults = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+    _defaults = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini-retras", 5: "sonnet", 6: "opus"}
     return {i: m.get(f"tier{i}", {}).get("short", _defaults[i]) for i in range(1, 7)}
 
 TIER_MODELS = _build_tier_models(_cfg)
@@ -436,8 +439,11 @@ pending_risk_meta: dict[str, dict] = {}
 _active_task_queues: dict[str, asyncio.Queue] = {}
 
 # ── Kill switch (WP-G1, §6.3) ─────────────────────────────────────────────────
-# Registru al proceselor-agent vii (claude/gemini spawn-ate). !stop le omoară pe
-# toate + pune scheduler-ul pe pauză. Procesele se auto-dezînregistrează la final.
+# Registru pentru procese-agent spawn-ate ca subprocess brut (nu prin Claude Agent SDK —
+# alea se opresc separat, via _agent_runner.stop_all()). !stop le omoară pe toate + pune
+# scheduler-ul pe pauză. Procesele se auto-dezînregistrează la final. WP-RMG (13.07.2026):
+# gemini era singurul producător rămas — registrul e gol azi, păstrat pentru orice viitor
+# backend pe subprocess (ex. Codex, WP-CX).
 _running_procs: set = set()
 
 def _register_proc(proc) -> None:
@@ -486,12 +492,11 @@ def _stop_all() -> dict:
 _tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
 
-async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: str, is_sysrun: bool, parent_id: Optional[str] = None):
-    """Rulează un agent în fundal, pune chunk-uri în coadă, salvează în DB la final.
+async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: str, is_sysrun: bool):
+    """Rulează un agent Claude în fundal, pune chunk-uri în coadă, salvează în DB la final.
 
-    WP9: agentul `claude` merge prin Claude Agent SDK (`AgentRunner`) — tool calls
-    vizibile în run ledger, gate de risc in-proces cu aprobare, inactivity timeout,
-    cost real din SDK. `gemini` rămâne pe subprocess (SDK e claude-only).
+    WP9: merge prin Claude Agent SDK (`AgentRunner`) — tool calls vizibile în run ledger,
+    gate de risc in-proces cu aprobare, inactivity timeout, cost real din SDK.
     """
     badge = f"**[{'SYS·' if is_sysrun else ''}TASK·{agent}]** "
     full_output = [badge]
@@ -502,77 +507,53 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
     _run_update(run_id, model=agent, tier=5)
     _run_event(run_id, "tool_call", {"agent": agent, "sysrun": is_sysrun, "cwd": cwd})
 
-    target_id = parent_id or task_id
-    queue = _active_task_queues.get(target_id)
+    queue = _active_task_queues.get(task_id)
     if queue:
         await queue.put(badge)
 
-    proc = None
     cost_usd: Optional[float] = None
     try:
-        if agent == "gemini":
-            env = {**os.environ, "ORCHESTRATOR_USER_MSG": task_text}
-            proc = await asyncio.create_subprocess_exec(
-                GEMINI_CLI, "-p", task_text,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=cwd, env=env,
-            )
-            assert proc.stdout is not None
-            _register_proc(proc)
-            while True:
-                chunk = await proc.stdout.read(512)
-                if not chunk:
-                    break
-                text = chunk.decode("utf-8", errors="replace")
-                full_output.append(text)
-                q = _active_task_queues.get(target_id)
+        # WP9: Claude prin SDK. Policy (WP-G1): !sysrun = auto-modificare, !run = task.
+        allowed, disallowed, pmode = _policy_tools("sysrun" if is_sysrun else "task")
+        async for ev in _agent_runner.run(
+            task_text,
+            user_message=task_text,
+            cwd=cwd,
+            allowed_tools=allowed,
+            disallowed_tools=disallowed,
+            permission_mode=pmode,
+            inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
+            autonomous=AUTONOMOUS_MODE,
+            approval_cb=_agent_approval_cb,
+        ):
+            kind = ev["type"]
+            q = _active_task_queues.get(task_id)
+            if kind == "text":
+                full_output.append(ev["text"])
                 if q:
-                    await q.put(text)
-            await proc.wait()
-        else:
-            # WP9: Claude prin SDK. Policy (WP-G1): !sysrun = auto-modificare, !run = task.
-            allowed, disallowed, pmode = _policy_tools("sysrun" if is_sysrun else "task")
-            async for ev in _agent_runner.run(
-                task_text,
-                user_message=task_text,
-                cwd=cwd,
-                allowed_tools=allowed,
-                disallowed_tools=disallowed,
-                permission_mode=pmode,
-                inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
-                autonomous=AUTONOMOUS_MODE,
-                approval_cb=_agent_approval_cb,
-            ):
-                kind = ev["type"]
-                q = _active_task_queues.get(target_id)
-                if kind == "text":
-                    full_output.append(ev["text"])
-                    if q:
-                        await q.put(ev["text"])
-                elif kind == "tool_use":
-                    _run_event(run_id, "tool_call",
-                               {"name": ev["name"], "input": str(ev["input"])[:500]})
-                    marker = f"\n`🔧 {ev['name']}`\n"
-                    full_output.append(marker)
-                    if q:
-                        await q.put(marker)
-                elif kind == "tool_result":
-                    _run_event(run_id, "tool_result",
-                               {"chars": len(ev["content"]), "is_error": ev["is_error"]})
-                elif kind == "result":
-                    cost_usd = ev.get("cost_usd")
-                elif kind == "error":
-                    note = f"\n\n*[{ev['error']}]*"
-                    full_output.append(note)
-                    if q:
-                        await q.put(note)
+                    await q.put(ev["text"])
+            elif kind == "tool_use":
+                _run_event(run_id, "tool_call",
+                           {"name": ev["name"], "input": str(ev["input"])[:500]})
+                marker = f"\n`🔧 {ev['name']}`\n"
+                full_output.append(marker)
+                if q:
+                    await q.put(marker)
+            elif kind == "tool_result":
+                _run_event(run_id, "tool_result",
+                           {"chars": len(ev["content"]), "is_error": ev["is_error"]})
+            elif kind == "result":
+                cost_usd = ev.get("cost_usd")
+            elif kind == "error":
+                note = f"\n\n*[{ev['error']}]*"
+                full_output.append(note)
+                if q:
+                    await q.put(note)
 
         duration_ms = int((datetime.datetime.now() - start_ts).total_seconds() * 1000)
         _log_usage(5, agent, task_text, duration_ms, agent=agent)
         _run_event(run_id, "result", {"chars": len("".join(full_output))})
-        _run_end(run_id, "done", duration_ms=duration_ms,
-                 cost_usd=(cost_usd if agent == "claude" else None))
+        _run_end(run_id, "done", duration_ms=duration_ms, cost_usd=cost_usd)
 
         # Persistence: save to DB so it survives page reloads
         if _db_conn:
@@ -592,34 +573,13 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
         _run_event(run_id, "error", {"error": str(e)[:500]})
         _run_end(run_id, "failed",
                  duration_ms=int((datetime.datetime.now() - start_ts).total_seconds() * 1000))
-        q = _active_task_queues.get(target_id)
+        q = _active_task_queues.get(task_id)
         if q:
             await q.put(err)
     finally:
-        _unregister_proc(proc)
-        q = _active_task_queues.get(target_id)
+        q = _active_task_queues.get(task_id)
         if q:
-            # For swarm, we don't want to send [DONE] prematurely
-            if not parent_id:
-                await q.put("[DONE]")
-
-
-async def _swarm_task_exec(task_id: str, task_text: str, cwd: str, is_sysrun: bool):
-    """Executes Claude and Gemini in parallel."""
-    badge = f"**[{'SYS·' if is_sysrun else ''}SWARM]** Activare agenți paraleli (Claude + Gemini)...\n"
-    queue = _active_task_queues.get(task_id)
-    if queue:
-        await queue.put(badge)
-
-    # Launch both agents concurrently, piping to the same main queue
-    await asyncio.gather(
-        _background_task_exec(uuid.uuid4().hex[:8], task_text, "claude", cwd, is_sysrun, parent_id=task_id),
-        _background_task_exec(uuid.uuid4().hex[:8], task_text, "gemini", cwd, is_sysrun, parent_id=task_id),
-    )
-
-    if queue:
-        await queue.put("\n\n**[SWARM·COMPLET]** Ambii agenți au terminat.")
-        await queue.put("[DONE]")
+            await q.put("[DONE]")
 
 
 # ── Auth helpers (Faza 16) ────────────────────────────────────────────────────
@@ -732,29 +692,16 @@ async def _run_scheduled_task(task: dict) -> None:
                 )
             result_text = r.json()["choices"][0]["message"]["content"]
         else:
-            provider, model = TIER_MODELS[tier]
-            model_name = model or "gemini-pro"
+            _, model = TIER_MODELS[tier]
+            model_name = model
             full_prompt = f"{system_prompt}\n\nTask: {msg}"
-            if provider == "gemini":
-                cmd = [GEMINI_CLI, "-p", full_prompt, "--output-format", "json"]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-                raw = stdout.decode("utf-8", errors="replace").strip()
-                try:
-                    raw = json.loads(raw).get("response", raw)
-                except Exception:
-                    pass
-                result_text = raw or "[Gemini: răspuns gol]"
-            else:
-                env = {**os.environ, "ORCHESTRATOR_USER_MSG": msg}
-                cmd = [CLAUDE_CLI, "-p", full_prompt, "--model", model, "--output-format", "text"]
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
-                )
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-                result_text = stdout.decode("utf-8", errors="replace").strip()
+            env = {**os.environ, "ORCHESTRATOR_USER_MSG": msg}
+            cmd = [CLAUDE_CLI, "-p", full_prompt, "--model", model, "--output-format", "text"]
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            result_text = stdout.decode("utf-8", errors="replace").strip()
     except Exception as e:
         result_text = f"[Scheduled task error: {e}]"
         logger.error(f"Scheduled task '{msg[:40]}' failed: {e}")
@@ -1119,11 +1066,10 @@ TIER_EXAMPLES: dict[int, list[str]] = {
         "corectează textul următor", "explică-mi async/await",
         "ajutor cu debugging", "scrie o funcție care",
         "cum funcționează REST API", "optimizează codul acesta",
-    ],
-    4: [
-        "rezumă acest document lung", "analizează această imagine",
-        "extrage informațiile din PDF-ul atașat", "tradu și rezumă articolul acesta",
-        "compară aceste două texte lungi", "descrie ce se vede în poză",
+        # WP-RMG: exemplele de sumarizare/comparare text preluate din fostul tier 4 (Gemini,
+        # retras) — rămân relevante, capacitatea de rezumat lung nu era de fapt legată de CLI.
+        "rezumă acest document lung", "extrage informațiile din PDF-ul atașat",
+        "tradu și rezumă articolul acesta", "compară aceste două texte lungi",
         "rezumă conținutul acestui fișier mare",
     ],
     5: [
@@ -1826,14 +1772,13 @@ async def pwa_manifest():
 
 
 def _prepare_and_launch_task(task_text: str, cwd: str, register_queue: bool = True) -> tuple[Optional[str], Optional[str]]:
-    """Pregătește și pornește în fundal un task de agent (!run/!swarm/!sysrun).
+    """Pregătește și pornește în fundal un task de agent (!run/!sysrun).
 
-    Aplică transformarea !sysrun, verifică confinement-ul (allowed_task_roots),
-    alege swarm vs single agent (+ backend gemini/claude) și spawn-ează execuția.
-    Returnează (task_id, None) la succes sau (None, mesaj_eroare) dacă task-ul e gol
-    sau cwd-ul e blocat. Cu register_queue=True înregistrează o coadă în
-    _active_task_queues pentru streaming (folosit de /task/run); cu False task-ul
-    rulează fără consumator de stream — output-ul e salvat în DB oricum.
+    Aplică transformarea !sysrun, verifică confinement-ul (allowed_task_roots) și
+    spawn-ează execuția pe Claude. Returnează (task_id, None) la succes sau
+    (None, mesaj_eroare) dacă task-ul e gol sau cwd-ul e blocat. Cu register_queue=True
+    înregistrează o coadă în _active_task_queues pentru streaming (folosit de /task/run);
+    cu False task-ul rulează fără consumator de stream — output-ul e salvat în DB oricum.
     """
     task_text = task_text.strip()
     if not task_text:
@@ -1858,28 +1803,16 @@ def _prepare_and_launch_task(task_text: str, cwd: str, register_queue: bool = Tr
         return None, f"cwd `{cwd}` e în afara workspace-ului permis (`allowed_task_roots`)."
     cwd = validated_cwd
 
-    # 2. Swarm vs Single Agent
-    is_swarm = task_text.startswith("!swarm")
-    if is_swarm:
-        task_text = task_text[len("!swarm"):].strip()
-        task_id = uuid.uuid4().hex[:8]
-        if register_queue:
-            _active_task_queues[task_id] = asyncio.Queue()
-        asyncio.create_task(_swarm_task_exec(task_id, task_text, cwd, is_sysrun))
-    else:
-        # Single agent backend selection
-        agent = "claude"
-        if task_text.lower().startswith("gemini "):
-            agent = "gemini"
-            task_text = task_text[7:].strip()
-        elif task_text.lower().startswith("claude "):
-            agent = "claude"
-            task_text = task_text[7:].strip()
+    # 2. Backend selection (WP-RMG: doar Claude azi — extensibil pentru un al doilea
+    # executor, ex. Codex/WP-CX, fără gemini).
+    agent = "claude"
+    if task_text.lower().startswith("claude "):
+        task_text = task_text[7:].strip()
 
-        task_id = uuid.uuid4().hex[:8]
-        if register_queue:
-            _active_task_queues[task_id] = asyncio.Queue()
-        asyncio.create_task(_background_task_exec(task_id, task_text, agent, cwd, is_sysrun))
+    task_id = uuid.uuid4().hex[:8]
+    if register_queue:
+        _active_task_queues[task_id] = asyncio.Queue()
+    asyncio.create_task(_background_task_exec(task_id, task_text, agent, cwd, is_sysrun))
 
     return task_id, None
 
@@ -2113,15 +2046,15 @@ async def _chat_dispatch(request: Request, body: dict):
         (m["content"] for m in reversed(messages) if m.get("role") == "user"), ""
     )
 
-    # Handler server-side pentru task-urile de agent (!run/!swarm/!sysrun), ÎNAINTE
+    # Handler server-side pentru task-urile de agent (!run/!sysrun), ÎNAINTE
     # de cache. Pornește task-ul în fundal și răspunde cu o confirmare + task id.
     # Streamul complet al task-ului (spre Telegram/UI) vine la WP8. (WP1 / D13)
     _lu_stripped = last_user.strip()
-    if re.match(r"^!(run|swarm|sysrun)\b", _lu_stripped, re.IGNORECASE):
+    if re.match(r"^!(run|sysrun)\b", _lu_stripped, re.IGNORECASE):
         if _lu_stripped.lower().startswith("!run"):
             _task_text = _lu_stripped[len("!run"):].strip()
         else:
-            _task_text = _lu_stripped  # !swarm / !sysrun sunt interpretate în helper
+            _task_text = _lu_stripped  # !sysrun e interpretat în helper
         task_id, error = _prepare_and_launch_task(_task_text, _default_task_cwd(), register_queue=False)
         if error is not None:
             confirm = f"**[BLOCKED]** {error}"
@@ -2226,7 +2159,7 @@ async def _chat_dispatch(request: Request, body: dict):
         _run_event(run_id, "budget", {"downgraded": True, "from": original_tier, "to": tier})
     _run_update(run_id, tier=tier, routing_method=routing_method,
                 routing_confidence=round(confidence, 3),
-                model=(str(TIER_MODELS[tier]) if tier <= 2 else str(TIER_MODELS[tier][1] or "gemini")),
+                model=(str(TIER_MODELS[tier]) if tier <= 2 else str(TIER_MODELS[tier][1] or "?")),
                 budget_state=("downgraded" if budget_downgraded else "ok"))
 
     badge = _tier_badge_ext(tier, routing_method, confidence, budget_downgraded)
@@ -2249,7 +2182,7 @@ async def _chat_dispatch(request: Request, body: dict):
         f"preview={last_user[:60]!r}"
     )
 
-    _model_label = str(TIER_MODELS[tier]) if tier <= 2 else (TIER_MODELS[tier][1] or "gemini-pro")
+    _model_label = str(TIER_MODELS[tier]) if tier <= 2 else (TIER_MODELS[tier][1] or "?")
     _write_status(True, tier, _model_label, last_user[:60], obs_context is not None)
     _log_to_vault(tier, last_user, obs_context is not None, confidence, forced)
 
@@ -2330,8 +2263,6 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
         return 5, True, 1.0, "forced"
     if "!opus" in msg_lower:
         return 6, True, 1.0, "forced"
-    if "!gemini" in msg_lower:
-        return 4, True, 1.0, "forced"
     if "!retry" in msg_lower:
         last_tier = 1
         try:
@@ -2339,7 +2270,10 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
             last_tier = int(status.get("tier", 1))
         except Exception:
             pass
-        return min(last_tier + 1, 6), True, 1.0, "forced"
+        next_tier = min(last_tier + 1, 6)
+        if next_tier == 4:   # WP-RMG: Tier 4 (Gemini) retras — retry mereu crește, nu coboară
+            next_tier = 5
+        return next_tier, True, 1.0, "forced"
     if "!plan" in msg_lower:
         clean = msg_lower.replace("!plan", "").strip()
         tier, confidence, method = await _classify(clean or msg)
@@ -2358,11 +2292,13 @@ async def _classify(message: str) -> tuple[int, float, str]:
     """Return (tier, confidence, method). Semantic routing primary, Qwen fallback."""
     try:
         tier, conf = await _semantic_classify(message)
-        return tier, conf, "sem"
+        method = "sem"
     except Exception as e:
         logger.debug(f"Semantic classify failed ({e}), falling back to Qwen")
         tier, conf, method = await _qwen_classify(message)
-        return tier, conf, method
+    if tier == 4:   # WP-RMG: Tier 4 (Gemini) retras — clamp defensiv (ex. vectori vechi ChromaDB)
+        tier = 3
+    return tier, conf, method
 
 
 async def _semantic_classify(message: str) -> tuple[int, float]:
@@ -2407,11 +2343,10 @@ async def _qwen_classify(message: str) -> tuple[int, float, str]:
         return t, _TIER_CONFIDENCE.get(t, 0.75), "heur"
 
     prompt = (
-        "Classify this task. Reply with ONLY a single digit (1-6):\n\n"
+        "Classify this task. Reply with ONLY a single digit (1, 2, 3, 5 or 6):\n\n"
         "1 = trivial: math, definitions, one-liner facts\n"
         "2 = medium or personal context: projects, decisions, depth needed\n"
         "3 = medium cloud quality (Haiku-level)\n"
-        "4 = medium cloud alternative (Gemini)\n"
         "5 = complex: serious analysis, long writing (Sonnet-level)\n"
         "6 = maximum difficulty (Opus-level)\n\n"
         f"Task: {message[:400]}\n\n"
@@ -2460,7 +2395,7 @@ def _heuristic_classify(message: str) -> int:
 
 # Prefixes stripped before storing a message as a routing example.
 _ROUTING_PREFIXES = (
-    "!fast", "!best", "!opus", "!gemini", "!plan", "!retry",
+    "!fast", "!best", "!opus", "!plan", "!retry",
     "!nocache", "!save", "!status", "!help",
 )
 
@@ -2477,7 +2412,7 @@ def _strip_routing_prefixes(message: str) -> str:
 async def _record_routing_feedback(message: str, tier: int) -> None:
     """Learn from an explicit tier override: store the cleaned message under the chosen tier.
 
-    Fired (non-blocking) whenever a forced prefix (!fast/!best/!opus/!gemini/!retry/escaladează)
+    Fired (non-blocking) whenever a forced prefix (!fast/!best/!opus/!retry/escaladează)
     picks a tier — a later semantically similar message then routes there via _semantic_classify.
     """
     if _routing_collection is None:
@@ -2860,8 +2795,8 @@ MISSION_DRAFT_MODEL = str(_cfg.get("mission_draft_model", "") or MISSION_DEFAULT
 async def _mission_pick_model(prompt: str):
     """Rutează alegerea modelului unei misiuni prin clasificatorul lui Kage (`decide_tier`),
     cu clamp pe tier-urile Claude (executorul e Claude-only): T3→Haiku, T5→Sonnet, T6→Opus;
-    T1/T2 (local) și T4 (Gemini) → MISSION_DEFAULT_MODEL. Un WP simplu prinde Haiku/Sonnet,
-    unul greu urcă la Opus — nu mai e Opus pe tot, ca la default-ul CLI. Întoarce (tier, model)."""
+    T1/T2 (local) → MISSION_DEFAULT_MODEL. Un WP simplu prinde Haiku/Sonnet, unul greu urcă
+    la Opus — nu mai e Opus pe tot, ca la default-ul CLI. Întoarce (tier, model)."""
     try:
         tier, _forced, _conf, _method = await decide_tier(prompt)
     except Exception as e:
@@ -3693,7 +3628,7 @@ async def _get_embedding(text: str) -> Optional[list]:
 
 # Prefixe care nu schimbă intenția semantică — scoase din cheia de cache (WP4/#8).
 _CACHE_PREFIX_RE = re.compile(
-    r"!(fast|best|opus|gemini|plan|retry|nocache|save|status|help)\b", re.IGNORECASE
+    r"!(fast|best|opus|plan|retry|nocache|save|status|help)\b", re.IGNORECASE
 )
 # Referenți temporali — un răspuns cache-uit devine stale (WP4/#8).
 _TEMPORAL_RE = re.compile(r"\b(azi|acum|m[âa]ine|ieri|ast[ăa]zi)\b", re.IGNORECASE)
@@ -4987,7 +4922,6 @@ def _aggregate_usage() -> dict:
     total = len(today_entries)
     cloud = sum(1 for e in today_entries if e.get("cloud"))
     claude_count = sum(1 for e in today_entries if e.get("agent") == "claude")
-    gemini_count = sum(1 for e in today_entries if e.get("agent") == "gemini")
 
     by_tier: dict[int, int] = {}
     latency_by_tier: dict[int, list] = {}
@@ -5017,7 +4951,6 @@ def _aggregate_usage() -> dict:
         "total": total,
         "cloud": cloud,
         "claude_count": claude_count,
-        "gemini_count": gemini_count,
         "local": total - cloud,
         "by_tier": by_tier,
         "avg_latency": avg_latency,
@@ -5038,7 +4971,7 @@ def _build_dashboard_html(data: dict) -> str:
     max_cloud = data.get("max_cloud", 20)
     task_count = data.get("task_count", 0)
 
-    tier_names = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini", 5: "sonnet", 6: "opus"}
+    tier_names = {1: "qwen8b", 2: "qwen35b", 3: "haiku", 4: "gemini-retras", 5: "sonnet", 6: "opus"}
     max_count = max(by_tier.values(), default=1)
 
     tier_rows = ""
@@ -5149,7 +5082,7 @@ tr:hover td{{background:#fafafa}}
   <div class="card cloud">
     <div class="card-val" id="stat-cloud">{cloud}</div>
     <div class="card-lbl">☁ Cloud Total</div>
-    <div class="card-sub" id="stat-agent-counts">{data.get("claude_count", 0)} Claude · {data.get("gemini_count", 0)} Gemini</div>
+    <div class="card-sub" id="stat-agent-counts">{data.get("claude_count", 0)} Claude</div>
   </div>
   <div class="card local"><div class="card-val" id="stat-local">{local}</div><div class="card-lbl">⚙ Local</div></div>
   <div class="card">
@@ -5244,7 +5177,7 @@ async function updateStats() {{
     const d = await r.json();
     document.getElementById('stat-total').textContent = d.total;
     document.getElementById('stat-cloud').textContent = d.cloud;
-    document.getElementById('stat-agent-counts').textContent = (d.claude_count||0) + ' Claude · ' + (d.gemini_count||0) + ' Gemini';
+    document.getElementById('stat-agent-counts').textContent = (d.claude_count||0) + ' Claude';
     document.getElementById('stat-local').textContent = d.local;
     const maxCloud = d.max_cloud || 20;
     const pct = Math.round(d.cloud / maxCloud * 100);
@@ -5387,16 +5320,14 @@ def _help_response() -> StreamingResponse:
         "  `!fast`     → Tier 1 (Qwen 8B local) — răspuns rapid",
         "  `!best`     → Tier 5 (Claude Sonnet) — calitate maximă",
         "  `!opus`     → Tier 6 (Claude Opus) — dificultate maximă",
-        "  `!gemini`   → Tier 4 (Gemini) — alternativă cloud",
         "  `!plan`     → min Tier 2 — raționament + context personal",
         "  `!retry`    → Tier + 1 față de ultimul răspuns (max T6)",
         "  `!nocache`  → Sare peste cache semantic",
         "  `!save`              → Salvează răspunsul în Obsidian AI_Outputs/{azi}.md",
         "  `!save plans/x.md`  → Salvează în Obsidian la path custom (ex: plans/features.md)",
         '  `!schedule "CRON" msg` → Adaugă task programat',
-        "  `!run`      → Task autonom (Claude/Gemini)",
+        "  `!run`      → Task autonom (Claude)",
         "  `!sysrun`   → Task autonom cu context orchestrator",
-        "  `!swarm`    → Task autonom PARALEL (Claude + Gemini)",
         "  `!scan [profil]` → Caută joburi noi (WP-J) — digest pe Telegram",
         "  `!briefing` → Briefing zilnic acum (joburi, buget, taskuri, vault)",
         "  `!mission new <direcție>` → Kage redactează un plan și ți-l trimite pe Telegram spre aprobare (WP12)",
@@ -5878,12 +5809,12 @@ async def _route_cli(
     session_id: Optional[str] = None,
     run_id: Optional[str] = None,
 ) -> StreamingResponse:
-    provider, model = TIER_MODELS[tier]
+    _, model = TIER_MODELS[tier]
 
     # WP9: cu resume pe sesiunea SDK, contextul conversației îl ține SDK-ul — nu-l
     # mai concatenăm manual dacă avem o sesiune de reluat. Prima tură (fără resume) →
     # includem contextul construit local, ca înainte.
-    resume_sid = _get_sdk_session(session_id) if provider != "gemini" else None
+    resume_sid = _get_sdk_session(session_id)
     conv_ctx = "" if resume_sid else _build_conversation_context(messages)
     if conv_ctx:
         full_prompt = (
@@ -5894,58 +5825,9 @@ async def _route_cli(
     else:
         full_prompt = f"{system_prompt}\n\nTask: {user_message}"
 
-    if provider == "gemini":
-        return await _route_gemini(full_prompt, tier, user_message, save_path=save_path, badge=badge)
-    else:
-        return await _route_claude_autonomous(
-            tier, model, full_prompt, user_message, save_path=save_path, badge=badge,
-            session_id=session_id, run_id=run_id)
-
-
-async def _route_gemini(
-    full_prompt: str,
-    tier: int = 4,
-    user_message: str = "",
-    save_path: Optional[str] = None,
-    badge: Optional[str] = None,
-) -> StreamingResponse:
-    cmd = [GEMINI_CLI, "-p", full_prompt, "--output-format", "json"]
-    _badge = badge or _tier_badge(tier)
-
-    async def generate():
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
-            raw = stdout.decode("utf-8", errors="replace").strip()
-            try:
-                raw = json.loads(raw).get("response", raw)
-            except Exception:
-                pass
-            if not raw:
-                raw = f"[Gemini CLI: răspuns gol. stderr: {stderr.decode()[:200]}]"
-            full_response = raw
-            raw = _badge + raw
-            chunk_size = 20
-            for i in range(0, len(raw), chunk_size):
-                yield f'data: {json.dumps({"choices": [{"delta": {"content": raw[i:i+chunk_size]}, "index": 0}]})}\n\n'
-            if save_path is not None and user_message:
-                written = _write_obsidian_output(user_message, full_response, save_path or None)
-                rel = str(written).replace(str(VAULT) + "/", "")
-                confirm = f"\n\n*Salvat în Obsidian → {rel}*"
-                yield f'data: {json.dumps({"choices": [{"delta": {"content": confirm}, "index": 0}]})}\n\n'
-        except asyncio.TimeoutError:
-            yield f'data: {json.dumps({"choices": [{"delta": {"content": "[Gemini timeout 120s]"}, "index": 0}]})}\n\n'
-        except Exception as e:
-            yield f'data: {json.dumps({"choices": [{"delta": {"content": f"[Gemini error: {e}]"}, "index": 0}]})}\n\n'
-        finally:
-            _write_status_idle(4, "gemini-pro")
-            yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return await _route_claude_autonomous(
+        tier, model, full_prompt, user_message, save_path=save_path, badge=badge,
+        session_id=session_id, run_id=run_id)
 
 
 async def _generate_cli_chunks(
@@ -5955,7 +5837,7 @@ async def _generate_cli_chunks(
     messages: list,
 ):
     """Async generator for CLI fallback (used by LiteLLM fallback chain)."""
-    provider, model = TIER_MODELS[tier]
+    _, model = TIER_MODELS[tier]
     conv_ctx = _build_conversation_context(messages)
     if conv_ctx:
         full_prompt = (
@@ -5965,31 +5847,6 @@ async def _generate_cli_chunks(
         )
     else:
         full_prompt = f"{system_prompt}\n\nTask: {user_message}"
-
-    if provider == "gemini":
-        cmd = [GEMINI_CLI, "-p", full_prompt, "--output-format", "json"]
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-            raw = stdout.decode("utf-8", errors="replace").strip()
-            try:
-                raw = json.loads(raw).get("response", raw)
-            except Exception:
-                pass
-            raw = raw or "[Gemini: răspuns gol]"
-            chunk_size = 20
-            for i in range(0, len(raw), chunk_size):
-                yield f'data: {json.dumps({"choices": [{"delta": {"content": raw[i:i+chunk_size]}, "index": 0}]})}\n\n'
-        except Exception as e:
-            yield f'data: {json.dumps({"choices": [{"delta": {"content": f"[Fallback gemini error: {e}]"}, "index": 0}]})}\n\n'
-        finally:
-            _write_status_idle(tier, "gemini-pro")
-            yield "data: [DONE]\n\n"
-        return
 
     # Chat (fallback CLI): capability minimă — read-only, fără Bash (WP-G1 / D7).
     cmd = [
@@ -6126,7 +5983,7 @@ async def _route_claude_autonomous(
             logger.error(f"Claude autonomous error (tier {tier}): {e}")
             yield _sse_delta(f"[Eroare tier {tier}: {e}]")
         finally:
-            _write_status_idle(tier, model or "gemini-pro")
+            _write_status_idle(tier, model or "?")
             yield "data: [DONE]\n\n"
 
     return StreamingResponse(generate(), media_type="text/event-stream")
@@ -6199,7 +6056,7 @@ def _log_to_vault(
 ) -> None:
     try:
         today = datetime.date.today().isoformat()
-        model_name = TIER_MODELS[tier] if tier <= 2 else TIER_MODELS[tier][1] or "gemini-pro"
+        model_name = TIER_MODELS[tier] if tier <= 2 else TIER_MODELS[tier][1] or "?"
         log_path = VAULT / "logs" / f"{today}.md"
 
         entry = (

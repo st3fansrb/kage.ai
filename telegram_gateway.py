@@ -234,7 +234,6 @@ class TelegramGateway:
                 "• <code>!best</code> — model cel mai bun\n"
                 "• <code>!run &lt;task&gt;</code> — agent background\n"
                 "• <code>!status</code> — statistici live\n"
-                "• <code>!swarm &lt;task&gt;</code> — agent paralel\n"
                 "• <code>!schedule</code> — task programat\n"
                 "• <code>!scan</code> — caută joburi noi (WP-J)\n\n"
                 "🎙 Mesaj vocal — transcris local și trimis la Kage.\n"

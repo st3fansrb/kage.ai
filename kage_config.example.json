@@ -18,7 +18,7 @@
   "_comment_ui": "WP10: portul UI-ului web Mission Control (Next.js). /chat redirectează aici (kage.html retras).",
   "mission_control_port": 3001,
 
-  "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local, T4 Gemini), fiindcă executorul SDK e Claude-only. Gol = Sonnet. WP12: mission_draft_model = modelul care REDACTEAZĂ planul la `!mission new` (de pe telefon); gol = mission_default_model.",
+  "_comment_mission": "WP11: modelul misiunilor (!mission) trece prin router-ul Kage (decide_tier) cu clamp pe tier-urile Claude — un WP simplu prinde Haiku/Sonnet, unul greu Opus. mission_default_model = fallback dacă router-ul cade pe un tier ne-Claude (T1/T2 local), fiindcă executorul SDK e Claude-only. Gol = Sonnet. WP12: mission_draft_model = modelul care REDACTEAZĂ planul la `!mission new` (de pe telefon); gol = mission_default_model.",
   "mission_default_model": "",
   "mission_draft_model": "",
 
@@ -69,7 +69,6 @@
 
   "vault_path": "~/Documents/MyVault",
   "claude_cli": "",
-  "gemini_cli": "",
 
   "_comment_persona": "WP5: persona + context personal externalizate din cod. Lasă gol/absent pentru un default generic. personal_keywords declanșează injectarea contextului din vault. project_map/profile_files = căi RELATIVE la vault_path. tier_examples_extra adaugă exemple de rutare personale (cheie = numărul tier-ului).",
   "personal_keywords": [],
@@ -88,7 +87,7 @@
   "memory_dedup_threshold": 0.95,
   "memory_relevance_threshold": 0.70,
 
-  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun/!swarm la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis.",
+  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis.",
   "allowed_task_roots": [],
 
   "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) cu rotație. Trigger manual: POST /admin/backup.",
@@ -179,12 +178,11 @@
     "visual_auto_max_s": 300
   },
 
-  "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup.",
+  "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup. Tier 4 (was Gemini CLI) e retras (WP-RMG, 13.07.2026) — nu mai e configurabil aici, rămâne doar etichetă moartă în cod pentru rânduri istorice din DB.",
   "models": {
     "tier1": { "litellm_name": "tier-1-orchestrator", "ollama_model": "qwen3:8b",    "short": "qwen8b"  },
     "tier2": { "litellm_name": "tier-2-worker",       "ollama_model": "qwen3.6:35b", "short": "qwen35b" },
     "tier3": { "provider": "claude",  "model": "claude-haiku-4-5",  "short": "haiku"  },
-    "tier4": { "provider": "gemini",  "model": "",                  "short": "gemini" },
     "tier5": { "provider": "claude",  "model": "claude-sonnet-4-6", "short": "sonnet" },
     "tier6": { "provider": "claude",  "model": "claude-opus-4-8",   "short": "opus"   }
   },
