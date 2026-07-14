@@ -18,7 +18,7 @@ import logging
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
 
 import uuid
 import time as _time
@@ -32,6 +32,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
+from pydantic import BaseModel, Field
 import telegram_gateway as _tg_module
 import video_intel as _vi
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
@@ -595,6 +596,149 @@ def _get_api_token() -> str:
 app = FastAPI()
 
 
+# ── API contracts and gateway safeguards (R0) ─────────────────────────────────
+
+class PendingApprovalResponse(BaseModel):
+    id: str
+    tool_name: str = ""
+    cmd: str = ""
+    reason: str = ""
+    time: str = ""
+
+
+class MissionSummaryResponse(BaseModel):
+    id: str
+    slug: str
+    title: str
+    status: str
+    current_idx: int
+    created_at: str
+    updated_at: str
+    wps_total: int
+    wps_done: int
+
+
+class MissionWpResponse(BaseModel):
+    idx: int
+    title: str
+    status: str
+    detail: Optional[str] = None
+
+
+class MissionDetailResponse(BaseModel):
+    id: str
+    slug: str
+    title: str
+    path: str
+    cwd: str
+    status: str
+    current_idx: int
+    sdk_session_id: Optional[str] = None
+    wps: List[MissionWpResponse]
+
+
+class MissionCreateRequest(BaseModel):
+    source: str = Field(..., min_length=1, description="Slug sau cale către mission.md")
+    cwd: Optional[str] = None
+
+
+class MissionCreateResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    wps_total: int
+
+
+class UsageEntryResponse(BaseModel):
+    id: int
+    ts: str
+    tier: Optional[int] = None
+    model: Optional[str] = None
+    cloud: bool
+    agent: Optional[str] = None
+    duration_ms: Optional[int] = None
+    preview: Optional[str] = None
+
+
+class UsagePageResponse(BaseModel):
+    items: List[UsageEntryResponse]
+    limit: int
+    offset: int
+    total: int
+
+
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMIT_MAX_REQUESTS = 60
+_rate_limit_buckets: Dict[str, list] = {}
+
+
+def _rate_limit_or_response(request: Request) -> Optional[JSONResponse]:
+    """Limiter fix-window per IP, suficient pentru gateway-ul local single-user."""
+    client = request.client.host if request.client else "unknown"
+    now = _time.monotonic()
+    bucket = [ts for ts in _rate_limit_buckets.get(client, [])
+              if now - ts < _RATE_LIMIT_WINDOW_SECONDS]
+    if len(bucket) >= _RATE_LIMIT_MAX_REQUESTS:
+        retry_after = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])))
+        _rate_limit_buckets[client] = bucket
+        return JSONResponse(
+            {"error": "rate limit exceeded", "detail": "too many requests"},
+            status_code=429, headers={"Retry-After": str(retry_after)},
+        )
+    bucket.append(now)
+    _rate_limit_buckets[client] = bucket
+    return None
+
+
+def _ensure_idempotency_table(conn) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS idempotency_keys (
+            endpoint TEXT NOT NULL,
+            key TEXT NOT NULL,
+            request_hash TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            expires_at REAL NOT NULL,
+            PRIMARY KEY (endpoint, key)
+        )
+    """)
+
+
+def _idempotency_response(endpoint: str, key: str, payload: dict) -> Optional[JSONResponse]:
+    """Returnează rezultatul memorat; aceeași cheie cu alt corp este conflict."""
+    if _db_conn is None or not key:
+        return None
+    _ensure_idempotency_table(_db_conn)
+    _db_conn.execute("DELETE FROM idempotency_keys WHERE expires_at < ?", (_time.time(),))
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    row = _db_conn.execute(
+        "SELECT request_hash, response_json, status_code FROM idempotency_keys WHERE endpoint=? AND key=?",
+        (endpoint, key),
+    ).fetchone()
+    _db_conn.commit()
+    if row is None:
+        return None
+    if row[0] != digest:
+        return JSONResponse({"error": "idempotency key reused with different payload"}, status_code=409)
+    response = JSONResponse(json.loads(row[1]), status_code=row[2])
+    response.headers["Idempotency-Replayed"] = "true"
+    return response
+
+
+def _store_idempotency_response(endpoint: str, key: str, payload: dict, response: dict,
+                                status_code: int = 201) -> None:
+    if _db_conn is None or not key:
+        return
+    _ensure_idempotency_table(_db_conn)
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+    _db_conn.execute(
+        "INSERT OR REPLACE INTO idempotency_keys "
+        "(endpoint, key, request_hash, response_json, status_code, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (endpoint, key, digest, json.dumps(response), status_code, _time.time() + 24 * 3600),
+    )
+    _db_conn.commit()
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     if request.url.path in _AUTH_EXEMPT:
@@ -1134,6 +1278,8 @@ async def startup_cache():
         _ensure_missions_table(_db_conn)
         # WP12: urmă a rulărilor de joburi programate (recuperare după restart).
         _ensure_job_runs_table(_db_conn)
+        # R0: chei de idempotență pentru endpoint-urile care pornesc muncă.
+        _ensure_idempotency_table(_db_conn)
         _db_conn.commit()
         _load_pending_approvals()
 
@@ -1309,7 +1455,7 @@ async def api_config():
     }
 
 
-@app.get("/api/pending")
+@app.get("/api/pending", response_model=List[PendingApprovalResponse])
 async def api_pending():
     """Return pending risk-approval items for the kage UI."""
     resolved = set(risk_decisions.keys())
@@ -1685,15 +1831,18 @@ async def mission_draft_action(mission_id: str, action: str):
     return {"ok": False, "detail": f"acțiune necunoscută: {action}"}
 
 
-@app.get("/api/missions")
-async def api_missions():
+@app.get("/api/missions", response_model=List[MissionSummaryResponse])
+@app.get("/v1/missions", response_model=List[MissionSummaryResponse])
+async def api_missions(limit: int = 50, offset: int = 0):
     """Lista misiunilor + progresul lor (WP11)."""
     if _db_conn is None:
         return []
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
     try:
         rows = _db_conn.execute(
             "SELECT id, slug, title, status, current_idx, created_at, updated_at "
-            "FROM missions ORDER BY created_at DESC LIMIT 50").fetchall()
+            "FROM missions ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
         cols = ["id", "slug", "title", "status", "current_idx", "created_at", "updated_at"]
         out = []
         for row in rows:
@@ -1708,7 +1857,8 @@ async def api_missions():
         return []
 
 
-@app.get("/api/missions/{mission_id}")
+@app.get("/api/missions/{mission_id}", response_model=MissionDetailResponse)
+@app.get("/v1/missions/{mission_id}", response_model=MissionDetailResponse)
 async def api_mission_detail(mission_id: str):
     """O misiune + pachetele ei de lucru cu status (WP11)."""
     row = _mission_row(mission_id)
@@ -1716,6 +1866,55 @@ async def api_mission_detail(mission_id: str):
         return JSONResponse({"error": "misiune inexistentă"}, status_code=404)
     row["wps"] = _mission_wps(mission_id)
     return row
+
+
+@app.post("/v1/missions", response_model=MissionCreateResponse, status_code=201)
+async def api_mission_create(body: MissionCreateRequest, request: Request):
+    """Creează și pornește o misiune existentă, sigur la retry cu Idempotency-Key."""
+    limited = _rate_limit_or_response(request)
+    if limited:
+        return limited
+    endpoint = "/v1/missions"
+    key = request.headers.get("Idempotency-Key", "").strip()
+    payload = body.model_dump() if hasattr(body, "model_dump") else body.dict()
+    replay = _idempotency_response(endpoint, key, payload)
+    if replay:
+        return replay
+    if _active_mission_id is not None:
+        return JSONResponse({"error": "a mission is already running"}, status_code=409)
+    mission_id, err = _mission_create(body.source, cwd=body.cwd)
+    if err:
+        return JSONResponse({"error": err}, status_code=400)
+    _mission_launch(mission_id)
+    row = _mission_row(mission_id)
+    response = {"id": mission_id, "title": row["title"], "status": row["status"],
+                "wps_total": len(_mission_wps(mission_id))}
+    _store_idempotency_response(endpoint, key, payload, response)
+    return JSONResponse(response, status_code=201)
+
+
+@app.get("/api/usage", response_model=UsagePageResponse)
+@app.get("/v1/usage", response_model=UsagePageResponse)
+async def api_usage(limit: int = 50, offset: int = 0):
+    """Istoric usage paginat; endpoint aditiv pentru dashboard şi API clients."""
+    limit = max(1, min(int(limit), 100))
+    offset = max(0, int(offset))
+    if _db_conn is None:
+        return {"items": [], "limit": limit, "offset": offset, "total": 0}
+    try:
+        total = int(_db_conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0])
+        rows = _db_conn.execute(
+            "SELECT id, ts, tier, model, cloud, agent, duration_ms, preview "
+            "FROM usage ORDER BY ts DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+        items = [
+            {"id": r[0], "ts": r[1], "tier": r[2], "model": r[3], "cloud": bool(r[4]),
+             "agent": r[5], "duration_ms": r[6], "preview": r[7]}
+            for r in rows
+        ]
+        return {"items": items, "limit": limit, "offset": offset, "total": total}
+    except Exception as e:
+        logger.error(f"Usage fetch failed: {e}")
+        return JSONResponse({"error": "usage unavailable"}, status_code=503)
 
 
 @app.post("/schedule")
@@ -1844,6 +2043,9 @@ async def task_run(request: Request):
     """Spawn autonomous agent as background task and stream output back.
     Saves to history even if stream disconnects.
     """
+    limited = _rate_limit_or_response(request)
+    if limited:
+        return limited
     body = await request.json()
     task_text = body.get("task", "").strip()
     cwd = body.get("cwd") or _default_task_cwd()
@@ -1998,6 +2200,9 @@ async def audio_transcriptions(request: Request):
     """Transcriere audio OpenAI-compatible, 100% locală (whisper.cpp) — WP6.
     Acceptă multipart/form-data cu câmpul `file` (ca API-ul OpenAI). Rulează pe
     mașină, fără cost cloud. 503 dacă whisper.cpp/modelul nu sunt instalate."""
+    limited = _rate_limit_or_response(request)
+    if limited:
+        return limited
     try:
         form = await request.form()
     except Exception:
@@ -2051,6 +2256,9 @@ async def _sse_to_openai_json(resp: StreamingResponse, model: str = "kage") -> J
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
+    limited = _rate_limit_or_response(request)
+    if limited:
+        return limited
     body = await request.json()
     resp = await _chat_dispatch(request, body)
     # Ramură non-stream: dacă clientul cere stream:false (ex. gateway-ul Telegram),
