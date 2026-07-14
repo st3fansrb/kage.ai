@@ -503,6 +503,14 @@ class TradingLedger:
             row = self.conn.execute("SELECT COALESCE(SUM(usd), 0.0) FROM api_costs").fetchone()
         return float(row[0])
 
+    def api_cost_sum_day(self, day: str) -> float:
+        """Suma costurilor (USD) pe o zi (`day`=YYYY-MM-DD) — plafonul zilnic din #7."""
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(usd), 0.0) FROM api_costs WHERE created_at LIKE ?",
+            (day + "%",),
+        ).fetchone()
+        return float(row[0])
+
     def get_api_costs(self, limit: int = 200) -> list[dict]:
         limit = max(1, min(int(limit), 5000))
         cur = self.conn.execute("SELECT * FROM api_costs ORDER BY id DESC LIMIT ?", (limit,))

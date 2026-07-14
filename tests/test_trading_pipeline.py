@@ -267,6 +267,8 @@ def test_pipeline_from_config_openrouter(ledger):
 
     cfg = {
         "eur_usd_rate": 0.9,
+        # #7: model plătit → cere switch-ul global pornit (fără el, Criticul rămâne local).
+        "api_budget": {"enabled": True, "monthly_cap_eur": 10, "daily_cap_eur": 1},
         "providers": {"litellm_url": "http://localhost:4000", "litellm_key": "sk-x"},
         "trading": {
             "openrouter_api_key": "sk-or-test",

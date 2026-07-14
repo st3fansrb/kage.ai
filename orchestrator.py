@@ -1493,6 +1493,27 @@ def _mc_activity(runs: list[dict]) -> list[dict]:
     return out[:30]
 
 
+def _api_spend_status() -> Optional[dict]:
+    """Starea plafonului global pe bani reali (#7): switch + cheltuieli vs plafoane, în EUR.
+
+    Sursa cheltuielilor = tabela `api_costs` din `cache_db/trading.db` (azi doar Criticul
+    scrie acolo; rolurile viitoare — advisor WP13, failover — vor scrie tot acolo).
+    None la orice eroare — header-ul MC nu are voie să pice din cauza bugetului.
+    """
+    try:
+        from api_budget import SpendGate
+        from trading.ledger import TradingLedger
+        cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
+        ledger = TradingLedger()
+        try:
+            return SpendGate.from_config(cfg, ledger).status()
+        finally:
+            ledger.conn.close()
+    except Exception as e:
+        logger.debug(f"_api_spend_status: {e}")
+        return None
+
+
 def _mc_budget() -> dict:
     """Header buget: apeluri cloud azi + cost real în $/EUR (din run ledger)."""
     _, cloud_today = _usage_counts_today()
@@ -1518,6 +1539,7 @@ def _mc_budget() -> dict:
         "spentUsd": round(spent, 4),
         "spentEur": _usd_to_eur(spent),
         "maxUsd": _MC_MAX_USD,
+        "api": _api_spend_status(),   # #7: plafonul global pe bani reali (EUR) sau None
     }
 
 
