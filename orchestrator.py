@@ -2124,6 +2124,13 @@ async def _chat_dispatch(request: Request, body: dict):
     if re.match(r"^!mission\b", last_user.strip(), re.IGNORECASE):
         return await _handle_mission_command(last_user.strip())
 
+    # WP-NL: mesaje FĂRĂ niciun prefix `!` trec prin intent router înainte de chat normal.
+    # Prefixele rămân escape hatch determinist — un mesaj cu `!` nu ajunge niciodată aici.
+    if not _lu_stripped.startswith(("!", "/")):
+        intent_resp = await _route_intent(_lu_stripped)
+        if intent_resp is not None:
+            return intent_resp
+
     # WP8: deschide un run în ledger pentru fiecare cerere REALĂ de chat (după shortcut-uri).
     run_id = _run_start("chat", session_id=session_id,
                         channel=_channel_for(session_id), input_text=last_user)
@@ -2480,6 +2487,146 @@ async def _routing_vacuum() -> None:
             logger.info(f"Routing vacuum: removed {len(to_delete)} old feedback entries")
     except Exception as e:
         logger.warning(f"Routing vacuum failed: {e}")
+
+
+# ── WP-NL: intent router (mesaje fără prefix `!`) ───────────────────────────────
+# Prefixele `!` rămân bypass determinist (nu ajung aici — vezi garda din _chat_dispatch).
+# Straturi separate față de decide_tier: intenția decide ACȚIUNEA, tier-ul decide MODELUL.
+# Traduce la comenzile `!` EXISTENTE — zero logică nouă de execuție (spec KAGE-HANDOFF.md §5).
+INTENT_CONFIDENCE_FLOOR = float(_cfg.get("intent_confidence_floor", 0.65))
+
+_INTENT_TAXONOMY = {
+    "chat": "conversație obișnuită, întrebare, cerere de conținut — orice nu se potrivește mai jos",
+    "status": "starea sistemului chiar acum: ce rulează, tier curent, ȘI cât s-a cheltuit AZI din bugetul cloud",
+    "briefing": "rezumatul/recapitularea zilei",
+    "mission_new": "pornește un proiect nou cu mai mulți pași (construiește X, adaugă feature Y)",
+    "agent_run": "un singur task de agent, mai simplu decât o misiune completă",
+    "mission_control": "pune pe pauză / reia / oprește misiunea care rulează ACUM",
+    "mission_steer": "un mesaj îndreptat spre misiunea care rulează ACUM (comentariu, corecție), nu o cerere nouă",
+    "jobs": "caută joburi noi",
+    "analytics": "cere un raport/statistică de cost sau utilizare pe o perioadă ISTORICĂ, mai multe zile (nu azi)",
+}
+_INTENT_LABELS = tuple(_INTENT_TAXONOMY)
+
+
+async def _classify_intent(
+    message: str, *, has_draft: bool, mission_active: bool,
+) -> tuple[str, str, float]:
+    """Clasifică un mesaj FĂRĂ prefix într-o intenție din lista închisă de mai sus.
+    Local (T1, qwen3:8b) — n-are voie să adauge secunde la chatul banal. Orice eșec
+    (Ollama jos, JSON invalid, intenție necunoscută) → ("chat", "", 0.0): fail-safe pe
+    ieftin și inofensiv, niciodată blocant.
+
+    NOTĂ: promptul few-shot de mai jos + pragul INTENT_CONFIDENCE_FLOOR sunt un prim
+    draft — calibrarea lor pe un set etichetat real e treaba „Stefan, ghidat" din §8
+    a handoff-ului, nu o decizie finală luată aici.
+    """
+    if _ollama_dead:
+        return "chat", "", 0.0
+    context_bits = []
+    if has_draft:
+        context_bits.append("Există o schiță de misiune în așteptare de revizuit.")
+    if mission_active:
+        context_bits.append("O misiune rulează activ chiar acum.")
+    context = ("Context: " + " ".join(context_bits) + "\n") if context_bits else ""
+    taxonomy_lines = "\n".join(f'- "{k}": {v}' for k, v in _INTENT_TAXONOMY.items())
+    prompt = (
+        "Clasifică mesajul de mai jos într-o SINGURĂ intenție din lista următoare:\n"
+        f"{taxonomy_lines}\n\n"
+        f"{context}"
+        f"Mesaj: {message[:400]}\n\n"
+        'Răspunde STRICT cu un JSON pe un singur rând, fără alt text: '
+        '{"intent": "<una din valorile de mai sus>", "arg": "<argumentul relevant extras, '
+        'scurt, sau gol>", "confidence": <0.0-1.0>}'
+    )
+    try:
+        async with httpx.AsyncClient() as client:
+            r = await client.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": "qwen3:8b",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    # "think" trebuie să fie la nivelul de top al body-ului, NU în "options" —
+                    # Qwen3 (hybrid reasoning) ignoră complet "options.think" pe Ollama și
+                    # consumă tot num_predict-ul pe raționament intern înainte de JSON.
+                    "think": False,
+                    "options": {"temperature": 0, "num_predict": 120},
+                },
+                timeout=20,
+            )
+        content = (r.json().get("message", {}).get("content") or "").strip()
+        m = re.search(r"\{.*\}", content, re.DOTALL)
+        if not m:
+            return "chat", "", 0.0
+        data = json.loads(m.group(0))
+        intent = str(data.get("intent", "chat")).strip()
+        if intent not in _INTENT_LABELS:
+            return "chat", "", 0.0
+        arg = str(data.get("arg", "") or "").strip()
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
+        return intent, arg, confidence
+    except Exception as e:
+        logger.debug(f"Intent classify failed ({e}), fail-safe pe chat")
+        return "chat", "", 0.0
+
+
+async def _route_intent(text: str) -> Optional[StreamingResponse]:
+    """Pentru mesaje fără prefix: decide dacă e o intenție acționabilă sau chat normal,
+    apoi dispatch la handler-ul `!` EXISTENT corespunzător. Întoarce None dacă mesajul
+    trebuie să cadă pe pipeline-ul normal de chat (fail-safe: ambiguu/încredere mică/
+    intenție necunoscută).
+
+    Contextul (schiță în așteptare / misiune activă) are prioritate față de clasificarea
+    generică — vezi pasul 3 din specul WP-NL.
+    """
+    has_draft = _latest_draft_id() is not None
+    mission_active = _active_mission_id is not None
+
+    intent, arg, confidence = await _classify_intent(
+        text, has_draft=has_draft, mission_active=mission_active,
+    )
+    if confidence < INTENT_CONFIDENCE_FLOOR or intent == "chat":
+        return None
+
+    # O schiță în așteptare are prioritate: orice intenție de tip „proiect nou"/„zi-i
+    # misiunii ceva" devine revizia schiței curente, nu una nouă în plus.
+    if has_draft and intent in ("mission_new", "agent_run", "mission_steer"):
+        return await _handle_mission_command(f"!mission revise {arg or text}")
+
+    if intent == "mission_steer":
+        if mission_active:
+            # Steering live nu există încă (vine cu WP-AL) — răspuns onest, nu no-op tăcut.
+            return _instant_sse(
+                "📌 O misiune rulează deja — redirecționarea ei în timp real nu e încă "
+                "implementată (vine cu WP-AL). Poți aștepta finalul sau opri misiunea cu "
+                "`!mission stop` și o pornești din nou cu instrucțiuni noi."
+            )
+        return None
+
+    if intent in ("mission_new", "agent_run"):
+        # Acțiune cu efecte → NU se execută direct; merge pe cardul de schiță cu butoane.
+        return await _handle_mission_command(f"!mission new {arg or text}")
+
+    if intent == "status":
+        return _status_snapshot()
+
+    if intent == "briefing":
+        return await _handle_briefing_command()
+
+    if intent == "jobs":
+        return await _handle_scan_command(f"!scan {arg}".strip())
+
+    if intent == "mission_control":
+        sub = arg.strip().lower() if arg.strip().lower() in ("pause", "resume", "stop") else ""
+        if not sub:
+            return None
+        return await _handle_mission_command(f"!mission {sub}")
+
+    if intent == "analytics":
+        return _instant_sse("📊 Analytics vine cu WP-ETL — nu e încă disponibil.")
+
+    return None
 
 
 # ── Run ledger (WP8 / #5) ──────────────────────────────────────────────────────
@@ -5338,6 +5485,10 @@ def _help_response() -> StreamingResponse:
     """Instant !help response — no LLM call."""
     text = "\n".join([
         "📖 **Prefixe disponibile:**",
+        "",
+        "  _(WP-NL) Poți scrie și fără prefix — Kage recunoaște intenția din context_",
+        "  _(pornește misiune, status, joburi, pauză/reia misiune). Prefixele rămân_",
+        "  _bypass determinist, pentru control exact._",
         "",
         "  `!fast`     → Tier 1 (Qwen 8B local) — răspuns rapid",
         "  `!best`     → Tier 5 (Claude Sonnet) — calitate maximă",
