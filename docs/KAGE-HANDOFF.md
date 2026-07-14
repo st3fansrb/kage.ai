@@ -244,8 +244,9 @@ WP13(advisor + HITL v2) → WP-G2(izolare) → WP10(dashboard + WP7 Phoenix + ta
 Cloudflare Tunnel) → #6(memorie v2) → #12(skills) → #9(tools locale T2) →
 WP-T T2(sports betting) → T3(Manifold) → T4(forex/OANDA) → evaluare
 NDX → #14(voice push-to-talk) → RAG(înainte de ian. 2027) → audit modele(post-proiect).**
-**WP-V (video intel)** e în afara lanțului — independent, felie de 1–2 seri, poate fi tras
-oricând după WP12 + setup-ul Whisper (WP6). **§8 (pista de învățare)** rulează în paralel.
+**WP-V (video intel)** e în afara lanțului — ✅ **Slice 1 livrat (12.07.2026)** (flux cost-0
+cap-coadă); Slice 2 (pas vizual plătit + T5 adânc) e condiționat de #7 merge-uit. **§8 (pista
+de învățare)** rulează în paralel.
 **WP-CX (executor Codex — multi-executor cu governance pe containere)** e condiționat și în
 afara lanțului: intră abia DUPĂ WP-G2 și startul abonamentului Codex (decizia, declanșatorul
 și data startului în §4). Specul se scrie abia după luna de probă — nu-l detalia acum.
@@ -278,8 +279,9 @@ Raționament:
   (fișier gitignored) → **T1-exec**.
 - ~~`.venv-py39` — de șters (3.12 rulează stabil din 06.07)~~ ✅ șters la #7 (12.07.2026).
 - Fallback-ul LiteLLM→CLI încă pe subprocess (WP9, cale rară) → oportunist, nu blochează.
-- WP6 voice: setup whisper-cpp + model GGML (pas manual Stefan; endpoint dă 503 grațios
-  până atunci). **Nu mai e opțional:** e precondiție pentru WP-V (transcrierea clipurilor).
+- ✅ WP6 voice: whisper-cpp + model GGML (`large-v3-turbo`, în `.models/`) **instalate și
+  validate** (12.07.2026) — transcrierea locală merge; precondiția WP-V e satisfăcută. Rămâne
+  doar `brew install yt-dlp` pentru extracția video (ffmpeg e deja instalat).
 - WP-B: `vault_git_remote` de completat în config (pas manual Stefan) — push-ul nocturn al
   vault-ului e no-op până atunci.
 - WP-J: setup career-ops + `jobs.enabled` (opt-in, pas manual Stefan), dacă nu e făcut deja.
@@ -921,7 +923,32 @@ ajungă la Stefan · un WP cu diff care nu acoperă un criteriu NU primește ✅
 două misiuni în coadă rulează în serie cu notificări · dezacord persistent simulat → ambele
 argumente ajung pe Telegram · pytest verde.
 
-### WP-V — Video intel: analiza clipurilor trimise de pe telefon · efort: 1–2 seri · independent, recomandat după WP12 · precondiție: setup-ul Whisper din WP6
+### WP-V — Video intel: analiza clipurilor trimise de pe telefon · ✅ Slice 1 livrat (12.07.2026) · independent
+
+**✅ Slice 1 livrat (12.07.2026).** Fluxul cost-0 cap-coadă: detecție URL în gateway →
+extracție (subtitrări-întâi → altfel audio → Whisper local WP6) → clasificare pe categorii +
+analiză sceptică pe T2 local → card de verdict pe Telegram cu butoane adaptate categoriei.
+Piese: `video_intel.py` (modul nou, frontiere subprocess injectabile), endpoint-urile
+`/video/analyze|save|hypothesis|visual|deep|ignore` în orchestrator, cablarea în
+`telegram_gateway.py` (`_handle_video`, `send_video_card`, `_handle_video_callback`), blocul
+`video_intel` în config, 34 de teste noi (418 total, verzi). Butonul 🔬 pre-înregistrează
+ipoteza de trading în `trading.db` (invariant #2, schema falsificabilă validată); 💾 scrie
+notă structurată în `vault/VideoIntel/`.
+
+**Referințe preluate (adaptate, nu verbatim — MIT):** rețetele yt-dlp/ffmpeg (subtitrări-întâi,
+keyframes pe `select='gt(scene,0.3)'`) inspirate din `github.com/martinopiaggi/summarize`;
+structura pattern-urilor `analyze_claims`/`extract_wisdom` din `github.com/danielmiessler/Fabric`
+rescrisă în română pentru schema noastră JSON (afirmație → dovezi → red flags → verdict).
+
+**⏳ Slice 2 (condiționat de #7 merge-uit):** pasul vizual PLĂTIT (OCR pe keyframes cu Gemini
+Flash-Lite prin OpenRouter) și analiza adâncă 🔎 T5. Ambele ating plafonul #7, care nu e încă
+în dev — până atunci: keyframes se extrag, dar descrierea vizuală plătită și T5 dau mesaj
+onest „se cablează în slice 2". Fallback-ul vizual pe T2 local (per cadru) rămâne tot pentru
+slice 2 (necesită verificarea suportului vision prin Ollama/LiteLLM). **Precondiții
+rezolvate (13.07.2026):** yt-dlp instalat în `.venv` (cale absolută în config); ffmpeg +
+Whisper `large-v3-turbo` deja instalate; **gaura de PATH din `start_all.sh` reparată**
+(launchd pornea cu PATH minimal fără `/opt/homebrew/bin` → ffmpeg/whisper/yt-dlp/ollama
+picau după reboot) + auto-upgrade yt-dlp throttled la 24h (anti-bot TikTok).
 
 **Ideea (09.07.2026, Stefan):** trimite pe Telegram, de pe telefon, link-uri video (YouTube,
 TikTok, Reels, X — oameni care explică concepte de finance/AI/agents/trading) → Kage extrage

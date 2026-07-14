@@ -33,6 +33,7 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, RedirectResponse
 import telegram_gateway as _tg_module
+import video_intel as _vi
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
 import mission_runner as _mr
 
@@ -314,6 +315,17 @@ _whisper_cfg = _cfg.get("whisper", {}) if isinstance(_cfg.get("whisper"), dict) 
 WHISPER_BIN      = str(_whisper_cfg.get("bin", "whisper-cli")).strip() or "whisper-cli"
 WHISPER_MODEL    = str(_whisper_cfg.get("model", "")).strip()
 WHISPER_LANGUAGE = str(_whisper_cfg.get("language", "auto")).strip() or "auto"
+
+# WP-V: video intel — extrage și analizează sceptic clipuri trimise pe Telegram.
+# Fluxul implicit e cost 0 (subtitrări-întâi / Whisper local / analiză pe T2). Pasul vizual
+# (keyframes + OCR) e opțional; modelul vision plătit trece prin plafonul #7 când e cablat.
+_video_cfg = _cfg.get("video_intel", {}) if isinstance(_cfg.get("video_intel"), dict) else {}
+VIDEO_INTEL_ENABLED  = bool(_video_cfg.get("enabled", True))
+VIDEO_YTDLP_BIN      = str(_video_cfg.get("ytdlp_bin", "yt-dlp")).strip() or "yt-dlp"
+VIDEO_MAX_DURATION_S = int(_video_cfg.get("max_duration_s", 1800))
+VIDEO_ANALYSIS_TIMEOUT = float(_video_cfg.get("analysis_timeout_s", 300))
+# `visual_auto_max_s` (config) = pragul sub care pasul vizual va porni automat — se folosește
+# în Slice 2 (auto-trigger vizual); în Slice 1 pasul vizual e doar la cerere (buton 🖼).
 
 # WP9 (#4): executor pe Claude Agent SDK. Gate-ul de risc in-proces refolosește
 # aceleași setări ca hook-ul CLI risk_hook.py.
@@ -4484,6 +4496,215 @@ async def jobs_apply(jhash: str):
     """✍️ pregătește aplicația (career-ops). Apelat de butonul inline din Telegram."""
     msg = await _job_apply(jhash)
     return JSONResponse({"status": "ok", "message": msg})
+
+
+# ── WP-V: Video intel ─────────────────────────────────────────────────────────
+# Analiza sceptică a clipurilor trimise pe Telegram. Fluxul implicit e cost 0.
+# Analizele se țin scurt-timp în memorie (ca aprobările de risc): butoanele cardului
+# le referă prin id. Restart = pierdere cardurilor în așteptare (acceptabil, single-user).
+
+_VIDEO_ANALYSES: dict[str, dict] = {}
+_VIDEO_STORE_MAX = 30
+
+
+def _video_store(url: str, extract: "_vi.ExtractResult", analysis: "_vi.Analysis") -> str:
+    vid = uuid.uuid4().hex[:12]
+    _VIDEO_ANALYSES[vid] = {"url": url, "extract": extract, "analysis": analysis, "ts": _time.time()}
+    if len(_VIDEO_ANALYSES) > _VIDEO_STORE_MAX:
+        for k in sorted(_VIDEO_ANALYSES, key=lambda k: _VIDEO_ANALYSES[k]["ts"])[:-_VIDEO_STORE_MAX]:
+            _VIDEO_ANALYSES.pop(k, None)
+    return vid
+
+
+async def _video_t2_chat(messages: list) -> str:
+    """Apel către T2 local (Qwen prin LiteLLM), fără cost. Ridică la eșec de rețea."""
+    async with httpx.AsyncClient(timeout=VIDEO_ANALYSIS_TIMEOUT) as client:
+        resp = await client.post(
+            f"{LITELLM_URL}/chat/completions",
+            json={"model": TIER_MODELS[2], "messages": messages, "stream": False},
+            timeout=VIDEO_ANALYSIS_TIMEOUT,
+        )
+    return (
+        resp.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
+    )
+
+
+async def _video_transcribe(audio: bytes, suffix: str) -> str:
+    """Punte către transcrierea locală WP6 (Whisper). 503-ul devine string gol grațios."""
+    try:
+        return await _transcribe_audio(audio, src_suffix=suffix)
+    except _WhisperUnavailable:
+        logger.info("[VideoIntel] Whisper neinstalat — sar transcrierea audio")
+        return ""
+
+
+@app.post("/video/analyze")
+async def video_analyze(request: Request):
+    """Extrage + analizează sceptic un clip. Body: {\"url\": \"...\"}. Zero apeluri cloud pe
+    fluxul implicit (subtitrări/Whisper local/analiză T2). Apelat de gateway la detecția unui URL."""
+    if not VIDEO_INTEL_ENABLED:
+        return JSONResponse({"ok": False, "error": "video_intel dezactivat în config"}, status_code=400)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    url = _vi.find_video_url(str(body.get("url", "")))
+    if not url:
+        return JSONResponse({"ok": False, "error": "niciun URL video recunoscut"}, status_code=400)
+    try:
+        extract = await _vi.extract(
+            url, transcribe_fn=_video_transcribe,
+            ytdlp_bin=VIDEO_YTDLP_BIN, max_duration_s=VIDEO_MAX_DURATION_S,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[VideoIntel] extract crash: {e}")
+        return JSONResponse({"ok": False, "error": "nu pot extrage de aici acum"})
+    if extract.error:
+        return JSONResponse({"ok": False, "error": extract.error})
+    if not extract.ok:
+        return JSONResponse({"ok": False, "error": "clipul nu are subtitrări, transcript sau descriere de analizat"})
+    try:
+        analysis = await _vi.VideoIntel(_video_t2_chat, max_duration_s=VIDEO_MAX_DURATION_S).analyze(extract)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"[VideoIntel] analiză eșuată: {e}")
+        return JSONResponse({"ok": False, "error": f"analiza a eșuat: {str(e)[:120]}"})
+    vid = _video_store(url, extract, analysis)
+    card = _vi.build_card(extract, analysis)
+    return JSONResponse({"ok": True, "id": vid, "card": card})
+
+
+@app.post("/video/save/{vid}")
+async def video_save(vid: str):
+    """💾 Salvează nota structurată în vault (`VideoIntel/<data>-<slug>.md`) + commit git."""
+    entry = _VIDEO_ANALYSES.get(vid)
+    if entry is None:
+        return JSONResponse({"ok": False, "error": "analiză necunoscută (expirată?)"}, status_code=404)
+    extract, analysis = entry["extract"], entry["analysis"]
+    slug = re.sub(r"[^a-z0-9]+", "-", (extract.title or "clip").lower())[:40].strip("-") or "clip"
+    path = VAULT / "VideoIntel" / f"{datetime.date.today().isoformat()}-{slug}.md"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_vi.note_markdown(extract, analysis), encoding="utf-8")
+    except OSError as e:
+        return JSONResponse({"ok": False, "error": f"nu pot scrie nota: {e}"}, status_code=500)
+    try:
+        _vault_git_commit()
+    except Exception as e:  # noqa: BLE001 — commit-ul e best-effort
+        logger.info(f"[VideoIntel] vault commit eșuat (nefatal): {e}")
+    return JSONResponse({"ok": True, "path": str(path)})
+
+
+@app.post("/video/hypothesis/{vid}")
+async def video_hypothesis(vid: str):
+    """🔬 Pre-înregistrează afirmația de trading ca ipoteză în `trading.db` (invariant #2).
+    Doar dacă analiza a produs o ipoteză falsificabilă cu schema validă; altfel mesaj grațios."""
+    entry = _VIDEO_ANALYSES.get(vid)
+    if entry is None:
+        return JSONResponse({"ok": False, "error": "analiză necunoscută (expirată?)"}, status_code=404)
+    analysis = entry["analysis"]
+    hyp = analysis.trading_hypothesis
+    if not hyp:
+        return JSONResponse({"ok": False, "error": "afirmația nu e falsificabilă (prea vagă pentru o ipoteză)"})
+    from trading.ledger import TradingLedger
+    from trading import actor as _actor
+    led = TradingLedger()
+    try:
+        ids = _actor.register(led, [hyp], source_model=f"video-intel:{entry['url'][:60]}")
+    except Exception as e:  # noqa: BLE001 — schema invalidă → mesaj grațios, nu 500
+        led.conn.close()
+        return JSONResponse({"ok": False, "error": f"ipoteza nu respectă schema falsificabilă: {str(e)[:140]}"})
+    led.conn.close()
+    return JSONResponse({"ok": True, "hypothesis_id": ids[0] if ids else None})
+
+
+@app.post("/video/visual/{vid}")
+async def video_visual(vid: str):
+    """🖼 Pas vizual: extrage keyframes (ffmpeg pe schimbare de scenă) → descriere/OCR per cadru
+    → re-rulează analiza cu notele vizuale. Modelul vision plătit trece prin plafonul #7
+    (soft-import; fallback T2 local). Fără keyframes/model → mesaj grațios, cardul rămâne."""
+    entry = _VIDEO_ANALYSES.get(vid)
+    if entry is None:
+        return JSONResponse({"ok": False, "error": "analiză necunoscută (expirată?)"}, status_code=404)
+    extract = entry["extract"]
+    try:
+        video_bytes = await _video_download_video(entry["url"])
+        frames = await _vi.ffmpeg_keyframes(video_bytes, max_frames=20)
+    except Exception as e:  # noqa: BLE001
+        logger.info(f"[VideoIntel] keyframes indisponibile: {e}")
+        return JSONResponse({"ok": False, "error": f"nu pot extrage cadre: {str(e)[:120]}"})
+    if not frames:
+        return JSONResponse({"ok": False, "error": "niciun cadru relevant (clip static?)"})
+    visual_notes = await _video_describe_frames(frames)
+    try:
+        analysis = await _vi.VideoIntel(_video_t2_chat).analyze(extract, visual_notes=visual_notes)
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": f"re-analiza a eșuat: {str(e)[:120]}"})
+    entry["analysis"] = analysis
+    card = _vi.build_card(extract, analysis)
+    return JSONResponse({"ok": True, "id": vid, "card": card, "frames": len(frames)})
+
+
+@app.post("/video/deep/{vid}")
+async def video_deep(vid: str):
+    """🔎 Analiză adâncă pe T5 (cloud), gated pe buget. Cablarea completă a rutării cloud +
+    gate-ul #7 intră în slice 2 (plafonul EUR nu e încă în dev) — până atunci, mesaj onest."""
+    if vid not in _VIDEO_ANALYSES:
+        return JSONResponse({"ok": False, "error": "analiză necunoscută (expirată?)"}, status_code=404)
+    return JSONResponse({
+        "ok": False,
+        "error": "analiza adâncă (T5) se activează în slice 2 — necesită plafonul de buget #7",
+    })
+
+
+@app.post("/video/ignore/{vid}")
+async def video_ignore(vid: str):
+    """🗑 Uită analiza (nu se salvează nimic)."""
+    _VIDEO_ANALYSES.pop(vid, None)
+    return JSONResponse({"ok": True})
+
+
+async def _video_download_video(url: str) -> bytes:
+    """Descarcă clipul întreg (pentru keyframes). Plafon de durată moștenit din config."""
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        tmpl = os.path.join(td, "clip.%(ext)s")
+        proc = await asyncio.create_subprocess_exec(
+            VIDEO_YTDLP_BIN, "--no-warnings", "-f", "mp4/best", "-o", tmpl, url,
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=300)
+        if proc.returncode != 0:
+            raise RuntimeError((err.decode("utf-8", "replace") or "descărcare video eșuată")[:200])
+        files = sorted(Path(td).glob("clip.*"))
+        if not files:
+            raise RuntimeError("fișier video negăsit după descărcare")
+        return files[0].read_bytes()
+
+
+async def _video_describe_frames(frames: list) -> str:
+    """Descriere/OCR per cadru. Model vision plătit (OpenRouter) gated pe #7 prin soft-import;
+    fallback grațios dacă gate-ul, cheia sau modelul lipsesc. Un apel per cadru (context mic)."""
+    key = str(_trading_cfg.get("openrouter_api_key", "")).strip()
+    # Soft-import al plafonului #7 (absent pe dev până se merge-uiește WP7).
+    gate_ok = True
+    if key:
+        try:
+            from api_budget import SpendGate  # type: ignore
+            from trading.ledger import TradingLedger
+            _led = TradingLedger()
+            try:
+                gate_ok = SpendGate.from_config(_cfg, _led).allows(est_usd=0.01).allowed
+            finally:
+                _led.conn.close()
+        except ImportError:
+            gate_ok = False  # fără plafon #7 nu facem apeluri plătite
+        except Exception as e:  # noqa: BLE001
+            logger.info(f"[VideoIntel] gate #7 indisponibil: {e}")
+            gate_ok = False
+    if not (key and gate_ok):
+        return f"[{len(frames)} cadre extrase; descriere vizuală indisponibilă — model vision necablat sau buget #7 închis]"
+    # Cablarea apelului vision plătit (OpenRouter Gemini) intră în slice 2 odată cu #7.
+    return f"[{len(frames)} cadre extrase; analiza vizuală plătită se cablează în slice 2]"
 
 
 # Statusuri setabile manual din tracker-ul /jobs (fără a declanșa career-ops).

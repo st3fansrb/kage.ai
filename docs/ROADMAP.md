@@ -348,6 +348,27 @@ Garda hard pe bani reali (top-up-ul OpenRouter trebuie să reziste luni de zile)
 
 ---
 
+### WP-V — Video intel: analiză sceptică a clipurilor pe Telegram ✅ Slice 1 (12.07.2026)
+
+Trimiți un link (YouTube/TikTok/Instagram/X/…) de pe telefon → Kage extrage conținutul și îl
+analizează sceptic (valoros / marketing / fals / de testat). „Telefonul fără fir" al lui
+Stefan pe TikTok devine un pipeline automat, 100% local pe fluxul implicit.
+
+- `video_intel.py` (modul nou): detecție URL, extracție **subtitrări-întâi** (instant, gratis)
+  → altfel audio → Whisper local (WP6); clasificare pe categorii (trading/tech/carte/lecție/
+  decizie) + analiză sceptică pe T2 local; card + notă vault. Frontiere subprocess injectabile.
+- Endpoint-uri `/video/analyze|save|hypothesis|visual|deep|ignore` + cablare în gateway
+  (detecție URL, `send_video_card`, callback butoane). 🔬 pre-înregistrează ipoteza de trading
+  în `trading.db` (invariant #2); 💾 → notă structurată în `vault/VideoIntel/`.
+- **Apărare prompt injection:** transcriptul = DATE ne-de-încredere într-un bloc delimitat;
+  analiza rulează fără tools, sistemul ignoră instrucțiunile din interiorul clipului.
+- Referințe adaptate (MIT): rețete yt-dlp/ffmpeg (martinopiaggi/summarize), structura
+  pattern-urilor analyze_claims/extract_wisdom (danielmiessler/Fabric).
+- Slice 2 (condiționat de #7): pasul vizual plătit (OCR keyframes Gemini) + analiza adâncă T5.
+- Teste: **384 → 418 verzi** (34 noi).
+
+---
+
 ## Viziune business (toamnă 2026)
 
 Kage ca produs pentru verticala manufacturing/automotive România:
