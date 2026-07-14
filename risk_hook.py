@@ -42,6 +42,15 @@ NTFY_CONFIG     = next(
 ORCHESTRATOR_URL = "http://localhost:4001"
 
 
+def _extend_roots_with_worktrees(roots: list[str], worktrees_dir: str) -> list[str]:
+    """WP-SD: dacă `roots` e ACTIV (nu gol), adaugă directorul de worktree-uri de
+    misiune — checkout-uri izolate ale ACELUIAȘI repo Kage, deci aceeași încredere ca
+    PROJECT_ROOT. NU activează confinement-ul dacă era dezactivat: `roots` gol rămâne gol."""
+    if not roots or worktrees_dir in roots:
+        return roots
+    return roots + [worktrees_dir]
+
+
 def _load_allowed_task_roots() -> list[str]:
     """Citește `allowed_task_roots` din config (același mecanism ca `_load_vault`).
     Fiecare element e expanduser()-uit. Absent/gol → [] (confinement dezactivat)."""
@@ -51,11 +60,15 @@ def _load_allowed_task_roots() -> list[str]:
         if p.exists():
             try:
                 cfg = json.loads(p.read_text(encoding="utf-8"))
-                return [
+                roots = [
                     str(Path(r).expanduser())
                     for r in cfg.get("allowed_task_roots", [])
                     if r
                 ]
+                worktrees_dir = str(Path(
+                    cfg.get("kage_worktrees_dir", str(Path.home() / ".kage-worktrees"))
+                ).expanduser())
+                return _extend_roots_with_worktrees(roots, worktrees_dir)
             except Exception:
                 pass
     return []
