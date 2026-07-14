@@ -29,6 +29,9 @@
   "mission_default_model": "",
   "mission_draft_model": "",
 
+  "_comment_intent_router": "WP-NL: pragul de încredere sub care un mesaj FĂRĂ prefix `!` cade pe chatul normal (fail-safe) în loc să fie tratat ca intenție acționabilă (mission_new, agent_run, status etc.). Prim draft, calibrat manual — se ajustează pe setul etichetat din tests/test_intent_router.py.",
+  "intent_confidence_floor": 0.65,
+
   "_comment_remote": "WP12: telecomandă. mission_git_branch = misiunile rulează pe un branch `mission/<slug>` (review din GitHub mobile). mission_git_push = push automat după fiecare WP (cere remote cu auth — SSH sau credential helper); gol/false ⇒ commit local, fără push. mission_git_remote = numele remote-ului (default origin). heartbeat_url = URL de ping periodic la un dead-man's-switch extern (healthchecks.io etc.) care te alertează când Kage TACE; gol ⇒ dezactivat. heartbeat_interval_min = cadența pingului. startup_online_message = mesaj `🟢 Kage online` pe Telegram la pornire.",
   "remote": {
     "mission_git_branch": true,
