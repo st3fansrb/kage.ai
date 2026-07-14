@@ -8,6 +8,11 @@ Sursă unică de adevăr pentru tot ce e planificat, în lucru, sau decis conșt
 > `KAGE-HANDOFF.md`. **Ordinea de implementare de acolo are prioritate** față de secțiunile
 > „Prioritate medie/scăzută" de mai jos, care rămân ca istoric de idei.
 
+> **14.07.2026:** propunerile generate de o sesiune Codex separată sunt centralizate în
+> `CODEX-PROPUNERI.md` (registru G1–G6/T1–T8) și `REVOLUT-INTERNSHIP-ALIGNMENT.md` (mapare JD
+> Revolut). Verdictul de reconciliere (ce s-a acceptat, integrat sau lăsat `proposed`) e în
+> `KAGE-HANDOFF.md` §4 — sursa de adevăr pentru ordine rămâne tot handoff-ul, nu acest fișier.
+
 ---
 
 ## Starea curentă: Faza 19 ✅

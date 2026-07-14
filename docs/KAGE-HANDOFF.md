@@ -1,5 +1,11 @@
 # KAGE-HANDOFF — plan de execuție pentru sesiunile următoare
 
+> **Addendum 14.07.2026 — reconciliere cu propunerile Codex:** o sesiune Codex separată a produs
+> `docs/CODEX-PROPUNERI.md` (registru G1–G6 + T1–T8) și `docs/REVOLUT-INTERNSHIP-ALIGNMENT.md`
+> (mapare JD Revolut). Verdictul complet e în §4 („Reconciliere cu propunerile Codex"); pe scurt:
+> R0, T3 (integrat în WP-ETL) și G5 (integrat în WP10) acceptate, G1-minim acceptat în formă
+> redusă, restul (T1/T2/T4–T8, G4) rămân `proposed` în registrul separat.
+
 > Scris de Claude Fable 5 pe 03.07.2026 (accesul lui Stefan la Fable expiră pe 07.07.2026).
 > Destinatar: o sesiune viitoare de Claude (Opus/Sonnet) în Claude Code, care implementează
 > itemii din `KAGE-EVALUARE.md` §4. Acest fișier + `CLAUDE.md` conțin tot contextul necesar
@@ -136,6 +142,12 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
   `tests/conftest.py` resetează starea globală — păstrează proprietatea asta.
 - ChromaDB e folosit de 3 colecții cu roluri diferite (`semantic_cache`, `tier_routing`,
   `long_term_memory`) — nu le confunda la vacuum/migrare.
+- ~~**Tier 4 (`!gemini`, `gemini_cli` local) e STRICAT — testat empiric 13.07.2026**, cauză
+  externă: Google a deprecat tier-ul gratuit „Gemini Code Assist for individuals" pe care se
+  baza autentificarea CLI.~~ **RETRAS COMPLET (13.07.2026, decizia lui Stefan) — vezi WP-RMG
+  în §5.** Gemini CLI eliminat din tot Kage (tier 4 din router ȘI backend-ul de agent
+  `!run`/`!swarm`) — nu doar de router, oriunde. Advisorul (WP13) NU mai folosește Gemini deloc
+  (nici CLI, nici OpenRouter) — vezi decizia revizuită din §4.
 
 ---
 
@@ -213,12 +225,89 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
   **multi-executor cu governance unificat la nivel de container** (deci după WP-G2), NU prin
   duplicarea matricei de risc pe hooks: Codex nu are echivalent PreToolUse (are propriul
   sandbox OS-level, Seatbelt), iar două modele de governance în paralel = stratul greșit +
-  mentenanță dublă. Se sare peste pașii intermediari (advisor pluggable pe Codex); WP13
-  rămâne pe specul lui (Gemini 3 Flash). **Declanșator: startul abonamentului ChatGPT Plus**
-  (luna de probă Codex + GPT-5.6) — notează data aici când începe: `__.__.2026`; precondiție
-  tehnică: WP-G2 livrat. Până atunci Codex se folosește doar MANUAL, de Stefan, în ferestrele
-  de rate-limit Claude (cote necorelate). Povestea de interviu (§8): „orchestrator
-  multi-executor cu governance executor-agnostic la nivel de container". Vezi WP-CX în §5.
+  mentenanță dublă. **Declanșator: startul abonamentului ChatGPT Plus** (luna de probă Codex +
+  GPT-5.6) — notează data aici când începe: `__.__.2026`; precondiție tehnică: WP-G2 livrat.
+  Până atunci Codex se folosește doar MANUAL, de Stefan, în ferestrele de rate-limit Claude
+  (cote necorelate). Povestea de interviu (§8): „orchestrator multi-executor cu governance
+  executor-agnostic la nivel de container". Vezi WP-CX în §5.
+  **Excepție Advisor (13.07.2026, Stefan):** regula de mai sus rămâne pentru rolul de AL
+  DOILEA EXECUTOR (tool-uri de scriere, cere izolarea WP-G2). Rolul de **Advisor** (WP13) e
+  read-only — citește plan/diff, întoarce obiecții text, nu scrie nimic — deci apelul
+  programatic Codex→Advisor NU așteaptă WP-G2; poate porni imediat ce abonamentul ChatGPT
+  există, ca WP mic separat (**WP13b**, după WP13). WP13 însuși rămâne pe Gemini 3 Flash —
+  nu se amână după abonament.
+- **Pista data-stack pentru CV (13.07.2026, Stefan):** țintă concretă — internship Python la
+  Revolut, vara 2027 (aplicații din mai 2026, recrutare iul.–dec. 2026; stack JD: Python 3,
+  SQL, PostgreSQL, Kafka, Airflow, Kubernetes, Docker, GCP, TDD; rolul = „data pipelines for
+  reporting, analytics & data science" + „scalable APIs"). Decizii: (a) **prioritate ridicată**
+  pentru **WP-PG → WP-ETL → WP-AF** (spec-uri în §5) + **amendamentul GCP la WP-G2** (§6) —
+  fiecare rezolvă o durere reală a lui Kage (file-locks cross-proces, telemetrie fără
+  raportare, cron-uri batch care mor cu procesul orchestratorului, izolarea agenților), deci
+  NU e resume-driven development și fiecare e apărabil la interviu; (b) **GCP în loc de AWS**
+  pentru partea cloud (JD-ul cere explicit GCP; skill-urile se transferă ~1:1) — felia = doar
+  execuția efemeră a agenților pe Cloud Run, NU nucleul: Ollama/memoria/ChromaDB/chat history
+  rămân locale, privacy by design; (c) **Kafka (WP-KF) AMÂNAT** — justificarea tehnică onestă
+  (scriitori concurenți pe file-locks) dispare după WP-PG; intră doar după WP-ETL + WP-AF
+  livrate, ca transport al pipeline-ului, nu gadget paralel; (d) **K8s NU se forțează în
+  Kage** — cel mult un demo separat pe kind/k3d, în afara repo-ului. Părțile cu valoare de
+  interviu se implementează în modul ghidat din §8 (rânduri noi în tabelul „viitoare").
+- **Telecomandă v2: conversațional + self-development + agentic loop (13.07.2026, Stefan):**
+  trei dureri declarate explicit după 3 zile de folosire a WP12. (a) **Prefixele `!` sunt
+  prea complicate** — Stefan scrie ce vrea, un model decide din context ce trebuie făcut
+  (intent router, WP-NL); prefixele rămân doar ca escape hatch determinist. (b) **Încă nu se
+  poate lucra la Kage însuși de pe Telegram** — cauza e arhitecturală, nu de UX: misiunile
+  rulează cu `cwd=PROJECT_ROOT` și `_mission_git_branch` comută branch-ul checkout-ului VIU,
+  deci agentul ar edita fișierele din care rulează orchestratorul, iar pytest-ul misiunii ar
+  concura cu producția. Soluția = izolare pe **git worktree** per misiune (WP-SD) — asta e
+  restanța reală a promisiunii WP12 („construirea lui Kage prin Telegram"). (c) **Nu există
+  încă un adevărat agentic loop** — WP11 execută un plan FIX secvențial; bucla completă
+  plan → act → verify → reflect → **replan** + redirecționarea misiunii din mers cu text
+  liber = WP-AL, construit pe advisorul + ask_user din WP13 (nu îl redeschide, îl continuă).
+  Prioritate: WP-NL + WP-SD intră ÎNAINTEA pistei data-stack — sunt mici, sunt driver-ul
+  zilnic, iar WP-SD e chiar unealta cu care WP-urile de date se pot livra de pe telefon.
+- **Retragere Gemini CLI + revizuire Advisor (13.07.2026, Stefan):** testat empiric (§3) —
+  Tier 4 (`!gemini`) e stricat, cauză externă (Google a deprecat „Gemini Code Assist for
+  individuals"). Decizii: (a) **failover-ul plătit pe misiuni RETRAS din plan** — cazul lui
+  real (rate-limit Claude mid-misiune) e deja acoperit gratuit de auto-resume-ul WP11
+  (`_mission_schedule_resume`); (b) **Advisorul (WP13) NU folosește Gemini prin API** —
+  implicit Qwen local (0€), Codex/ChatGPT rămâne upgrade opțional (WP13b) când apare
+  abonamentul; „LLM council" pentru decizii importante e doar idee capturată, neangajată;
+  (c) **Gemini CLI eliminat complet din Kage** — nu doar Tier 4 din router, ci și backend-ul
+  de agent pentru `!run`/`!swarm` (aceeași cauză de bază: CLI-ul autentifică pe același cont
+  mort). `!swarm` dispare odată cu el (premisa lui era „Claude + Gemini paralel" — fără al
+  doilea backend nu mai are sens; se reintroduce doar dacă apare un backend real, ex. Codex
+  după WP-CX). Spec de implementare: **WP-RMG** în §5.
+- **Reconciliere cu propunerile Codex (14.07.2026, Stefan):** o sesiune Codex separată,
+  lucrând în același clone, a produs independent `docs/CODEX-PROPUNERI.md` (registru G1–G6 +
+  T1–T8) și `docs/REVOLUT-INTERNSHIP-ALIGNMENT.md` (maparea JD-ului Revolut). Al doilea
+  document convergea ~90% cu decizia „pista data-stack" de mai sus — semnal bun. Din registrul
+  general (`CODEX-PROPUNERI.md`), verdict per item:
+  - **Acceptate, intră în lanț:** **R0** (Python/API quality — idempotency keys, pagination,
+    rate limits, OpenAPI contracts, load test; nou WP în §5) — ieftin, atacă direct „scalable
+    APIs" din JD, incremental pe endpoint-urile existente; **T3** (point-in-time data lineage)
+    — integrat ca pas în **WP-ETL**, nu WP separat, fiindcă e literalmente ETL/data-quality
+    deghizat, nu rigoare de trading; **G5** (observabilitate pe rezultate: success rate,
+    approval rate, failure taxonomy) — integrat ca amendament la **WP10**, nu WP separat;
+    **G1-minim** (KageBench redus la 10–15 taskuri fixe cu criterii de acceptare, ca
+    regression gate) — nou WP în §5, sub forma minimă, NU registrul complet din propunere
+    (eval harness generalizat, replay pe 3 executori); **G2/G6** — deja aliniate cu ce era
+    decis (interfața comună de executor = premisa WP-CX; lista de amânat = deja scos `!swarm`
+    la WP-RMG).
+  - **Menținute ca `proposed`, NU intră în lanțul activ:** T1/T2/T4–T8 (DSL de ipoteze,
+    holdout blocat, validation v2, cost models per piață etc.) — rigoare quant reală, dar
+    JD-ul Revolut nu o cere; rămân în `CODEX-PROPUNERI.md` pentru când WP-T ajunge la forward
+    shadow. G4 (workflow vertical manufacturing) — confirmat de Codex însuși ca pistă de
+    startup, separată de nucleul CV.
+  - **Respinsă explicit:** propunerea Codex de a condiționa **WP13 de KageBench** („A/B
+    reviewer on/off înainte de acceptare") — Advisorul rulează pe Qwen local, cost 0; nu are
+    sens să aștepte un proiect de evaluare întreg. Decizia „Advisor = Qwen local acum,
+    Codex/ChatGPT ca upgrade opțional (WP13b)" din blocul de mai sus RĂMÂNE, nu devine „TBD
+    după KageBench" cum propunea addendumul Codex găsit stashuit.
+  - **Planul P0–P4 al lui Codex NU înlocuiește ordinea de mai jos** — ignora WP-NL/WP-SD/WP-AL
+    (telecomanda v2), decise explicit de Stefan cu prioritate înaintea pistei de date; lanțul
+    rămas e cel din secțiunea „Reordonare" de mai jos, cu R0 și G1-minim intercalate.
+  - Implementarea concretă a itemilor acceptați trebuie să menționeze `Codex proposal: Gx`/`Tx`
+    în commit/PR (regula de trasabilitate din `CODEX-PROPUNERI.md`).
 
 ---
 
@@ -296,6 +385,70 @@ Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > specificat, pe un branch nou din dev. Rulează pytest înainte și după. Nu atinge alte
 > fișiere decât cele listate. La final raportează criteriile de acceptare unul câte unul și
 > aplică pașii de housekeeping din §7.
+
+### Reordonare (14.07.2026) — pista data-stack + itemii acceptați din Codex
+
+**Stare la zi:** WP12, WP-RMG, #7 (Budget v2) și WP-V Slice 1 livrate. Decizia „pista
+data-stack pentru CV" (13.07.2026) introduce 3 WP-uri noi cu prioritate + unul amânat
+(spec-uri mai jos) și amendamentul GCP la WP-G2 (§6); decizia „telecomandă v2" (aceeași zi)
+adaugă WP-NL/WP-SD/WP-AL; reconcilierea cu propunerile Codex (14.07.2026, §4) adaugă **R0**
+și **G1-minim**, plus T3 integrat în WP-ETL și G5 integrat în WP10 (fără WP-uri noi pentru
+ultimele două). Ordinea de mai jos ÎNLOCUIEȘTE reordonarea din 13.07 pentru tot ce a rămas:
+
+**#7(✅ livrat) → T1-exec(paralel, dependent de calendar) → WP-NL(gateway conversațional,
+fără prefixe) → WP-SD(self-development pe worktree) → R0(Python/API quality) →
+WP-PG(PostgreSQL) → WP-ETL(pipeline analytics + T3 point-in-time lineage) →
+WP-AF(Airflow batch) → WP13(advisor pe Qwen local + HITL v2) →
+WP-AL(agentic loop: replan + steering) → WP-G2(izolare, acum dual-target: Docker local +
+GCP Cloud Run) → G1-minim(KageBench redus, regression gate) → WP10(dashboard + G5
+observabilitate — consumă mart-urile din WP-ETL) → #6(memorie v2) → #12
+(skills) → #9(tools locale T2) → WP-T T2(sports) → T3-Quant(Manifold) → T4(forex) → evaluare
+NDX → #14(voice push-to-talk) → RAG(înainte de ian. 2027) → audit modele.**
+
+(Notă: „T3" apare de două ori cu sensuri diferite — T3 point-in-time lineage din
+`CODEX-PROPUNERI.md`, integrat în WP-ETL, vs. T3-Quant = piața Manifold din WP-T, neschimbată.)
+
+**WP-KF (Kafka) — AMÂNAT deliberat**, în afara lanțului: intră doar după WP-ETL + WP-AF
+livrate (decizia din §4). WP-V Slice 2 (condiționat de #7, acum livrat) și WP-CX (condiționat
+de WP-G2 + abonament Codex) rămân în afara lanțului, neschimbate. **WP13b (Advisor →
+Codex/ChatGPT)** e în afara lanțului și el — condiționat de abonamentul ChatGPT Plus, intră
+oricând după WP13, nu blochează nimic din ordinea de mai sus (§4, excepția Advisor la regula
+WP-CX). Failover-ul plătit pe misiuni a fost RETRAS din plan (§4, 13.07.2026) — acoperit deja
+gratuit de auto-resume-ul WP11 la rate-limit. Restul propunerilor Codex (T1/T2/T4–T8 din
+`CODEX-PROPUNERI.md`) rămân `proposed`, în afara lanțului. §8 rulează în paralel.
+
+Raționament:
+
+1. **Fereastra de recrutare Revolut e iul.–dec. 2026** — ca la T1-exec, pista e dependentă
+   de calendar, nu doar de efort: WP-PG/WP-ETL/WP-AF trebuie să fie LIVRATE și APĂRABILE
+   (§8) înainte de interviuri, altfel rămân „currently learning" în CV.
+2. **#7 rămâne primul** — nimic din pistă nu-l blochează; rămâne precondiția de siguranță
+   pentru orice rulare nesupravegheată, inclusiv cele de pe Cloud Run.
+3. **WP-NL + WP-SD imediat după #7** — același argument ca la WP12 în 09.07 („valoarea
+   imediată cerută de Stefan"): sunt driver-ul zilnic, felii mici, iar WP-SD e chiar
+   unealta cu care restul lanțului se livrează de pe telefon — dogfooding: prima misiune
+   reală pe worktree poate fi chiar WP-PG.
+4. **R0 chiar înainte de WP-PG** — API quality (idempotency, pagination, rate limits,
+   contracts) e ieftin și incremental pe endpoint-urile deja existente; făcut acum, WP-PG/
+   WP-ETL construiesc peste API-uri deja curate în loc să moștenească datoria tehnică.
+5. **WP-PG înaintea pistei de date** — e fundația: WP-ETL scrie în el, WP-AF își ține
+   metadata în el, WP10 citește din el; și stinge durerea reală a lock-urilor pe fișiere
+   cross-proces.
+6. **T3 (lineage) intră ÎN WP-ETL, nu ca WP separat** — punctul lui de plecare (`event_time`,
+   `available_time`, checksum, dataset snapshot) e SQL peste tabelele deja proiectate la
+   WP-PG; separarea ar fi dublat munca de schema design fără beneficiu.
+7. **WP13 alunecă după pista de date, WP-AL imediat după WP13** — până la ele, misiunile
+   rulează ca azi (supravegheate prin Telegram); WP-AL e construit explicit pe piesele
+   WP13 (advisor, `ask_user`, coadă), nu are sens înaintea lui; trigger-ul WP-G2 („rulări
+   zilnice nesupravegheate") se atinge tot după WP13/WP-AL, deci ordinea relativă față de
+   WP-G2 nu se schimbă.
+8. **G1-minim după WP-G2, înaintea WP10** — regression gate-ul are nevoie de o formă de
+   izolare de execuție ca să ruleze taskuri repetabile fără să atingă producția; poziția
+   imediat înainte de WP10 lasă dashboard-ul să afișeze din prima zi și metricile de eval
+   (G5), nu doar telemetria brută.
+9. **WP10 câștigă din amânare** — dashboard-ul se construiește direct pe mart-urile din
+   WP-ETL (plus metricile G1/G5), nu pe query-uri ad-hoc; argumentul din 09.07 („valoare
+   când există date") se întărește.
 
 ### WP1 (#1) — Reparația fundației ✅ (04.07.2026) · efort: o seară–un weekend
 
@@ -885,10 +1038,18 @@ sau să sape prea adânc într-o direcție care nu poate funcționa. Principii n
 - **Consultativ, nu blocant:** verdictul advisorului nu poate opri singur misiunea.
   Dezacord persistent (orchestratorul respinge obiecția, advisorul o menține) → ambele
   argumente merg la Stefan pe Telegram, el decide. Niciodată deadlock model↔model.
-- **Model: diversitate reală.** Recomandare: **Gemini** (T4 — deja cablat, alt „creier"
-  decât Claude → dezacord genuin, cost marginal zero) cu fallback Qwen local. NU modele
-  free OpenRouter pentru review de diff — diff-urile conțin codul proiectului, iar free-ul
-  se plătește cu training pe input.
+- **Model (decizia 13.07.2026, Stefan — revizuită):** **Qwen local (T2)** — zero cost,
+  independent de orice API externă, suficient de diferit de Claude (executorul misiunilor)
+  pentru dezacord genuin pe rolul de review. **Gemini prin OpenRouter API — RETRAS din plan**
+  (nu se cheltuie pe asta acum); **T4/Gemini CLI local — eliminat complet din Kage** (§4,
+  13.07.2026 — CLI-ul nu mai are cont valid, Google a deprecat tierul gratuit). Codex/ChatGPT
+  rămâne upgrade opțional, condiționat de abonament (**WP13b**, mai jos). NU modele free
+  OpenRouter pentru review de diff — diff-urile conțin codul proiectului, iar free-ul se
+  plătește cu training pe input.
+  **Idee capturată, NEangajată (13.07.2026, Stefan):** un „LLM council" — mai multe modele
+  consultate în paralel — DOAR pentru decizii importante (nu pentru fiecare reviewer pass de
+  rutină, cost/latență nu s-ar justifica). Nu e WP azi; dacă se construiește vreodată, atunci
+  se redeschide și întrebarea „intră Gemini prin API pentru rolul ăsta specific".
 
 **Punctele de cuplare (3):**
 
@@ -922,6 +1083,76 @@ ajungă la Stefan · un WP cu diff care nu acoperă un criteriu NU primește ✅
 întrebarea · agentul pune o întrebare `ask_user` mid-WP și răspunsul deblochează sesiunea ·
 două misiuni în coadă rulează în serie cu notificări · dezacord persistent simulat → ambele
 argumente ajung pe Telegram · pytest verde.
+
+### WP13b — Advisor: swap Qwen local → Codex/ChatGPT · efort: o seară · CONDIȚIONAT de abonamentul ChatGPT Plus, după WP13
+
+**Scop (13.07.2026, Stefan — revizuit):** odată creat abonamentul ChatGPT Plus (20$/lună,
+pentru Codex CLI), Advisorul (WP13) trece de pe Qwen local pe Codex/GPT — diversitate reală
+(alt „creier" decât Claude, spre deosebire de Qwen care e oricum folosit și ca Actor în
+WP-T) pe un abonament deja plătit, deci tot cost marginal 0. Excepția de la regula WP-CX
+(§4) permite asta ÎNAINTE de WP-G2, fiindcă rolul e read-only. **Nu implică Gemini în niciun
+fel** — CLI-ul Gemini a fost eliminat complet din Kage (WP-RMG).
+
+**Pași:**
+
+1. Client Advisor pluggable: interfața rămâne cea din WP13 (obiectiv+artefact+criterii →
+   verdict text); doar implementarea clientului se schimbă (Codex CLI non-interactiv în loc
+   de apelul local Qwen). Verifică întâi dacă Codex CLI suportă invocare
+   non-interactivă/scriptabilă echivalentă cu ce folosește deja executorul Claude — dacă nu,
+   rămâi pe Qwen și reevaluează.
+2. Config: model Advisor selectabil (`qwen-local` | `codex`), Qwen rămâne fallback dacă
+   Codex CLI nu răspunde sau abonamentul nu e activ.
+3. NU atinge rolul de al doilea executor (WP-CX) — acela tot așteaptă WP-G2.
+
+**Acceptare:** Advisorul rulează pe Codex cu abonamentul activ · fallback pe Qwen local dacă
+Codex CLI eșuează · cele 3 puncte de cuplare din WP13 (review plan, reviewer diff,
+anti-rabbit-hole) funcționează neschimbate · pytest verde.
+
+### WP-RMG — Retragere completă Gemini CLI (Tier 4 + backend agent) · efort: o seară · executat 13.07.2026
+
+**Scop (13.07.2026, Stefan):** Gemini CLI e stricat ireversibil pentru profilul de cont
+folosit (Google a deprecat „Gemini Code Assist for individuals" — `IneligibleTierError`,
+confirmat empiric §3). Kage îl folosea în DOUĂ locuri independente, aceeași cauză de bază:
+Tier 4 din router (`!gemini`, clasificare automată, escaladare `!retry`) și backend-ul de
+agent pentru `!run`/`!swarm` (`agent="gemini"`, prefixul `gemini`, `!swarm` = „Claude +
+Gemini paralel"). Decizie: eliminare completă, nu doar dezactivare — cod mort care depinde
+de un binar mort nu rămâne în arbore.
+
+**Pași:**
+
+1. **Clamp central în `decide_tier`:** orice cale care ar produce tier 4 (clasificare
+   semantică, clasificare Qwen, escaladare `!retry`) e prinsă ÎNAINTE de orice lookup în
+   `TIER_MODELS` — tier 4 devine imposibil de atins, indiferent de vectori vechi rămași în
+   ChromaDB (`tier_routing`) din seed-uri anterioare. `!retry` de la tier 3 sare direct la 5
+   (retry crește mereu, nu coboară).
+2. **Router:** scoate `!gemini` din prefixele forțate (`decide_tier`, `_ROUTING_PREFIXES`,
+   `_CACHE_PREFIX_RE`, `!help`); scoate opțiunea „4 = Gemini" din promptul de clasificare
+   Qwen; scoate exemplele de seed ale tierului 4 din `TIER_EXAMPLES` (nu se mai re-seedează;
+   vectorii vechi din ChromaDB rămân inerți datorită clamp-ului de la pasul 1, nu se
+   migrează live).
+3. **Executor CLI:** șterge `_route_gemini`, `GEMINI_CLI`/`_find_cli("gemini")`, ramurile
+   `provider == "gemini"` din `_route_cli`, `_generate_cli_chunks`, `_run_scheduled_task`.
+   `TIER_MODELS[4]`/`TIER_SHORT[4]` rămân ca ETICHETĂ moartă („retras") — NU se șterg din
+   dict, doar ca să nu crape afișarea unor rânduri istorice din DB cu `tier=4`; nimic nu mai
+   scrie tier 4 de acum înainte.
+4. **Backend de agent:** șterge `_swarm_task_exec`, ramura `agent == "gemini"` din
+   `_background_task_exec`, detecția prefixului `gemini` din dispatcher; scoate `!swarm`
+   din `!help` și din dispatch (`_prepare_and_launch_task`) — comanda dispare, nu doar tace.
+5. **Curățenie cosmetică:** scoate `gemini_count` din stat-urile dashboard-ului
+   (`/dashboard`), înlocuiește fallback-urile reziduale `"gemini"`/`"gemini-pro"` din
+   label-uri cu un placeholder neutru.
+6. **Teste:** `tests/test_routing.py` — `test_decide_tier_gemini_forces_tier4` și assertul
+   pe `TIER_SHORT` cu cheia 4 se actualizează (tier 4 nu mai e selectabil, eticheta devine
+   „retras").
+
+**NU face parte din WP-ul ăsta:** migrarea/ștergerea live a vectorilor vechi din colecția
+ChromaDB `tier_routing` — clamp-ul de la pasul 1 îi face inerți, nu merită riscul unei
+operații pe date live pentru zero beneficiu funcțional.
+
+**Acceptare:** `!gemini`, `!swarm`, `!run gemini ...` nu mai există ca funcționalitate ·
+clasificarea (semantică + Qwen) nu poate produce niciodată tier 4 · `!retry` de la tier 3
+sare la 5 · niciun cod nu mai invocă `gemini_cli` · pytest verde (suită completă, inclusiv
+`test_routing.py` actualizat).
 
 ### WP-V — Video intel: analiza clipurilor trimise de pe telefon · ✅ Slice 1 livrat (12.07.2026) · independent
 
@@ -1032,6 +1263,257 @@ despre un framework tech (nu trading) → card pe șablonul tech, salvabil ca no
 în `trading.db` · zero apeluri cloud pe fluxul implicit · un transcript cu instrucțiuni
 injectate NU schimbă comportamentul analizei (test) · site nesuportat/eșec yt-dlp → mesaj
 grațios · pytest verde.
+
+### WP-NL — Gateway conversațional: fără prefixe, intent router · efort: o seară–un weekend · după #7
+
+**Scop (13.07.2026, Stefan):** prefixele `!` sunt prea complicate pentru driver-ul zilnic —
+Stefan scrie ce vrea în limbaj natural, iar un model decide din context ce trebuie făcut.
+Prefixele rămân doar ca escape hatch determinist (bypass complet al routerului).
+
+**Pași:**
+
+1. **Clasificator de intenție** (promptul few-shot + calibrarea pragului de încredere pe
+   setul etichetat: **Stefan, ghidat** — §8) la orice mesaj fără prefix (și fără URL video —
+   fluxul WP-V rămâne cum e): T1/T2 local (sau Haiku la nevoie), cu lista închisă de intenții:
+   `chat` · `status/briefing` · `mission_new` · `mission_control` (pauză/continuă/anulează)
+   · `mission_steer` (text către misiunea activă) · `agent_run` · `jobs` · `analytics`
+   (după WP-ETL) · `video`. Ieșire structurată (intenție + argumentul extras).
+2. **Dispatch la handler-ele EXISTENTE** ale comenzilor `!` — routerul traduce, nu
+   reimplementează. Zero logică nouă de execuție în gateway.
+3. **Context-awareness:** dacă există misiune activă sau draft în așteptare, textul liber
+   se interpretează ÎNTÂI în contextul ei — generalizează cazul deja existent (reply după
+   ✏️ = `!mission revise`, gateway linia ~252). Asta e și punctul de cuplare cu WP-AL
+   (steering).
+4. **Fail-safe pe ieftin și inofensiv:** intenție ambiguă sau încredere mică → `chat`
+   (comportamentul de azi). Acțiunile scumpe/cu efecte (pornit misiune, agent run) NU se
+   execută direct din clasificare — merg pe cardurile cu butoane existente (draft → ✅).
+   Chat-ul și query-urile read-only se execută direct.
+
+**Capcane:** latența — clasificarea nu are voie să adauge secunde la chatul banal (de aceea
+T1/T2 local, nu cloud); nu lăsa clasificatorul să devină un al doilea router semantic
+paralel cu `decide_tier` — intenția decide ACȚIUNEA, tier-ul decide MODELUL, straturi
+separate; fals-pozitivele pe `mission_new` ar fi enervante — pragul de încredere se
+calibrează pe un set de fraze etichetate ținut în tests/.
+
+**Acceptare:** „pornește o misiune care face X" fără prefix → card de draft cu butoane ·
+„cât am cheltuit azi?" → răspuns din usage · mesaj banal → chat normal, fără regresie de
+latență peste prag măsurat · toate prefixele `!` merg neschimbate · set de N fraze
+etichetate în tests/ trece cu acuratețe minimă convenită · pytest verde.
+
+### WP-SD — Self-development: Kage lucrează la Kage, de pe Telegram · efort: un weekend · după WP-NL (independent tehnic de el)
+
+**Scop (13.07.2026, Stefan):** restanța reală a promisiunii WP12 — „construirea lui Kage
+prin Telegram" are plumbing-ul (draft → branch → push → compare link), dar munca efectivă
+pe repo-ul Kage e blocată arhitectural: misiunile rulează cu `cwd=PROJECT_ROOT`, iar
+`_mission_git_branch` comută branch-ul checkout-ului VIU — agentul ar edita fișierele din
+care rulează orchestratorul, pytest-ul misiunii ar concura cu producția, iar un restart
+cerut de propriile modificări ar fi nedeterminist.
+
+**Pași:**
+
+1. **Izolare pe git worktree:** misiunile care țintesc repo-ul Kage rulează într-un
+   worktree separat (`~/.kage-worktrees/<slug>`, branch `mission/<slug>`) — partajează
+   `.git`-ul, dar NU comută checkout-ul viu; serviciile rulează neatinse pe branch-ul lor.
+   Worktree-ul se creează la start de misiune și se curăță la final (păstrat la eșec,
+   pentru autopsie).
+2. **pytest în worktree:** cu `.venv`-ul rădăcinii dacă diff-ul nu atinge
+   `requirements*.txt`; altfel venv efemer în worktree. Config de test, NU `kage_config.json`
+   real și NU `cache_db/` viu.
+3. **Smoke test opțional** (felie separată dacă se complică): pornește orchestratorul
+   modificat din worktree pe porturi alternative (`:4101`) cu config de test → `/health` →
+   raport în notificarea de WP.
+4. **Fluxul de livrare:** push → PR spre `dev` → Stefan face merge din GitHub mobile →
+   pas de deploy explicit: buton pe Telegram „🔄 pull + restart” → `git pull` pe checkout-ul
+   viu + restart ANUNȚAT (regula „nu reporni fără să anunți userul" devine confirmare pe
+   buton). Recovery-ul existent (missions/mission_wps în SQLite + watchdog WP12) acoperă
+   restartul mid-misiune — de verificat cu un test, nu de reconstruit.
+
+**Capcane:** două worktree-uri nu pot ține același branch — un slug de misiune reluat
+trebuie să refolosească worktree-ul existent, nu să creeze altul; misiunea NU primește
+scriere în afara worktree-ului ei (matricea de risc WP2 + confinement se aplică pe calea
+worktree-ului); costul rulărilor pe repo-ul Kage e mare (context: CLAUDE.md + handoff) →
+plafonul #7 obligatoriu înainte.
+
+**Acceptare:** o misiune reală mică pe repo-ul Kage, pornită de pe telefon, livrează un PR
+cu pytest verde rulat ÎN worktree, în timp ce serviciile vii rămân neatinse pe branch-ul
+lor (verificat: `git -C PROJECT_ROOT branch --show-current` neschimbat pe toată durata) ·
+merge + deploy cu confirmare pe buton · restart simulat mid-misiune → misiunea își reia
+poziția · worktree-ul curățat la succes, păstrat la eșec · pytest verde.
+
+### WP-AL — Agentic loop adevărat: reflect → replan + steering · efort: un weekend+ · după WP13
+
+**Scop (13.07.2026, Stefan):** WP11 execută un plan FIX, secvențial; WP13 adaugă advisor,
+`ask_user` și coadă — dar bucla rămâne „plan → execută". Un agentic loop adevărat închide
+cercul: plan → act → verify → **reflect → replan**, plus capacitatea lui Stefan de a
+redirecționa misiunea din mers cu text liber, fără s-o omoare și s-o refacă.
+
+**Pași:**
+
+1. **Replanning** (promptul de reflecție + schema de compresie a contextului: **Stefan,
+   ghidat** — §8): după fiecare WP terminat (și la orice eșec de verificare), un pas de
+   reflecție cu context comprimat: „planul rămas mai e valid după ce am aflat?" →
+   propunere de amendament la `mission.md` (adaugă/taie/reordonează WP-uri rămase) →
+   trece prin advisor (WP13 pct. 1) → card la Stefan (✅ aplică / ✏️ modifică / ⏭ ignoră) →
+   `mission.md` rescris + commit pe branch-ul misiunii (istoricul planului = istoricul git).
+   WP-urile deja ✅ nu se ating niciodată.
+2. **Steering:** mesaj liber în timpul misiunii (rutat de WP-NL ca `mission_steer`) se
+   injectează ca instrucțiune în sesiunea agentului la următoarea graniță sigură (între
+   tool-calls sau la startul următorului WP) — nu întrerupe brutal execuția; confirmarea
+   „am integrat: [rezumat]" vine pe Telegram.
+3. **Buget de buclă:** max N replanning-uri per misiune (config); peste N → anti-rabbit-hole
+   (WP13 pct. 3) decide continuă/pivotează/întreabă. Fără asta bucla reflect→replan poate
+   deveni rumegare infinită pe cost.
+
+**Acceptare:** misiune cu un WP devenit inutil pe parcurs (fixture) → agentul propune
+tăierea lui, Stefan aprobă cu buton, `mission.md` + git reflectă schimbarea · un mesaj de
+steering mid-misiune schimbă verificabil comportamentul următorului WP · limita N oprește
+replanning-ul (test) · WP-urile deja ✅ rămân neatinse la orice amendament · pytest verde.
+
+### R0 — Python/API quality: contracts, idempotency, pagination, rate limits · efort: un weekend · după WP-SD · Codex proposal: R0 (acceptat, §4)
+
+**Scop (14.07.2026):** JD-ul Revolut cere explicit „well-designed, scalable APIs" — Kage are
+azi endpoint-uri FastAPI funcționale, dar fără contracte versionate, fără protecție la
+re-trimitere, fără paginare pe listele care cresc (usage, run ledger, missions) și fără rate
+limiting. E ieftin de făcut acum, incremental peste ce există deja, și direct apărabil la
+interviu fără nicio poveste — e literalmente ce scrie în JD.
+
+**Pași:**
+
+1. **OpenAPI contracts + versionare:** FastAPI generează deja schema; adaugă `response_model`
+   explicit pe endpoint-urile principale (`/chat/completions`, `/api/missions*`, `/api/pending`,
+   `/analytics/*` după WP-ETL) acolo unde lipsește, plus un prefix de versiune (`/v1/...`) pe
+   ce nu e deja acolo. Nu rescrie endpoint-uri care merg — doar tipează contractul.
+2. **Idempotency keys:** pe endpoint-urile care pornesc muncă (creare misiune, `!run`,
+   agent task) — header `Idempotency-Key` opțional, cache scurt (SQLite/Postgres după WP-PG)
+   care întoarce același răspuns la retrimitere în fereastra de idempotență. Rezolvă un caz
+   real: retry de rețea de pe Telegram/mobil care ar porni misiunea de două ori.
+3. **Pagination:** pe listele care cresc nemărginit (`/api/missions`, usage log, run ledger) —
+   `limit`/`cursor` sau `limit`/`offset`, cu default rezonabil; azi multe din ele întorc tot.
+4. **Rate limiting:** un limiter simplu (token bucket per IP/token, in-process — nu Redis
+   pentru single-user) pe endpoint-urile publice ale gateway-ului; scop = robustețe
+   demonstrabilă, nu apărare reală (sistemul e single-user, local).
+5. **Integration/contract tests:** teste care lovesc endpoint-urile prin `TestClient` (nu doar
+   funcțiile interne), verifică statusul, forma răspunsului și cazurile de eroare (400/404/429).
+6. **Profiling + load test punctual:** `pytest-benchmark` sau un script simplu (`hey`/`wrk`)
+   pe 2–3 endpoint-uri fierbinți (`chat/completions` non-stream, `/api/missions`); raportează
+   latența p50/p95 — dovadă de „am măsurat", nu doar „am scris cod".
+
+**Capcane:** nu introduce breaking changes pe clienții existenți (Telegram gateway, frontend,
+widget) — versionarea și idempotency-ul sunt aditive; nu peste-inginerească rate limiting-ul
+cu infrastructură distribuită pentru un sistem single-user local.
+
+**Acceptare:** cel puțin 3 endpoint-uri cu `response_model` explicit + prefix de versiune ·
+idempotency key funcțională pe crearea de misiuni (test: retrimitere → același rezultat, nu
+misiune dublă) · paginare pe `/api/missions` și usage · rate limiter activ cu test pe limita
+depășită · suite de contract tests noi · raport de latență p50/p95 pe 2–3 endpoint-uri ·
+pytest verde.
+
+### WP-PG — Migrare stare partajată + telemetrie pe PostgreSQL · efort: un weekend · după R0 · a doua din pista data-stack (§4)
+
+**Scop:** azi coordonarea cross-proces (orchestrator, gateway, mission_runner, widget, jobs)
+merge prin fișiere cu lock (`status.json.lock`, `scheduled_tasks.json.lock`), iar istoricul,
+usage-ul și ledger-ul stau într-un SQLite deschis cu `check_same_thread=False` — funcționează,
+dar e fragil la scriitori concurenți și nu duce query-uri de raportare serioase. Postgres
+rezolvă ambele și e fundația pentru WP-ETL, WP-AF și WP10.
+
+**Pași:**
+
+1. Postgres 16 **nativ prin Homebrew** (`brew install postgresql@16`), NU în Docker Desktop —
+   un VM rezident de 3–4GB contrazice regula de RAM din WP-G2; footprint-ul nativ e ~50MB.
+   Intră în lanțul launchd (`start_all.sh`), cu retry de conexiune la startup-ul
+   orchestratorului (launchd nu garantează ordinea de pornire — nu muri la boot).
+2. Schema (proiectată de **Stefan, ghidat** — valoare de interviu, §8): `usage`,
+   `runs`/`run_events` (ledger-ul WP8), `missions`/`mission_wps`, `job_runs`,
+   `scheduled_tasks`, `status`. **Chat history + ChromaDB RĂMÂN pe loc** (`cache_db/`) —
+   migrarea lor nu stinge nicio durere și ar atinge degeaba cache-ul semantic.
+3. Migrare cu cutover + backup: număr de rânduri verificat per tabel (zero pierdere);
+   backfill-ul arhivei `usage_log.jsonl` intră la WP-ETL. Extinde backup-ul nocturn WP-B cu
+   `pg_dump` în același tar.gz.
+4. Acces prin psycopg, SQL de mână — NU introduce un ORM pentru ~7 tabele (SQL-ul explicit
+   e chiar valoarea de interviu). Sync e consistent cu patternul sqlite3 existent; pool
+   async doar dacă apar blocaje măsurate.
+5. Curățenie post-cutover: șterge căile de cod pe file-lock și fișierele `.lock` migrate.
+
+**Capcane:** `status_widget.py` (venv separat) citește `status.json` — la prima felie NU-i
+adăuga dependență de Postgres: orchestratorul continuă să scrie `status.json` ca view derivat
+și doar sursa de adevăr se mută. Testele care ating DB-ul au nevoie de o instanță de test
+(template DB sau schema per test) — nu lăsa pytest să depindă de Postgres-ul „de producție".
+
+**Acceptare:** scrierile de telemetrie/stare merg în Postgres · lock-urile migrate șterse
+(sau documentate ca view derivat) · `pg_dump` în backupul nocturn · restart test: orchestrator
+pornit înaintea Postgres nu moare · pytest verde + teste pe stratul de acces.
+
+### WP-ETL — Pipeline de analytics peste telemetrie (+ point-in-time lineage) · efort: un weekend · după WP-PG · Codex proposal: T3 (acceptat, integrat, §4)
+
+**Scop:** Kage generează date (cost per run, decizii de rutare, cache hit rate, `job_runs`,
+paper trades) dar nu are raportare; WP10 ar ajunge să facă query-uri ad-hoc. Pipeline-ul
+clasic raw → staging → mart e literal linia „data pipelines for reporting, analytics and
+data science" din JD-ul deciziei §4. Propunerea Codex T3 (point-in-time lineage) e integrată
+aici, nu ca WP separat — e SQL peste schema deja proiectată la WP-PG, nu rigoare de trading.
+
+**Pași:**
+
+1. Modelul de date (Stefan, ghidat — §8): mart-uri `daily_usage` (cost/tier/model/hit-rate
+   pe zi), `mission_stats`, `trading_daily`. Agregarea = SQL idempotent pe zi
+   (`INSERT ... SELECT` cu delete-and-rewrite pe partiția zilei), NU pandas — datele-s mici,
+   patternul contează.
+2. **Lineage (T3):** fiecare rând din tabelele raw primește `event_time` (când s-a produs),
+   `available_time` (când a devenit vizibil pipeline-ului), `ingested_time` (când a intrat în
+   Postgres), sursă și `dataset_snapshot_id` pe fiecare rulare de agregare — suficient să
+   răspundă „ce știa sistemul la momentul X", fără versionare completă de date.
+3. **Teste de data-quality pe lineage:** future timestamps (event_time > ingested_time →
+   respins), duplicate/gaps pe zi, `available_time` lipsă → rândul nu intră în mart-ul zilei
+   respective.
+4. Backfill pe tot istoricul: SQLite-ul vechi + arhiva `usage_log.jsonl` → povestea de
+   interviu „migrare + backfill idempotent, cu lineage reconstruit din timestamp-urile
+   originale".
+5. Job nightly rulat inițial din APScheduler; devine primul DAG real la WP-AF.
+6. `GET /analytics/daily` — endpoint de raport, consumat ulterior de WP10 (+ G5).
+
+**Acceptare:** backfill complet pe istoric · nightly idempotent (rulat de 2× pe aceeași zi =
+același rezultat, demonstrat cu test) · fiecare rând din mart are `dataset_snapshot_id` ·
+testele de data-quality (future timestamp, duplicate, gap) trec · endpoint-ul întoarce seria
+zilnică · pytest verde.
+
+### WP-AF — Airflow pentru job-urile batch · efort: un weekend · după WP-ETL
+
+**Scop:** cron-urile batch trăiesc azi ÎN procesul orchestratorului (APScheduler): mor odată
+cu el — exact cazul confirmat 09.07 (scanul de 19:00 pierdut tăcut), peticit cu watchdog în
+WP12. Airflow externalizează batch-urile cu retries, backfill și istoric de rulări — și e
+keyword explicit în JD (§4).
+
+**Pași:**
+
+1. `airflow standalone` cu LocalExecutor, metadata în Postgres-ul WP-PG (NU SQLite-ul
+   default), pornit din lanțul launchd. Țintă de footprint: sub ~1GB rezident; dacă nu iese,
+   rulează-l în Colima pornit/oprit în jurul ferestrei batch (patternul RAM din WP-G2).
+2. Migrează DOAR batch-urile (DAG-urile în sine le scrie **Stefan, ghidat** — §8; instalarea
+   și cablarea launchd = model): agregarea nightly (WP-ETL), backupul (WP-B), scanul de joburi
+   (WP-J), calibrarea săptămânală de trading. **NU migra** cron-urile safety-critical /
+   near-realtime: killswitch-ul de trading (`*/5`) și heartbeat-ul (WP12) RĂMÂN în
+   APScheduler, în proces — fail-closed-ul lor nu are ce căuta într-un scheduler extern.
+3. DAG-urile apelează endpoint-urile existente (`POST /jobs/scan` etc.) — Airflow
+   orchestrează, nu reimplementează; logica rămâne în orchestrator.
+4. Alerting pe eșec de DAG → Telegram (canalul existent).
+
+**Capcane:** dublă programare — șterge cron-urile migrate din APScheduler ÎN ACELAȘI PR,
+altfel rulează de două ori. Watchdog-ul WP12 verifică `next run` în trecut — actualizează-l
+să nu alerteze fals pentru joburile mutate în Airflow.
+
+**Acceptare:** cele 4 batch-uri rulează din Airflow (istoric în UI) · eșec simulat → retry +
+alertă Telegram · killswitch-ul neatins în APScheduler · cron-urile migrate șterse din
+orchestrator · pytest verde.
+
+### WP-KF — Kafka ca transport de evenimente · AMÂNAT (13.07.2026) · doar după WP-ETL + WP-AF
+
+**Decizie (§4):** amânat deliberat. Justificarea tehnică onestă de azi (scriitori concurenți
+pe file-locks) dispare odată cu WP-PG; rămâne valoarea de CV (keyword-ul din JD cel mai greu
+de „fake-uit"). Intră DOAR dacă, după WP-ETL + WP-AF livrate, mai există apetit — forma
+decisă: **Redpanda single-node** (compatibil Kafka API, un singur binar, footprint mic — NU
+cluster Kafka+ZooKeeper), producer-i în orchestrator/gateway (evenimente: decizie de rutare,
+lifecycle de agent, alertă de buget), un consumer care scrie în Postgres = stratul de ingest
+al pipeline-ului WP-ETL. Kafka devine transportul pipeline-ului, nu un gadget paralel.
+Speculul complet se scrie abia la promovarea în lanț — nu-l detalia acum.
 
 ### WP-T — Laborator de trading agents (crypto / prediction / forex) · efort: incremental, pe faze · după WP11 (bucla de iterare e a lui)
 
@@ -1211,6 +1693,33 @@ provider-scraper · un provider oprit nu blochează restul (test) · pariul virt
 înregistrează la cota acționabilă reală · raport CLV rulat pe backtest-ul football-data ·
 nicio cale de cod nu poate plasa un pariu real · pytest verde.
 
+### G1-minim — KageBench redus: eval harness pentru misiuni · efort: o seară–un weekend · după WP-G2 · Codex proposal: G1 (acceptat, formă minimă, §4)
+
+**Scop (14.07.2026):** propunerea Codex completă (G1 — benchmark generalizat, replay pe 3
+executori, regresie automată) e un proiect de săptămâni fără cerere directă din JD. Forma
+minimă acceptată e suficientă ca regression gate și ca „eval-driven development" demonstrabil
+la interviu, fără costul întregului registru.
+
+**Pași:**
+
+1. **10–15 taskuri fixe**, fiecare cu: stare inițială (fixture/worktree curat), instrucțiune,
+   tool-uri permise, criteriu de acceptare verificabil automat (nu subiectiv) — amestec de
+   taskuri generale Kage (ex. „adaugă un endpoint X cu test") și taskuri din WP-T (ex.
+   „rulează validarea pe fixture-ul Y, raportează p-value").
+2. **Runner:** rulează fiecare task prin executorul curent (Claude, în worktree-ul din WP-SD),
+   colectează: succes complet/parțial, cost EUR (din ledger-ul WP8), latență, turns, tool
+   calls, aprobări cerute.
+3. **Regression gate:** rulare pe cerere (nu la fiecare commit — cost) înainte de WP-uri mari;
+   raport comparativ cu rularea anterioară (regresie de succes sau cost → semnal, nu blocaj
+   automat).
+4. **NU intră în forma minimă:** replay pe Codex/Qwen ca executori paraleli, security
+   benchmark separat (G3, rămâne `proposed`), UI dedicat — un raport text/JSON e suficient
+   pentru acum; consumat de WP10/G5 dacă se justifică ulterior.
+
+**Acceptare:** 10–15 taskuri definite cu criterii automate · runner-ul produce un raport cu
+metricile de mai sus · o regresie introdusă deliberat într-un task (fixture) e detectată de
+raport · pytest verde.
+
 ### WP10 (#15B) — Kage Mission Control · efort: o lună+ de seri · depinde de WP1+WP8
 
 Frontend Next.js + CopilotKit pe AG-UI: endpoint SSE `/agui` care traduce `runs`/`run_events`
@@ -1221,6 +1730,12 @@ pensionează la paritate. Referințe de design în `KAGE-EVALUARE.md` §3.12.
 **Promptul de design e gata:** `design/PROMPT-DESIGN-UI.md` — Stefan îl rulează în Claude Design;
 output-ul (direcție vizuală + layout-uri + componente) devine specul vizual al acestui WP.
 
+**Amendament G5 — observabilitate pe rezultate (14.07.2026), Codex proposal: G5 (acceptat,
+integrat, §4):** panoul de telemetrie nu se oprește la transcript/cost brut — arată și rata de
+succes pe tip de task, costul mediu per tip, approval rate, retry rate și taxonomia eșecurilor
+(din ledger-ul WP8 + raportul G1-minim, dacă există). Nu e un panou separat — sunt câmpuri
+suplimentare pe panourile deja specificate mai sus (activity feed, buget/cost).
+
 **Pensionare `kage.html` ✅ FINALIZATĂ (07.07.2026):** `kage.html` **șters**; ruta `/chat`
 redirectează acum (307) la Mission Control (`:{MISSION_CONTROL_PORT}`, default 3001). Cele 3
 gap-uri de paritate care blocau ștergerea au fost portate în Mission Control înainte:
@@ -1228,8 +1743,8 @@ gap-uri de paritate care blocau ștergerea au fost portate în Mission Control �
 1. **Sesiuni + istoric persistent** — ✅ ChatPanel cu selector de sesiuni + „conversație nouă",
    peste `/api/sessions` + `/api/history`; cheia localStorage `kage_session` e **partajată cu
    fostul kage.html** (sesiuni comune). `/api/chat` forwardează `X-Session-Id`.
-2. **Task runner cu dropdown de cwd** — ✅ `TaskPanel` (⌘K): mod Claude/Gemini/Swarm/Sysrun +
-   dropdown cwd din `/api/config`, stream peste `/task/run`.
+2. **Task runner cu dropdown de cwd** — ✅ `TaskPanel` (⌘K): mod Claude/Sysrun (Gemini/Swarm
+   retrase la WP-RMG, 13.07.2026) + dropdown cwd din `/api/config`, stream peste `/task/run`.
 3. **Disponibilitate always-on** — ✅ `start_all.sh` pornește Mission Control pe `:3001`
    (`scripts/start_frontend.sh`), idempotent + non-fatal, flag `--no-ui` pentru skip.
 
@@ -1269,20 +1784,34 @@ e acum exclusiv `frontend/` (Next.js).
   fiindcă la volum single-user calitatea e practic gratuită — NU optimiza prețul, alege
   modelul potrivit rolului):
 
-  - **Total credite API: 10–15 €/lună plafon; top-up practic: 10 $ o dată** (creditele
-    OpenRouter nu expiră; ajung estimat 3–6 luni fără failover).
+  - **Total credite API: doar Trading (Critic), ~7 €/lună; plafonul global rămâne 10€/lună
+    din #7 (`api_budget.py`).** Advisor și failover NU mai consumă credite API (retrase,
+    13.07.2026) — top-up de 10$ o dată ajunge acum estimat 12+ luni.
   - **Trading (Critic): 7 €/lună** — plafonul `monthly_cap_eur` EXISTĂ deja (`trading/budget.py`).
     Model: `tencent/hy3:free` până pe **21.07.2026** (expiră gratuitatea), apoi
     **`deepseek/deepseek-v4-pro`** (0.435/0.87 $/M — raționament economic tăios, ieftin;
     consum real ~0.10 $/lună). Notat și în `kage_config.example.json` (`_comment_model_plan`).
-  - **Advisor (WP13): ~3 €/lună.** Model: **`google/gemini-3-flash-preview`** (0.50/3.00 $/M,
-    context 1M) — criteriul principal e DIVERSITATEA (misiunile rulează pe Claude → advisorul
-    trebuie să fie alt „creier"); alternativă mai ieftină tot ne-Claude: `z-ai/glm-5.2`
-    (0.55/1.72 $/M, 1M). Consum real estimat ~0.6–0.9 $/lună la ~90 apeluri.
-  - **Failover misiuni (opțional, WP12/13): ~5 €/lună sub-plafon separat** — singurul rol care
-    poate arde bani real (bucle agentice = sute de mii de tokeni/WP). Model:
-    `anthropic/claude-sonnet` prin API (aceeași familie ca abonamentul → continuitate de
-    comportament la resume). Dezactivat până există plafonul.
+  - **Advisor (WP13): 0 €/lună — pe Qwen local, RECONSIDERAT (13.07.2026, Stefan).** Nu
+    Gemini prin OpenRouter API (retras din plan, nu se justifică cheltuiala acum) — model
+    implicit = **Qwen local (T2)**, gratuit, suficient de diferit de Claude pentru dezacord
+    genuin pe rolul de review. „LLM council" (mai multe modele pentru decizii importante) e
+    doar o idee capturată, neangajată — condiționată de un WP viitor, nu de acum.
+    **Decizia 13.07.2026 (Stefan):** dacă/când apare abonamentul ChatGPT Plus (20$/lună,
+    pentru Codex CLI), Advisorul trece pe Codex/GPT în locul lui Qwen — cost marginal 0 pe
+    un abonament deja plătit, diversitate reală (alt „creier" decât Claude). Qwen rămâne
+    fallback. **Nu blochează WP13** — WP13 se construiește ACUM pe Qwen local; swap-ul e un
+    WP mic separat (**WP13b**, vezi mai jos), oricând după ce abonamentul există.
+    **Excepție notă la decizia WP-CX** (mai jos): apelul programatic Codex→Advisor e permis
+    ÎNAINTE de WP-G2 — rol read-only de review (obiecții pe text), risc mult mai mic decât un
+    executor cu tool-uri de scriere; rolul de AL DOILEA EXECUTOR (WP-CX) tot așteaptă WP-G2.
+  - **Failover misiuni pe API plătit — RETRAS (13.07.2026, Stefan).** Motivul inițial
+    (continuitate de comportament la resume) nu justifică riscul: bucle agentice = sute de mii
+    de tokeni/WP, ar putea arde bugetul lunar într-o rulare. Cazul real ("misiunea lovește
+    rate-limit-ul abonamentului Claude mid-execuție") e deja acoperit GRATUIT de WP11:
+    `_mission_schedule_resume` + `parse_rate_limit_reset` (`orchestrator.py`) detectează ora
+    de reset din eroare, pun misiunea în pauză, o reiau automat la ora exactă, cu notificare.
+    Failover-ul plătit ar fi cumpărat doar viteză (nu aștepți reset-ul), cu risc de buget
+    nejustificat — nu intră în plan.
   - **Sinteza săptămânală de trading: 0 €** — pe abonamentul Claude, nu pe API.
   - **Ce rămâne local (nu se cumpără):** Actorul (Qwen — diversitatea față de Critic e o
     virtute), embeddings, chat-ul de zi cu zi pe tier-urile existente.
@@ -1402,6 +1931,19 @@ agenții primesc browser MCP (chrome-devtools) sau rulări zilnice autonome nesu
 (Mission Control) — până atunci, sandbox-ul CLI din WP-G1 + blast radius sunt suficiente
 pentru profilul de risc real.
 
+**Amendament GCP (13.07.2026, Stefan — decizia „pista data-stack" din §4):** WP-G2 se
+livrează cu **DOUĂ ținte de execuție** pentru rulările nesupravegheate: **Docker local**
+(opțiunea primară de mai sus, neschimbată) și **GCP Cloud Run jobs** (container efemer,
+per-task). Motivația corectă NU e memoria — agenții consumă puțin local, Ollama e
+consumatorul — ci: (a) **disponibilitate**: rulările zilnice merg cu laptopul închis/plecat;
+(b) **izolare**: blast radius complet în afara mașinii personale; (c) GCP e explicit în JD.
+Constrângeri obligatorii: secretele prin **Secret Manager**, NU `kage_config.json` copiat în
+imagine; workspace = **git clone** + rezultatul se întoarce prin push/PR sau callback către
+orchestrator (Cloudflare Tunnel, WP10); **risk_hook + plafonul #7 merg ÎN container** —
+rularea cloud nu are voie să fie mai puțin governată decât cea locală. Nucleul (Ollama,
+memoria, ChromaDB, chat history) NU se mută — local by design (privacy). Cost: Cloud Run
+facturează per-secundă pe un profil bursty → practic zero; free tier + credit de trial.
+
 ---
 
 ## 7. Housekeeping la fiecare WP terminat
@@ -1450,6 +1992,15 @@ stăpânească retroactiv; (b) subsistemele viitoare cu valoare de interviu, car
 | Purged CV + meta-labeling | la nevoie în WP-T | leakage temporal, overfitting, evaluare |
 | Memorie v2 (#6): extracție de fapte + consolidare/dedup | la #6 | RAG, memorie de agent, deduplicare semantică |
 | RAG pe documente (`!index`) | înainte de ian. 2027 | chunking, retrieval, evaluare de retrieval |
+| API contracts, idempotency keys, pagination, rate limiting | la R0 | design de API scalabil, contract testing, robustețe la retry |
+| Schema Postgres + migrarea de pe SQLite/file-locks | la WP-PG | data modeling, tranzacții, concurență cross-proces, migrare zero-loss |
+| Pipeline raw→staging→mart + backfill idempotent + point-in-time lineage (T3) | la WP-ETL | ETL, idempotență, backfill, SQL analitic, data lineage |
+| DAG-uri Airflow + separarea batch vs safety-critical | la WP-AF | orchestrare batch, retries/backfill, design de scheduler |
+| Execuție efemeră pe Cloud Run + Secret Manager | la WP-G2 | serverless, secrets management, izolare, cost model cloud |
+| Intent router pe gateway (clasificare + dispatch) | la WP-NL | LLM-as-router, clasificare de intenție, ieșire structurată, fail-safe design |
+| Bucla reflect→replan + steering | la WP-AL | planning/replanning de agent, reflection, HITL, compresie de context |
+| Producer/consumer Kafka + stratul de ingest | dacă WP-KF e promovat | event streaming, partiții/offset-uri, semantici de livrare (at-least-once, idempotență) |
+| Eval harness minim (taskuri fixe + criterii automate) | la G1-minim | eval-driven development, regression testing pentru agenți |
 
 **Reguli:** plumbing-ul (endpoint-uri, scheduler, config, UI) NU intră pe pistă — zero valoare
 de interviu. Nu se reconstruiește nimic deja funcțional doar de dragul exercițiului —
