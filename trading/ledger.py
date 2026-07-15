@@ -77,6 +77,26 @@ CREATE TABLE IF NOT EXISTS agent_status (
     updated_at     TEXT NOT NULL
 );
 
+-- Snapshot-uri ale capitalului virtual. Sunt separate de `paper_trades` ca UI-ul
+-- să poată desena equity curve fără să recalculeze istoricul la fiecare refresh.
+CREATE TABLE IF NOT EXISTS equity_snapshots (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    source             TEXT NOT NULL,
+    equity             REAL NOT NULL,
+    available_capital  REAL,
+    open_trade_count   INTEGER NOT NULL DEFAULT 0,
+    recorded_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_equity_source_time ON equity_snapshots(source, recorded_at);
+
+-- Legătura idempotentă cu baza locală Freqtrade. Păstrăm doar identificatorul extern;
+-- datele de trading rămân normalizate în `paper_trades`.
+CREATE TABLE IF NOT EXISTS freqtrade_trade_map (
+    freqtrade_trade_id TEXT PRIMARY KEY,
+    paper_trade_id     INTEGER NOT NULL,
+    FOREIGN KEY (paper_trade_id) REFERENCES paper_trades(id)
+);
+
 -- Contorul GLOBAL de trial-uri (invariant #3): fiecare backtest rulat vreodată, INCLUSIV
 -- eșecurile, inserează un rând. Nimic nu se șterge. Fără el, Deflated Sharpe/PBO sunt invalide.
 CREATE TABLE IF NOT EXISTS trials (
@@ -302,6 +322,42 @@ class TradingLedger:
         else:
             cur = self.conn.execute("SELECT * FROM agent_status ORDER BY agent")
         return [dict(r) for r in cur.fetchall()]
+
+    # ── equity snapshots (dry-run, niciodată bani reali) ────────────────────
+    def record_equity_snapshot(
+        self, equity: float, source: str = "freqtrade", available_capital: Optional[float] = None,
+        open_trade_count: int = 0,
+    ) -> int:
+        """Înregistrează un punct din equity curve al unui executant paper-only."""
+        cur = self.conn.execute(
+            "INSERT INTO equity_snapshots (source, equity, available_capital, open_trade_count, recorded_at) "
+            "VALUES (?,?,?,?,?)",
+            (source, float(equity), available_capital, int(open_trade_count), _now()),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def get_equity_snapshots(self, source: str = "freqtrade", limit: int = 500) -> list[dict]:
+        """Cele mai recente snapshot-uri, în ordine cronologică pentru grafice."""
+        limit = max(1, min(int(limit), 5000))
+        rows = self.conn.execute(
+            "SELECT * FROM equity_snapshots WHERE source=? ORDER BY id DESC LIMIT ?", (source, limit)
+        ).fetchall()
+        return [dict(row) for row in reversed(rows)]
+
+    # ── mapare Freqtrade dry-run → paper_trades ──────────────────────────────
+    def freqtrade_trade_id(self, source_id: str) -> Optional[int]:
+        row = self.conn.execute(
+            "SELECT paper_trade_id FROM freqtrade_trade_map WHERE freqtrade_trade_id=?", (str(source_id),)
+        ).fetchone()
+        return int(row[0]) if row else None
+
+    def map_freqtrade_trade(self, source_id: str, paper_trade_id: int) -> None:
+        self.conn.execute(
+            "INSERT OR IGNORE INTO freqtrade_trade_map (freqtrade_trade_id, paper_trade_id) VALUES (?,?)",
+            (str(source_id), int(paper_trade_id)),
+        )
+        self.conn.commit()
 
     # ── trials (contorul global — invariant #3) ──────────────────────────────
     def record_trial(
