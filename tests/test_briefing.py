@@ -82,13 +82,16 @@ def test_new_jobs_no_db_degrades(monkeypatch):
 
 # ── Taskuri programate azi ────────────────────────────────────────────────────
 
-def test_scheduled_today_matches_daily(monkeypatch, tmp_path):
-    f = tmp_path / "scheduled_tasks.json"
-    f.write_text(json.dumps([
-        {"id": "1", "cron": "0 9 * * *", "message": "task zilnic", "enabled": True},
-        {"id": "2", "cron": "30 8 * * *", "message": "dezactivat", "enabled": False},
-    ]), encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE", f)
+def _seed_task(task_id, cron, message, enabled=True):
+    import pg_store
+    pg_store.execute(
+        "INSERT INTO scheduled_tasks (id, cron, message, enabled) VALUES (%s, %s, %s, %s)",
+        (task_id, cron, message, enabled))
+
+
+def test_scheduled_today_matches_daily(pg):
+    _seed_task("1", "0 9 * * *", "task zilnic", True)
+    _seed_task("2", "30 8 * * *", "dezactivat", False)
 
     today = orchestrator._briefing_scheduled_today()
     assert len(today) == 1                    # zilnic da, dezactivat nu
@@ -96,30 +99,22 @@ def test_scheduled_today_matches_daily(monkeypatch, tmp_path):
     assert today[0]["message"] == "task zilnic"
 
 
-def test_scheduled_today_skips_other_weekday(monkeypatch, tmp_path):
+def test_scheduled_today_skips_other_weekday(pg):
     # Un task care rulează într-o zi a săptămânii care NU e azi → exclus.
     other_dow = (datetime.date.today().weekday() + 2) % 7  # +2 ca să nu prindem azi
     # cron day_of_week: 0=luni în APScheduler from_crontab? Standard cron: 0=duminică.
-    f = tmp_path / "scheduled_tasks.json"
-    f.write_text(json.dumps([
-        {"id": "1", "cron": f"0 10 * * {other_dow}", "message": "săptămânal", "enabled": True},
-    ]), encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE", f)
+    _seed_task("1", f"0 10 * * {other_dow}", "săptămânal", True)
     today = orchestrator._briefing_scheduled_today()
     assert today == [] or all(t["message"] != "săptămânal" for t in today)
 
 
-def test_scheduled_today_no_file_degrades(monkeypatch, tmp_path):
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE", tmp_path / "nope.json")
+def test_scheduled_today_no_db_degrades():
+    # reset_global_state lasă pg_store neconfigurat → degradare la []
     assert orchestrator._briefing_scheduled_today() == []
 
 
-def test_scheduled_today_bad_cron_skipped(monkeypatch, tmp_path):
-    f = tmp_path / "scheduled_tasks.json"
-    f.write_text(json.dumps([
-        {"id": "1", "cron": "not a cron", "message": "invalid", "enabled": True},
-    ]), encoding="utf-8")
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE", f)
+def test_scheduled_today_bad_cron_skipped(pg):
+    _seed_task("1", "not a cron", "invalid", True)
     assert orchestrator._briefing_scheduled_today() == []
 
 
@@ -244,8 +239,6 @@ async def test_compose_briefing_zero_cloud(monkeypatch, jobs_db):
     """`_compose_briefing` nu apelează NICIODATĂ un tier cloud."""
     recent = datetime.datetime.now().isoformat()
     _insert_job(jobs_db, "a", "stefan", "QA Intern", "Acme", orchestrator._JOB_STATUS_SENT, 8, recent)
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE",
-                        orchestrator.PROJECT_ROOT / "does-not-exist.json")
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
     _fake_httpx_content(monkeypatch, "Bună dimineața!")
 
@@ -260,8 +253,6 @@ async def test_compose_briefing_zero_cloud(monkeypatch, jobs_db):
 
 
 async def test_handle_briefing_command_returns_sse(monkeypatch, jobs_db):
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE",
-                        orchestrator.PROJECT_ROOT / "does-not-exist.json")
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
     _fake_httpx_content(monkeypatch, "Salut!")
     resp = await orchestrator._handle_briefing_command()
@@ -273,8 +264,6 @@ async def test_handle_briefing_command_returns_sse(monkeypatch, jobs_db):
 async def test_send_briefing_no_gateway_noop(monkeypatch):
     monkeypatch.setattr(orchestrator, "_tg_gateway", None)
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE",
-                        orchestrator.PROJECT_ROOT / "does-not-exist.json")
     _fake_httpx_content(monkeypatch, "Salut!")
     # nu trebuie să arunce, doar să logheze
     await orchestrator._send_briefing()
@@ -289,8 +278,6 @@ async def test_send_briefing_pushes_to_telegram(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "_tg_gateway", _Gw())
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
-    monkeypatch.setattr(orchestrator, "SCHEDULED_TASKS_FILE",
-                        orchestrator.PROJECT_ROOT / "does-not-exist.json")
     monkeypatch.setattr(orchestrator, "_db_conn", None)
     _fake_httpx_content(monkeypatch, "Bună dimineața!")
     await orchestrator._send_briefing()

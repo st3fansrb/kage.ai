@@ -182,8 +182,9 @@ _ONE_WP = """# Mission: Kage lucrează la Kage
 
 
 @pytest.fixture
-def mission_env(gitrepo, monkeypatch):
-    """DB in-memory + no-op-uri pe caffeinate/telegram, PESTE `gitrepo` (git real).
+def mission_env(pg, gitrepo, monkeypatch):
+    """runs/missions → PG de test; messages + agent_sessions → SQLite in-memory.
+    No-op-uri pe caffeinate/telegram, PESTE `gitrepo` (git real).
     Spre deosebire de fixture-ul din test_mission_orchestration.py, AICI
     `_mission_mark_and_commit`/`_mission_git_ensure_branch` NU sunt mock-uite — trebuie
     să ruleze real, ca să verificăm izolarea git efectiv."""
@@ -191,9 +192,7 @@ def mission_env(gitrepo, monkeypatch):
     conn.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT DEFAULT 'default', role TEXT, content TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
-    orchestrator._ensure_runs_table(conn)
     orchestrator._ensure_agent_sessions_table(conn)
-    orchestrator._ensure_missions_table(conn)
     conn.commit()
     monkeypatch.setattr(orchestrator, "_db_conn", conn)
     monkeypatch.setattr(orchestrator, "_active_mission_id", None)

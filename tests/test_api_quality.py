@@ -1,20 +1,22 @@
-"""Contracte HTTP pentru R0: versiuni, idempotency, paginare și 429."""
+"""Contracte HTTP pentru R0: versiuni, idempotency, paginare și 429.
+
+WP-PG: missions/usage → PG de test (fixture `pg`); messages + idempotency_keys → SQLite.
+"""
 import sqlite3
 
 import pytest
 from fastapi.testclient import TestClient
 
 import orchestrator
+import pg_store
 
 
 @pytest.fixture
-def api_db(monkeypatch, tmp_path):
+def api_db(pg, monkeypatch, tmp_path):
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT DEFAULT 'default', role TEXT, content TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
-    orchestrator._ensure_missions_table(conn)
-    orchestrator._ensure_usage_table(conn)
     conn.commit()
     monkeypatch.setattr(orchestrator, "_db_conn", conn)
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
@@ -41,13 +43,12 @@ def _mission_file(tmp_path):
 def test_missions_versioned_contract_and_pagination(client, api_db, tmp_path):
     _mission_file(tmp_path)
     for suffix in ("a", "b"):
-        api_db.execute(
+        pg_store.execute(
             "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'done', 0, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, 'done', 0, %s, %s)",
             (suffix, suffix, "Title " + suffix, "/tmp/mission.md", "/tmp", suffix, suffix),
         )
-        api_db.execute("INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (?, 0, 'WP', 'done')", (suffix,))
-    api_db.commit()
+        pg_store.execute("INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (%s, 0, 'WP', 'done')", (suffix,))
 
     response = client.get("/v1/missions?limit=1&offset=1")
     assert response.status_code == 200
@@ -66,7 +67,7 @@ def test_mission_create_idempotency_replays_without_duplicate(client, api_db, tm
     assert second.status_code == 201
     assert first.json() == second.json()
     assert second.headers["Idempotency-Replayed"] == "true"
-    assert api_db.execute("SELECT COUNT(*) FROM missions").fetchone()[0] == 1
+    assert pg_store.fetchone("SELECT COUNT(*) FROM missions")[0] == 1
 
 
 def test_idempotency_key_rejects_different_payload(client, tmp_path):
@@ -79,8 +80,7 @@ def test_idempotency_key_rejects_different_payload(client, tmp_path):
 
 def test_usage_contract_is_paginated(client, api_db):
     for idx in range(3):
-        api_db.execute("INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) VALUES (?, 1, 'qwen', 0, NULL, 4, 'x')", ("2026-07-14T00:00:0" + str(idx),))
-    api_db.commit()
+        pg_store.execute("INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) VALUES (%s, 1, 'qwen', 0, NULL, 4, 'x')", ("2026-07-14T00:00:0" + str(idx),))
     response = client.get("/v1/usage?limit=2&offset=1")
     assert response.status_code == 200
     assert response.json()["total"] == 3

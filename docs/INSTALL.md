@@ -8,6 +8,7 @@ Kage is a personal AI orchestration system: smart routing between local (Ollama)
 |---|---|
 | Python 3.10+ | [python.org](https://python.org) |
 | Ollama | [ollama.ai](https://ollama.ai) — for local AI tiers |
+| PostgreSQL 16 | `brew install postgresql@16` — shared state + telemetry (WP-PG); started by `start_all.sh`; create the DB once: `createdb kage` |
 | Claude CLI | `npm install -g @anthropic-ai/claude-code` — for agent tasks |
 | Gemini CLI | Optional, for Gemini agent tasks |
 
