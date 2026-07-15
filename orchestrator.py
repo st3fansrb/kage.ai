@@ -320,14 +320,20 @@ WHISPER_LANGUAGE = str(_whisper_cfg.get("language", "auto")).strip() or "auto"
 
 # WP-V: video intel — extrage și analizează sceptic clipuri trimise pe Telegram.
 # Fluxul implicit e cost 0 (subtitrări-întâi / Whisper local / analiză pe T2). Pasul vizual
-# (keyframes + OCR) e opțional; modelul vision plătit trece prin plafonul #7 când e cablat.
+# (keyframes + OCR) e opțional; modelul vision plătit trece prin plafonul #7 și OpenRouter.
 _video_cfg = _cfg.get("video_intel", {}) if isinstance(_cfg.get("video_intel"), dict) else {}
 VIDEO_INTEL_ENABLED  = bool(_video_cfg.get("enabled", True))
 VIDEO_YTDLP_BIN      = str(_video_cfg.get("ytdlp_bin", "yt-dlp")).strip() or "yt-dlp"
 VIDEO_MAX_DURATION_S = int(_video_cfg.get("max_duration_s", 1800))
 VIDEO_ANALYSIS_TIMEOUT = float(_video_cfg.get("analysis_timeout_s", 300))
-VIDEO_VISUAL_MODEL = str(_video_cfg.get("visual_model", "claude-haiku-4-5")).strip() or "claude-haiku-4-5"
-VIDEO_DEEP_MODEL = str(_video_cfg.get("deep_model", "claude-sonnet-4-6")).strip() or "claude-sonnet-4-6"
+VIDEO_OPENROUTER_BASE_URL = str(_video_cfg.get("openrouter_base_url", "https://openrouter.ai/api/v1")).rstrip("/")
+# Refolosește cheia OpenRouter existentă a laboratorului de trading; un override dedicat permite
+# ulterior separarea bugetelor fără să expună sau să dubleze un secret în config-ul exemplu.
+VIDEO_OPENROUTER_API_KEY = str(
+    _video_cfg.get("openrouter_api_key") or _trading_cfg.get("openrouter_api_key", "")
+).strip()
+VIDEO_VISUAL_MODEL = str(_video_cfg.get("visual_model", "qwen/qwen3-vl-30b-a3b-instruct")).strip() or "qwen/qwen3-vl-30b-a3b-instruct"
+VIDEO_DEEP_MODEL = str(_video_cfg.get("deep_model", "anthropic/claude-sonnet-4-6")).strip() or "anthropic/claude-sonnet-4-6"
 VIDEO_VISUAL_MAX_FRAMES = max(1, min(int(_video_cfg.get("visual_max_frames", 20)), 20))
 VIDEO_VISUAL_EST_USD_PER_FRAME = max(0.0, float(_video_cfg.get("visual_est_usd_per_frame", 0.002)))
 VIDEO_DEEP_EST_USD = max(0.0, float(_video_cfg.get("deep_est_usd", 0.03)))
@@ -5093,12 +5099,20 @@ async def _video_t2_chat(messages: list) -> str:
     )
 
 
-async def _video_cloud_chat(messages: list, model: str) -> str:
-    """Apel cloud exclusiv prin LiteLLM; aici nu există client API direct/Gemini."""
+async def _video_openrouter_chat(messages: list, model: str) -> str:
+    """Apel cloud direct prin OpenRouter; nu depinde de un proxy LiteLLM local sau de Gemini."""
+    if not VIDEO_OPENROUTER_API_KEY:
+        raise RuntimeError("lipsește cheia OpenRouter (video_intel.openrouter_api_key sau trading.openrouter_api_key)")
     async with httpx.AsyncClient(timeout=VIDEO_ANALYSIS_TIMEOUT) as client:
         resp = await client.post(
-            f"{LITELLM_URL}/chat/completions",
+            f"{VIDEO_OPENROUTER_BASE_URL}/chat/completions",
             json={"model": model, "messages": messages, "stream": False},
+            headers={
+                "Authorization": f"Bearer {VIDEO_OPENROUTER_API_KEY}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/st3fansrb/kage.ai",
+                "X-Title": "Kage Video Intel",
+            },
             timeout=VIDEO_ANALYSIS_TIMEOUT,
         )
         resp.raise_for_status()
@@ -5220,7 +5234,7 @@ async def video_visual(vid: str):
 
 @app.post("/video/deep/{vid}")
 async def video_deep(vid: str):
-    """🔎 Analiză T5 prin LiteLLM, verificată fail-closed de plafonul EUR."""
+    """🔎 Analiză T5 prin OpenRouter, verificată fail-closed de plafonul EUR."""
     entry = _VIDEO_ANALYSES.get(vid)
     if entry is None:
         return JSONResponse({"ok": False, "error": "analiză necunoscută (expirată?)"}, status_code=404)
@@ -5229,7 +5243,7 @@ async def video_deep(vid: str):
         return JSONResponse({"ok": False, "error": f"analiza adâncă este blocată de plafonul EUR ({reason})"})
     try:
         async def cloud(messages: list) -> str:
-            return await _video_cloud_chat(messages, VIDEO_DEEP_MODEL)
+            return await _video_openrouter_chat(messages, VIDEO_DEEP_MODEL)
         analysis = await _vi.VideoIntel(cloud).deep_analyze(entry["extract"], entry["analysis"])
         _video_record_cloud_cost(VIDEO_DEEP_MODEL, VIDEO_DEEP_EST_USD, "video_deep")
     except Exception as e:  # noqa: BLE001
@@ -5264,7 +5278,7 @@ async def _video_download_video(url: str) -> bytes:
 
 
 async def _video_describe_frames(frames: list[bytes]) -> str:
-    """OCR/descriere per keyframe, cu PNG-ul base64 trimis prin LiteLLM la T3/Haiku."""
+    """OCR/descriere per keyframe, cu PNG-ul base64 trimis direct prin OpenRouter la Qwen-VL."""
     allowed, reason = _video_budget_allows(VIDEO_VISUAL_EST_USD_PER_FRAME * len(frames))
     if not allowed:
         raise RuntimeError(f"plafon EUR închis: {reason}")
@@ -5282,7 +5296,7 @@ async def _video_describe_frames(frames: list[bytes]) -> str:
                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{encoded}"}},
             ]},
         ]
-        text = await _video_cloud_chat(messages, VIDEO_VISUAL_MODEL)
+        text = await _video_openrouter_chat(messages, VIDEO_VISUAL_MODEL)
         notes.append(f"Cadru {index}: {text.strip()[:1200]}")
         _video_record_cloud_cost(VIDEO_VISUAL_MODEL, VIDEO_VISUAL_EST_USD_PER_FRAME, "video_visual")
     return "\n".join(notes)
@@ -5308,7 +5322,7 @@ def _video_record_cloud_cost(model: str, usd: float, role: str) -> None:
     from trading.ledger import TradingLedger
     ledger = TradingLedger()
     try:
-        ledger.record_api_cost(model, usd, provider="litellm", role=role)
+        ledger.record_api_cost(model, usd, provider="openrouter", role=role)
     finally:
         ledger.close()
 

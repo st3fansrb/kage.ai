@@ -7,7 +7,7 @@ Flux (specificat în docs/KAGE-HANDOFF.md §WP-V):
      (YouTube le are aproape mereu → zero transcriere, gratis). Fără subtitrări → descarcă
      DOAR audio → Whisper local (WP6). Plafon de durată în config (podcast de 3h ≠ blocaj).
   3. **Pas vizual opțional** (`keyframes`, ffmpeg pe schimbare de scenă) — descriere/OCR per
-     cadru cu Haiku T3 prin LiteLLM, cu PNG base64 şi gardă #7. Pornește la buton sau când
+     cadru cu Qwen3-VL prin OpenRouter, cu PNG base64 şi gardă #7. Pornește la buton sau când
      transcriptul indică explicit conținut vizual (vezi orchestrator).
   4. **Analiză sceptică pe T2 local (cost 0),** conștientă de categorie: clasifică întâi
      (trading / tech / carte / lecție / decizie), apoi șablonul potrivit → verdict onest.

@@ -329,7 +329,7 @@ def test_endpoint_deep_needs_budget(_client):
     orchestrator._VIDEO_ANALYSES.pop(vid, None)
 
 
-def test_visual_frames_go_to_litellm_as_base64_and_cost_is_recorded(monkeypatch):
+def test_visual_frames_go_to_openrouter_as_base64_and_cost_is_recorded(monkeypatch):
     monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (True, ""))
     recorded = []
     monkeypatch.setattr(orchestrator, "_video_record_cloud_cost", lambda *args: recorded.append(args))
@@ -339,7 +339,7 @@ def test_visual_frames_go_to_litellm_as_base64_and_cost_is_recorded(monkeypatch)
         calls.append((messages, model))
         return "un grafic BTC cu RSI"
 
-    monkeypatch.setattr(orchestrator, "_video_cloud_chat", cloud)
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", cloud)
     notes = asyncio.run(orchestrator._video_describe_frames([b"PNG-BYTES"]))
     image = calls[0][0][1]["content"][1]["image_url"]["url"]
     assert image.startswith("data:image/png;base64,")
@@ -348,18 +348,18 @@ def test_visual_frames_go_to_litellm_as_base64_and_cost_is_recorded(monkeypatch)
     assert recorded == [(orchestrator.VIDEO_VISUAL_MODEL, orchestrator.VIDEO_VISUAL_EST_USD_PER_FRAME, "video_visual")]
 
 
-def test_visual_budget_blocked_does_not_call_litellm(monkeypatch):
+def test_visual_budget_blocked_does_not_call_openrouter(monkeypatch):
     monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (False, "disabled"))
 
     async def forbidden(*args):
-        raise AssertionError("LiteLLM nu trebuie apelat cu bugetul blocat")
+        raise AssertionError("OpenRouter nu trebuie apelat cu bugetul blocat")
 
-    monkeypatch.setattr(orchestrator, "_video_cloud_chat", forbidden)
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", forbidden)
     with pytest.raises(RuntimeError, match="plafon"):
         asyncio.run(orchestrator._video_describe_frames([b"PNG-BYTES"]))
 
 
-def test_endpoint_deep_uses_t5_via_injected_litellm(monkeypatch, _client):
+def test_endpoint_deep_uses_t5_via_injected_openrouter(monkeypatch, _client):
     vid = orchestrator._video_store("https://youtu.be/x", vi.ExtractResult(url="u", transcript="date"), vi.Analysis(category="tech"))
     monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (True, ""))
     monkeypatch.setattr(orchestrator, "_video_record_cloud_cost", lambda *args: None)
@@ -370,7 +370,7 @@ def test_endpoint_deep_uses_t5_via_injected_litellm(monkeypatch, _client):
         assert "analiză ADÂNCĂ".lower() in messages[-1]["content"].lower()
         return json.dumps({"rezumat": "analiză mai riguroasă", "verdict": "de_testat"})
 
-    monkeypatch.setattr(orchestrator, "_video_cloud_chat", cloud)
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", cloud)
     r = _client.post(f"/video/deep/{vid}")
     assert r.status_code == 200 and r.json()["ok"] is True
     assert models == [orchestrator.VIDEO_DEEP_MODEL]

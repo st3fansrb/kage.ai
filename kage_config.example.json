@@ -188,8 +188,11 @@
     "ytdlp_bin": "yt-dlp",
     "max_duration_s": 1800,
     "analysis_timeout_s": 300,
-    "visual_model": "claude-haiku-4-5",
-    "deep_model": "claude-sonnet-4-6",
+    "_comment_openrouter": "Folosește video_intel.openrouter_api_key dacă vrei o cheie separată; altfel se reutilizează trading.openrouter_api_key. Nu necesită LiteLLM local.",
+    "openrouter_api_key": "",
+    "openrouter_base_url": "https://openrouter.ai/api/v1",
+    "visual_model": "qwen/qwen3-vl-30b-a3b-instruct",
+    "deep_model": "anthropic/claude-sonnet-4-6",
     "visual_max_frames": 20,
     "visual_est_usd_per_frame": 0.002,
     "deep_est_usd": 0.03
