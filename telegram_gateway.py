@@ -142,6 +142,21 @@ class TelegramGateway:
         markup = {"inline_keyboard": [row]} if row else None
         await self.send(card.get("text", "📹 (card gol)"), reply_markup=markup)
 
+    async def send_deploy_card(self, branch: str, detail: str) -> None:
+        """WP-SD: cardul de confirmare pentru `!deploy` — pull + restart e DOAR pe
+        acest buton, niciodată automat din comandă."""
+        text = (
+            f"🔄 <b>Deploy</b>\n\nBranch <code>{_escape(branch)}</code> — {_escape(detail)}.\n"
+            "Repornesc serviciile acum?"
+        )
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "🔄 Pull + restart", "callback_data": "deploy:confirm:0"},
+                {"text": "🚫 Anulează", "callback_data": "deploy:cancel:0"},
+            ]]
+        }
+        await self.send(text, reply_markup=keyboard)
+
     async def send_job_card(self, job: dict) -> None:
         """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
         `job` are cheile: hash, title, company, location, url, score."""
@@ -354,6 +369,8 @@ class TelegramGateway:
             await self._handle_mission_draft_callback(data)
         elif data.startswith("mission:"):
             await self._handle_mission_callback(data)
+        elif data.startswith("deploy:"):
+            await self._handle_deploy_callback(data)
 
     async def _handle_risk_callback(self, data: str) -> None:
         parts = data.split(":", 2)
@@ -441,6 +458,35 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] mission draft callback failed: {e}")
             await self.send("⚠️ Eroare internă la procesarea schiței.")
+
+    async def _handle_deploy_callback(self, data: str) -> None:
+        """WP-SD: butoanele cardului de deploy — deploy:confirm|cancel:0. `confirm` e
+        singurul loc din tot fluxul care declanșează pull + restart real."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, action, _unused = parts
+        if action == "cancel":
+            await self.send("🚫 Deploy anulat.")
+            return
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(f"{self._orchestrator_url}/deploy/confirm", headers=headers)
+            body = resp.json() if resp.status_code == 200 else {}
+            if resp.status_code == 200 and body.get("ok"):
+                await self.send(
+                    f"🔄 {_escape(str(body.get('detail', 'Pull făcut.')))}\n"
+                    "Repornesc serviciile — revin online în câteva secunde."
+                )
+            else:
+                detail = body.get("detail") if body else f"HTTP {resp.status_code}"
+                await self.send(f"⚠️ Deploy eșuat: {_escape(str(detail))}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] deploy callback failed: {e}")
+            await self.send("⚠️ Eroare internă la deploy.")
 
     async def _handle_video_callback(self, data: str) -> None:
         """WP-V: butoanele cardului de verdict — video:<action>:<vid> → /video/<action>/<vid>.

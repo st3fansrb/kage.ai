@@ -61,7 +61,7 @@ def mdb(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "_mission_caffeinate_stop", lambda: None)
     commits = []
     monkeypatch.setattr(orchestrator, "_mission_mark_and_commit",
-                        lambda path, idx, title: commits.append((idx, title)))
+                        lambda path, idx, title, git_cwd=None: commits.append((idx, title)))
     # WP12: nu atinge git-ul real în teste (branch-ul misiunii).
     monkeypatch.setattr(orchestrator, "_mission_git_ensure_branch", lambda slug: None)
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")

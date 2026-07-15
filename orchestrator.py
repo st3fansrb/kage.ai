@@ -489,6 +489,25 @@ def _stop_all() -> dict:
     logger.info(f"[!stop] {killed} procese + {sdk_live} rulări SDK oprite, scheduler_paused={scheduler_paused}")
     return {"procs_killed": killed + sdk_live, "scheduler_paused": scheduler_paused}
 
+
+def _trigger_restart() -> None:
+    """WP-SD: oprește + repornește serviciile via scripturile EXISTENTE
+    (`scripts/stop_all.sh` + `start_all.sh` — aceleași folosite manual/din widget), nu
+    reinventează managementul de proces. Rulează într-un proces DETAȘAT
+    (`start_new_session=True`) ca să supraviețuiască morții orchestratorului însuși —
+    altfel `stop_all.sh` ar omorî părintele înainte să apuce să pornească din nou.
+    Apelat DOAR din `/deploy/confirm`, după confirmare explicită pe buton."""
+    script = (
+        f'sleep 2 && "{PROJECT_ROOT}/scripts/stop_all.sh" && sleep 1 && "{PROJECT_ROOT}/start_all.sh"'
+    )
+    subprocess.Popen(
+        ["bash", "-c", script], cwd=str(PROJECT_ROOT),
+        start_new_session=True, close_fds=True,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    logger.info("[deploy] restart declanșat (proces detașat)")
+
+
 # ── Telegram gateway (Faza 17) ────────────────────────────────────────────────
 _tg_gateway: Optional[_tg_module.TelegramGateway] = None
 
@@ -1831,6 +1850,24 @@ async def mission_draft_action(mission_id: str, action: str):
     return {"ok": False, "detail": f"acțiune necunoscută: {action}"}
 
 
+@app.post("/deploy/confirm")
+async def deploy_confirm():
+    """WP-SD: pull --ff-only pe checkout-ul viu + restart declanșat — DOAR după
+    confirmare explicită pe buton (Telegram, cardul trimis de `!deploy`). `git pull`
+    e sincron (rapid, sigur — ff-only refuză orice ar necesita merge); restart-ul
+    pornește un proces DETAȘAT (supraviețuiește morții acestui proces)."""
+    try:
+        res = subprocess.run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only"],
+                             capture_output=True, text=True, timeout=60)
+    except Exception as e:
+        return {"ok": False, "detail": f"pull eșuat: {e}"}
+    if res.returncode != 0:
+        return {"ok": False, "detail": f"pull eșuat: {(res.stderr or res.stdout).strip()[:300]}"}
+    summary = res.stdout.strip() or "deja la zi"
+    _trigger_restart()
+    return {"ok": True, "detail": summary[:300]}
+
+
 @app.get("/api/missions", response_model=List[MissionSummaryResponse])
 @app.get("/v1/missions", response_model=List[MissionSummaryResponse])
 async def api_missions(limit: int = 50, offset: int = 0):
@@ -2328,6 +2365,9 @@ async def _chat_dispatch(request: Request, body: dict):
 
     if last_user.strip().lower() == "!briefing":
         return await _handle_briefing_command()
+
+    if last_user.strip().lower() == "!deploy":
+        return await _handle_deploy_command()
 
     if re.match(r"^!mission\b", last_user.strip(), re.IGNORECASE):
         return await _handle_mission_command(last_user.strip())
@@ -3152,6 +3192,9 @@ def _load_pending_approvals() -> None:
 # pierde misiunea. Logica pură (parsare/verificare/rate-limit) e în `mission_runner`.
 
 MISSIONS_DIR = PROJECT_ROOT / "missions"
+# WP-SD: misiunile care țintesc repo-ul Kage însuși rulează izolat aici, nu pe checkout-ul
+# viu (PROJECT_ROOT) — vezi _mission_ensure_worktree.
+KAGE_WORKTREES_DIR = Path(_cfg.get("kage_worktrees_dir", str(Path.home() / ".kage-worktrees"))).expanduser()
 
 _active_mission_id: Optional[str] = None      # o singură misiune activă la un moment dat
 _mission_task: Optional[asyncio.Task] = None
@@ -3568,9 +3611,10 @@ async def _mission_verify(wp, cwd: str):
     return True, "toate verificările trec"
 
 
-def _mission_git(*args: str) -> subprocess.CompletedProcess:
-    """git în repo-ul proiectului (unde trăiește mission.md + codul misiunii)."""
-    return subprocess.run(["git", *args], cwd=str(PROJECT_ROOT),
+def _mission_git(*args: str, cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+    """git în repo-ul misiunii — PROJECT_ROOT implicit, sau worktree-ul ei izolat (WP-SD)
+    pentru misiunile care țintesc Kage însuși."""
+    return subprocess.run(["git", *args], cwd=str(cwd or PROJECT_ROOT),
                           capture_output=True, text=True, timeout=60)
 
 
@@ -3602,6 +3646,101 @@ def _mission_git_ensure_branch(slug: str) -> Optional[str]:
         return None
 
 
+def _mission_targets_project_root(cwd: str) -> bool:
+    """WP-SD: True dacă misiunea lucrează pe repo-ul Kage însuși (cazul care avea nevoie
+    de izolare — misiunile pe alte repo-uri nu sunt atinse de schimbarea asta)."""
+    try:
+        return Path(cwd).expanduser().resolve() == PROJECT_ROOT.resolve()
+    except Exception:
+        return False
+
+
+def _mission_worktree_path(slug: str) -> Path:
+    """Cale determinată pur din slug — o misiune reluată găsește ACELAȘI worktree,
+    nu creează altul (două worktree-uri nu pot ține același branch — capcana din spec)."""
+    return KAGE_WORKTREES_DIR / _mission_branch_name(slug).replace("mission/", "", 1)
+
+
+def _mission_ensure_worktree(slug: str) -> Optional[Path]:
+    """WP-SD: pentru misiuni pe repo-ul Kage, creează/reutilizează un git worktree izolat
+    — partajează `.git`-ul cu PROJECT_ROOT, dar NU comută checkout-ul viu; serviciile rulează
+    neatinse pe branch-ul lor. Idempotent: o reluare (restart mid-misiune) găsește worktree-ul
+    deja creat și îl refolosește. Best-effort; None dacă eșuează (misiunea rămâne pe PROJECT_ROOT,
+    comportamentul de dinainte de WP-SD — mai sigur decât să o blocheze)."""
+    if not (PROJECT_ROOT / ".git").exists():
+        return None
+    branch = _mission_branch_name(slug)
+    path = _mission_worktree_path(slug)
+    if path.exists():
+        try:
+            cur = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(path),
+                                 capture_output=True, text=True, timeout=15).stdout.strip()
+            if cur != branch:
+                logger.warning(f"[mission-sd] worktree {path} pe branch neașteptat {cur!r}"
+                              f" (așteptat {branch!r}) — îl refolosesc oricum")
+        except Exception as e:
+            logger.warning(f"[mission-sd] verificare worktree eșuată: {e}")
+        return path
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        branch_exists = _mission_git("rev-parse", "--verify", "--quiet", branch).returncode == 0
+        res = (_mission_git("worktree", "add", str(path), branch) if branch_exists
+               else _mission_git("worktree", "add", "-b", branch, str(path), "HEAD"))
+        if res.returncode != 0:
+            logger.error(f"[mission-sd] worktree add eșuat: {res.stderr.strip()[:300]}")
+            return None
+        logger.info(f"[mission-sd] worktree creat: {path} pe {branch}")
+        return path
+    except Exception as e:
+        logger.error(f"[mission-sd] worktree add eroare: {e}")
+        return None
+
+
+def _mission_seed_worktree_path(worktree: Path, mission_md_path: str) -> str:
+    """Copiază mission.md (scris de _mission_new pe PROJECT_ROOT, înainte să existe
+    worktree-ul) în worktree, DOAR dacă lipsește acolo — o reluare păstrează progresul
+    (✅-urile) deja scris în copia din worktree, nu suprascrie cu varianta stale de pe
+    PROJECT_ROOT. ȘTERGE originalul necomis din PROJECT_ROOT după copiere (+ folderul
+    părinte, dacă rămâne gol) — altfel checkout-ul viu acumulează un mission.md orfan,
+    netrackuit, la fiecare misiune pe Kage (criteriul WP-SD: checkout-ul viu rămâne
+    curat). Întoarce calea efectivă (în worktree) a mission.md."""
+    src = Path(mission_md_path)
+    try:
+        rel = src.relative_to(PROJECT_ROOT)
+    except ValueError:
+        return mission_md_path  # nu e sub PROJECT_ROOT — neașteptat, nu atinge nimic
+    dst = worktree / rel
+    if not dst.exists():
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+    try:
+        if src.exists():
+            src.unlink()
+            if not any(src.parent.iterdir()):
+                src.parent.rmdir()
+    except Exception as e:
+        logger.debug(f"[mission-sd] curățare mission.md original eșuată: {e}")
+    return str(dst)
+
+
+def _mission_cleanup_worktree(slug: str, *, keep: bool) -> None:
+    """Curăță worktree-ul unei misiuni terminate (succes); îl păstrează pentru autopsie
+    la eșec (spec WP-SD). Best-effort — nu ridică, doar loghează."""
+    if keep:
+        return
+    path = _mission_worktree_path(slug)
+    if not path.exists():
+        return
+    try:
+        res = _mission_git("worktree", "remove", "--force", str(path))
+        if res.returncode != 0:
+            logger.warning(f"[mission-sd] worktree remove eșuat: {res.stderr.strip()[:200]}")
+        else:
+            logger.info(f"[mission-sd] worktree curățat: {path}")
+    except Exception as e:
+        logger.warning(f"[mission-sd] worktree remove eroare: {e}")
+
+
 def _github_repo_slug() -> Optional[str]:
     """`user/repo` din URL-ul remote-ului configurat, pentru linkul de compare. None dacă
     nu e GitHub / fără remote."""
@@ -3618,14 +3757,14 @@ def _github_compare_url(branch: str) -> Optional[str]:
     return f"https://github.com/{slug}/compare/{branch}?expand=1" if slug else None
 
 
-def _mission_git_push(branch: str) -> dict:
+def _mission_git_push(branch: str, cwd: Optional[Path] = None) -> dict:
     """Push branch-ul misiunii pe remote (opt-in `mission_git_push`). Best-effort: un push
     eșuat (offline/auth) NU pică misiunea. Întoarce {pushed, compare_url}."""
     out = {"pushed": False, "compare_url": None}
     if not MISSION_GIT_PUSH or not branch:
         return out
     try:
-        res = _mission_git("push", "-u", MISSION_GIT_REMOTE, branch)
+        res = _mission_git("push", "-u", MISSION_GIT_REMOTE, branch, cwd=cwd)
         if res.returncode == 0:
             out["pushed"] = True
             out["compare_url"] = _github_compare_url(branch)
@@ -3637,11 +3776,13 @@ def _mission_git_push(branch: str) -> dict:
     return out
 
 
-def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> Optional[dict]:
+def _mission_mark_and_commit(path: str, idx: int, wp_title: str,
+                             git_cwd: Optional[Path] = None) -> Optional[dict]:
     """Marchează WP-ul ✅ în mission.md + comite ÎNTREGUL diff al misiunii (WP12: nu doar
     mission.md — și codul scris de agent) pe branch-ul misiunii, apoi push (opt-in).
-    Atribuirea = git config-ul repo-ului (Stefan). Întoarce {branch, pushed, compare_url}
-    sau None (best-effort — nu pică bucla)."""
+    `git_cwd` (WP-SD): worktree-ul izolat al misiunii, dacă țintește Kage însuși — altfel
+    PROJECT_ROOT, neschimbat. Atribuirea = git config-ul repo-ului (Stefan). Întoarce
+    {branch, pushed, compare_url} sau None (best-effort — nu pică bucla)."""
     try:
         p = Path(path)
         p.write_text(_mr.mark_wp_done(p.read_text(encoding="utf-8"), idx,
@@ -3649,19 +3790,19 @@ def _mission_mark_and_commit(path: str, idx: int, wp_title: str) -> Optional[dic
     except Exception as e:
         logger.debug(f"[mission] mark ✅ eșuat: {e}")
     try:
-        _mission_git("add", "-A")
-        res = _mission_git("commit", "-m", f"mission: ✅ {wp_title[:60]}")
+        _mission_git("add", "-A", cwd=git_cwd)
+        res = _mission_git("commit", "-m", f"mission: ✅ {wp_title[:60]}", cwd=git_cwd)
         if res.returncode != 0 and "nothing to commit" not in (res.stdout + res.stderr).lower():
             logger.debug(f"[mission] commit: {res.stderr.strip()[:150]}")
     except Exception as e:
         logger.debug(f"[mission] commit eșuat: {e}")
         return None
     try:
-        branch = _mission_git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        branch = _mission_git("rev-parse", "--abbrev-ref", "HEAD", cwd=git_cwd).stdout.strip()
     except Exception:
         branch = ""
     info = {"branch": branch, "pushed": False, "compare_url": None}
-    info.update(_mission_git_push(branch))
+    info.update(_mission_git_push(branch, cwd=git_cwd))
     return info
 
 
@@ -3741,10 +3882,38 @@ async def _mission_run(mission_id: str) -> None:
     _active_mission_id = mission_id
     _mission_caffeinate_start()
     row0 = _mission_row(mission_id)
-    # WP12: misiunea lucrează pe branch propriu (review din GitHub mobile). O singură dată.
-    branch = _mission_git_ensure_branch((row0 or {}).get("slug", ""))
-    if branch:
-        await _mission_notify(f"🌿 Lucrez pe branch <code>{branch}</code>.")
+    slug = (row0 or {}).get("slug", "")
+    original_cwd = (row0 or {}).get("cwd") or str(PROJECT_ROOT)
+
+    # WP-SD: o misiune care țintește repo-ul Kage însuși rulează izolat într-un worktree
+    # separat — NU pe checkout-ul viu (PROJECT_ROOT), ca să nu concureze cu serviciile
+    # care rulează din el. Restul misiunilor (alte repo-uri) merg neschimbate, pe branch-ul
+    # lor din PROJECT_ROOT (comportamentul WP12 dinainte de asta).
+    git_worktree_cwd: Optional[Path] = None
+    if _mission_targets_project_root(original_cwd):
+        worktree = _mission_ensure_worktree(slug)
+        if worktree is not None:
+            git_worktree_cwd = worktree
+            effective_cwd = str(worktree)
+            effective_path = _mission_seed_worktree_path(worktree, (row0 or {}).get("path", ""))
+            await _mission_notify(
+                f"🌿 Misiune izolată — lucrez în worktree separat, branch "
+                f"<code>{_mission_branch_name(slug)}</code>. Serviciile live rămân neatinse.")
+        else:
+            # Best-effort: worktree-ul a eșuat (ex. fără git) — cade pe comportamentul
+            # dinainte de WP-SD, mai bine decât să blocheze misiunea.
+            effective_cwd = original_cwd
+            effective_path = (row0 or {}).get("path", "")
+            branch = _mission_git_ensure_branch(slug)
+            if branch:
+                await _mission_notify(f"🌿 Lucrez pe branch <code>{branch}</code>.")
+    else:
+        effective_cwd = original_cwd
+        effective_path = (row0 or {}).get("path", "")
+        branch = _mission_git_ensure_branch(slug)
+        if branch:
+            await _mission_notify(f"🌿 Lucrez pe branch <code>{branch}</code>.")
+
     run_id = _run_start("mission", channel="mission",
                         input_text=(row0 or {}).get("title", mission_id))
     _mission_cost = 0.0
@@ -3769,7 +3938,7 @@ async def _mission_run(mission_id: str) -> None:
             _mission_wp_set(mission_id, idx, "running")
             _mission_update(mission_id, current_idx=idx)
             try:
-                mission = _mr.parse_mission(Path(row["path"]).read_text(encoding="utf-8"))
+                mission = _mr.parse_mission(Path(effective_path).read_text(encoding="utf-8"))
             except Exception as e:
                 _mission_wp_set(mission_id, idx, "failed", detail=f"citire mission.md: {e}")
                 _mission_update(mission_id, status="failed")
@@ -3786,7 +3955,7 @@ async def _mission_run(mission_id: str) -> None:
             rate_limited: Optional[int] = None
             async for ev in _agent_runner.run(
                 prompt,
-                user_message=wp.title, cwd=row["cwd"], model=wp_model,
+                user_message=wp.title, cwd=effective_cwd, model=wp_model,
                 allowed_tools=allowed, disallowed_tools=disallowed, permission_mode=pmode,
                 resume=row["sdk_session_id"], inactivity_timeout=AGENT_INACTIVITY_TIMEOUT,
                 autonomous=AUTONOMOUS_MODE, approval_cb=_agent_approval_cb,
@@ -3816,10 +3985,10 @@ async def _mission_run(mission_id: str) -> None:
                 await _mission_notify(f"⏸ Limită atinsă — reiau «{wp.title}» în ~{mins} min.")
                 break
 
-            ok, detail = await _mission_verify(wp, row["cwd"])
+            ok, detail = await _mission_verify(wp, effective_cwd)
             if ok:
                 _mission_wp_set(mission_id, idx, "done", detail=detail)
-                info = _mission_mark_and_commit(row["path"], idx, wp.title)
+                info = _mission_mark_and_commit(effective_path, idx, wp.title, git_cwd=git_worktree_cwd)
                 await _mission_notify(f"✅ {wp.title}")
                 if info and info.get("compare_url"):
                     await _mission_notify(f"🔎 Revizuiește diff-ul: {info['compare_url']}")
@@ -3831,7 +4000,7 @@ async def _mission_run(mission_id: str) -> None:
                     _mission_wp_set(mission_id, idx, "pending")
                 elif answer == "skip":
                     _mission_wp_set(mission_id, idx, "done", detail=f"skip: {detail[:200]}")
-                    _mission_mark_and_commit(row["path"], idx, wp.title)
+                    _mission_mark_and_commit(effective_path, idx, wp.title, git_cwd=git_worktree_cwd)
                 else:
                     # abort explicit → failed; timeout (None) → paused (decizie ≠ risc)
                     _mission_wp_set(mission_id, idx, "failed", detail=detail[:400])
@@ -3850,6 +4019,10 @@ async def _mission_run(mission_id: str) -> None:
         if _active_mission_id == mission_id:
             _active_mission_id = None
         _mission_caffeinate_stop()
+        # WP-SD: worktree curățat la succes; păstrat la eșec pentru autopsie; neatins la
+        # pauză (rate-limit sau !mission pause) — misiunea îl reia la resume.
+        if git_worktree_cwd is not None and final in ("done", "failed"):
+            _mission_cleanup_worktree(slug, keep=(final == "failed"))
 
 
 async def _mission_notify(text: str) -> None:
@@ -4764,6 +4937,38 @@ async def _handle_briefing_command() -> StreamingResponse:
         logger.error(f"[Briefing] `!briefing` eșuat: {e}")
         text = "⚠️ Nu am putut genera briefingul acum."
     return _instant_sse(text)
+
+
+async def _handle_deploy_command() -> StreamingResponse:
+    """`!deploy` (WP-SD): pasul explicit de livrare după ce Stefan a mers PR-ul unei
+    misiuni pe repo-ul Kage din GitHub mobile — arată câte commit-uri noi sunt pe
+    checkout-ul viu și trimite cardul de confirmare (pull + restart e DOAR pe buton,
+    nu automat aici)."""
+    try:
+        subprocess.run(["git", "-C", str(PROJECT_ROOT), "fetch"],
+                       capture_output=True, text=True, timeout=30)
+        branch = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True, text=True, timeout=10).stdout.strip() or "?"
+        behind = subprocess.run(
+            ["git", "-C", str(PROJECT_ROOT), "rev-list", "--count", f"HEAD..@{{u}}"],
+            capture_output=True, text=True, timeout=10)
+        n_behind = int(behind.stdout.strip()) if behind.returncode == 0 and behind.stdout.strip().isdigit() else None
+    except Exception as e:
+        return _instant_sse(f"⚠️ Verificarea git a eșuat: {e}")
+    if n_behind == 0:
+        return _instant_sse(f"✅ <code>{branch}</code> e deja la zi cu remote-ul — nimic de tras.")
+    detail = f"{n_behind} commit-uri noi" if n_behind is not None else "commit-uri noi pe remote"
+    asyncio.create_task(_send_deploy_card(branch, detail))
+    return _instant_sse(f"🔄 {detail} pe <code>{branch}</code>. Îți trimit cardul de confirmare pe Telegram.")
+
+
+async def _send_deploy_card(branch: str, detail: str) -> None:
+    if _tg_gateway is not None:
+        try:
+            await _tg_gateway.send_deploy_card(branch, detail)
+        except Exception as e:
+            logger.warning(f"[deploy] card eșuat: {e}")
 
 
 def _set_job_status(jhash: str, status: str) -> Optional[dict]:
@@ -5713,6 +5918,7 @@ def _help_response() -> StreamingResponse:
         "  `!briefing` → Briefing zilnic acum (joburi, buget, taskuri, vault)",
         "  `!mission new <direcție>` → Kage redactează un plan și ți-l trimite pe Telegram spre aprobare (WP12)",
         "  `!mission start <slug>` → Rulează o misiune autonom (WP11); `revise`/`status`/`pause`/`resume`/`stop`",
+        "  `!deploy`   → (WP-SD) verifică commit-uri noi pe checkout-ul viu, card de confirmare pentru pull + restart",
         "  `!sleep`    → Pune Mac-ul în sleep (dezactivează anti-sleep)",
         "  `!status`   → Snapshot instant (budget, cache, servicii)",
         "  `!stop`     → Kill switch: oprește toți agenții + pauzează scheduler-ul",

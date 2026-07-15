@@ -97,8 +97,11 @@
   "memory_dedup_threshold": 0.95,
   "memory_relevance_threshold": 0.70,
 
-  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis.",
+  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis. WP-SD: dacă lista e ACTIVĂ, risk_hook.py extinde-o automat cu kage_worktrees_dir (worktree-urile de misiune sunt checkout-uri ale aceluiași repo Kage) — nu trebuie adăugat manual.",
   "allowed_task_roots": [],
+
+  "_comment_worktrees": "WP-SD: misiunile care țintesc repo-ul Kage însuși (nu alt proiect) rulează izolat aici, nu pe checkout-ul viu — vezi _mission_ensure_worktree. Implicit ~/.kage-worktrees dacă lipsește.",
+  "kage_worktrees_dir": "~/.kage-worktrees",
 
   "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) cu rotație. Trigger manual: POST /admin/backup.",
   "backup_dir": "~/Documents/MyVault/backups/kage",

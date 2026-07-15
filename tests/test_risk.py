@@ -13,6 +13,29 @@ import sys
 import risk_hook
 
 
+# ── WP-SD: extinderea allowed_task_roots cu worktree-urile de misiune ─────────
+
+def test_extend_roots_noop_when_confinement_disabled():
+    # roots gol = confinement dezactivat — NU trebuie activat doar ca să încapă worktree-ul.
+    assert risk_hook._extend_roots_with_worktrees([], "/home/x/.kage-worktrees") == []
+
+
+def test_extend_roots_appends_when_active():
+    out = risk_hook._extend_roots_with_worktrees(["/a", "/b"], "/home/x/.kage-worktrees")
+    assert out == ["/a", "/b", "/home/x/.kage-worktrees"]
+
+
+def test_extend_roots_no_duplicate_if_already_present():
+    out = risk_hook._extend_roots_with_worktrees(["/a", "/home/x/.kage-worktrees"], "/home/x/.kage-worktrees")
+    assert out == ["/a", "/home/x/.kage-worktrees"]
+
+
+def test_path_in_allowed_roots_covers_worktree_subpath():
+    roots = risk_hook._extend_roots_with_worktrees(["/a"], "/home/x/.kage-worktrees")
+    assert risk_hook._path_in_allowed_roots("/home/x/.kage-worktrees/some-slug/file.py", roots)
+    assert not risk_hook._path_in_allowed_roots("/etc/passwd", roots)
+
+
 # ── evaluate_risk: pattern cleanup + axa 2 ────────────────────────────────────
 
 def _lvl(cmd, um=""):
