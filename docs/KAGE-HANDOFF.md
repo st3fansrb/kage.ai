@@ -401,7 +401,8 @@ WP-PG(PostgreSQL) → WP-ETL(pipeline analytics + T3 point-in-time lineage) →
 WP-AF(Airflow batch) → WP13(advisor pe Qwen local + HITL v2) →
 WP-AL(agentic loop: replan + steering) → WP-G2(izolare, acum dual-target: Docker local +
 GCP Cloud Run) → G1-minim(KageBench redus, regression gate) → WP10(dashboard + G5
-observabilitate — consumă mart-urile din WP-ETL) → #6(memorie v2) → #12
+observabilitate — consumă mart-urile din WP-ETL) → **Kage Terminal** (desktop macOS + DMG,
+opțional, numai după ce UI-ul și startup-ul sunt stabile) → #6(memorie v2) → #12
 (skills) → #9(tools locale T2) → WP-T T2(sports) → T3-Quant(Manifold) → T4(forex) → evaluare
 NDX → #14(voice push-to-talk) → RAG(înainte de ian. 2027) → audit modele.**
 
@@ -1750,6 +1751,36 @@ gap-uri de paritate care blocau ștergerea au fost portate în Mission Control �
 
 Config nou: `mission_control_port` în `kage_config.json` (default 3001). UI-ul web al proiectului
 e acum exclusiv `frontend/` (Next.js).
+
+### Kage Terminal — aplicație desktop macOS + DMG · idee Stefan (15.07.2026) · după WP10
+
+**Scop:** Kage se livrează și ca `Kage.app` într-un DMG, cu fereastră desktop macOS și icon
+propriu. Nu este o rescriere în C++/Qt: Mission Control rămâne UI-ul existent, iar nucleul
+FastAPI/self-hosted rămâne local. Terminalul este stratul de produs care pornește, supraveghează
+și oprește robust serviciile existente.
+
+**Arhitectură țintă:** shell Tauri/macOS WebView → Mission Control împachetat → sidecar FastAPI
+pe loopback. App-ul alege un port local, așteaptă `/health` înainte să afișeze UI-ul, păstrează
+logurile/configul în `~/Library/Application Support/Kage` și oprește procesele copil la Quit.
+Secretele rămân în Keychain/config local, niciodată în bundle. UI-ul Next.js nu mai depinde de
+`npm run start` în instalația utilizatorului; se livrează compilat.
+
+**Constrângeri explicite:** Ollama și modelele locale (mai mulți GB), Claude CLI și eventualele
+unelte media rămân dependențe detectate la prima pornire, cu diagnostic și setup explicit — nu
+se pretinde un „single binary" fals. Nu se copiază cod din FinceptTerminal; acesta e referință
+de produs/UX, nu bază tehnică sau dependență.
+
+**Pachete:**
+
+1. POC `Kage.app`: lifecycle local (start, readiness, logs, Quit) + Mission Control într-o
+   fereastră WebView; smoke test pentru pornire repetată și port ocupat.
+2. Release DMG: bundle Python/frontend, configurare first-run, health diagnostics, icon,
+   versionare și update manual. Semnare/notarizare înainte de distribuție în afara Mac-ului
+   personal.
+
+**Acceptare:** DMG drag-and-drop → `Kage.app` pornește fără Terminal; Mission Control apare
+doar după health check; Quit nu lasă procese Kage orfane; lipsa Ollama/model/CLI produce un
+mesaj acționabil, nu un crash; `start_all.sh` rămâne cale de dezvoltare suportată.
 
 ### Restul (ordinea de aici e ÎNLOCUITĂ de „Reordonare completă 09.07.2026" din capul §5 — #7 e acum PRIMUL item; specurile rămân valabile)
 
