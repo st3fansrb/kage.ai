@@ -109,7 +109,7 @@ def test_card_buttons_short_nontrading():
     a = vi.Analysis(category="tech", verdict="valoros")
     card = vi.build_card(vi.ExtractResult(url="u", title="T", duration_s=60), a)
     actions = [b["action"] for b in card["buttons"]]
-    assert actions == ["save", "deep", "ignore"]       # fără hypothesis, fără visual (clip scurt)
+    assert actions == ["save", "visual", "deep", "ignore"]
 
 
 def test_card_buttons_trading_long_with_hypothesis():
@@ -321,9 +321,57 @@ def test_endpoint_ignore_is_idempotent(_client):
 
 
 def test_endpoint_deep_needs_budget(_client):
-    # Populează o analiză, apoi cere „deep" → mesaj onest că necesită #7.
+    # Fără activarea plafonului, niciun apel cloud nu pleacă.
     vid = orchestrator._video_store("https://youtu.be/x",
                                     vi.ExtractResult(url="u"), vi.Analysis())
     r = _client.post(f"/video/deep/{vid}")
-    assert r.json()["ok"] is False and "#7" in r.json()["error"]
+    assert r.json()["ok"] is False and "plafon" in r.json()["error"]
+    orchestrator._VIDEO_ANALYSES.pop(vid, None)
+
+
+def test_visual_frames_go_to_openrouter_as_base64_and_cost_is_recorded(monkeypatch):
+    monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (True, ""))
+    recorded = []
+    monkeypatch.setattr(orchestrator, "_video_record_cloud_cost", lambda *args: recorded.append(args))
+    calls = []
+
+    async def cloud(messages, model):
+        calls.append((messages, model))
+        return "un grafic BTC cu RSI"
+
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", cloud)
+    notes = asyncio.run(orchestrator._video_describe_frames([b"PNG-BYTES"]))
+    image = calls[0][0][1]["content"][1]["image_url"]["url"]
+    assert image.startswith("data:image/png;base64,")
+    assert "cadru 1" in notes.lower()
+    assert calls[0][1] == orchestrator.VIDEO_VISUAL_MODEL
+    assert recorded == [(orchestrator.VIDEO_VISUAL_MODEL, orchestrator.VIDEO_VISUAL_EST_USD_PER_FRAME, "video_visual")]
+
+
+def test_visual_budget_blocked_does_not_call_openrouter(monkeypatch):
+    monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (False, "disabled"))
+
+    async def forbidden(*args):
+        raise AssertionError("OpenRouter nu trebuie apelat cu bugetul blocat")
+
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", forbidden)
+    with pytest.raises(RuntimeError, match="plafon"):
+        asyncio.run(orchestrator._video_describe_frames([b"PNG-BYTES"]))
+
+
+def test_endpoint_deep_uses_t5_via_injected_openrouter(monkeypatch, _client):
+    vid = orchestrator._video_store("https://youtu.be/x", vi.ExtractResult(url="u", transcript="date"), vi.Analysis(category="tech"))
+    monkeypatch.setattr(orchestrator, "_video_budget_allows", lambda cost: (True, ""))
+    monkeypatch.setattr(orchestrator, "_video_record_cloud_cost", lambda *args: None)
+    models = []
+
+    async def cloud(messages, model):
+        models.append(model)
+        assert "analiză ADÂNCĂ".lower() in messages[-1]["content"].lower()
+        return json.dumps({"rezumat": "analiză mai riguroasă", "verdict": "de_testat"})
+
+    monkeypatch.setattr(orchestrator, "_video_openrouter_chat", cloud)
+    r = _client.post(f"/video/deep/{vid}")
+    assert r.status_code == 200 and r.json()["ok"] is True
+    assert models == [orchestrator.VIDEO_DEEP_MODEL]
     orchestrator._VIDEO_ANALYSES.pop(vid, None)

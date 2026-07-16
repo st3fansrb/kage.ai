@@ -186,13 +186,20 @@
     "language": "auto"
   },
 
-  "_comment_video_intel": "WP-V: analiza sceptică a clipurilor trimise pe Telegram. Trimiți un link (YouTube/TikTok/Instagram/X/…) → Kage extrage conținutul (subtitrările existente ÎNTÂI = instant+gratis; fără ele → doar audio → Whisper local WP6) → clasifică (trading/tech/carte/lecție/decizie) → analiză sceptică pe T2 local (cost 0) → card de verdict cu butoane (💾 vault, 🔬 → ipoteză quant lab la trading, 🖼 vizual, 🔎 adânc, 🗑). Fluxul implicit = ZERO apeluri cloud. Necesită `yt-dlp` (brew/pip) + ffmpeg; Whisper (WP6) e precondiție pentru clipurile fără subtitrări. `max_duration_s` = plafon peste care nu se mai transcrie (un podcast de 3h nu blochează). Pasul vizual plătit (OCR pe keyframes) trece prin plafonul #7 — se cablează în slice 2.",
+  "_comment_video_intel": "WP-V: fluxul normal (subtitrări/Whisper/T2) costă 0. 🖼 trimite PNG-uri base64 prin LiteLLM către T3/Haiku, iar 🔎 reanalizează prin T5/Sonnet. Ambele verifică fail-closed plafonul EUR şi înregistrează costul estimat în trading.db; cu api_budget.enabled=false sunt refuzate. Gemini nu este folosit.",
   "video_intel": {
     "enabled": true,
     "ytdlp_bin": "yt-dlp",
     "max_duration_s": 1800,
     "analysis_timeout_s": 300,
-    "visual_auto_max_s": 300
+    "_comment_openrouter": "Folosește video_intel.openrouter_api_key dacă vrei o cheie separată; altfel se reutilizează trading.openrouter_api_key. Nu necesită LiteLLM local.",
+    "openrouter_api_key": "",
+    "openrouter_base_url": "https://openrouter.ai/api/v1",
+    "visual_model": "qwen/qwen3-vl-30b-a3b-instruct",
+    "deep_model": "anthropic/claude-sonnet-4-6",
+    "visual_max_frames": 20,
+    "visual_est_usd_per_frame": 0.002,
+    "deep_est_usd": 0.03
   },
 
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup. Tier 4 (was Gemini CLI) e retras (WP-RMG, 13.07.2026) — nu mai e configurabil aici, rămâne doar etichetă moartă în cod pentru rânduri istorice din DB.",
