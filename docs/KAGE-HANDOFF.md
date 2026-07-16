@@ -381,9 +381,13 @@ Raționament:
 - ~~Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`~~
   ✅ **T1-exec livrat** (15.07.2026, Codex CX1, PR #36): daemon paper-only + heartbeat/equity
   în `trading.db` + `SampleStrategy_example.py` cu `bias_allows` + scripturi start/stop +
-  `docs/FREQTRADE-DRY-RUN.md`. Pas manual rămas (Stefan): copiază strategia example →
-  fișierul gitignored și pornește daemonul (`scripts/start_freqtrade_dryrun.sh`) — ceasul
-  celor ~3 luni de paper pornește abia atunci.
+  `docs/FREQTRADE-DRY-RUN.md`. **Ceasul de paper PORNIT: 16.07.2026** (daemonul rulează cu
+  strategia cu gardă; două capcane prinse la prima pornire reală, ambele reparate: scriptul
+  NU suprascrie o strategie stale din slice 2 fără `bias_allows` — verifică
+  `grep bias_allows trading/ft_userdata/strategies/SampleStrategy.py`; și subprocess-ul
+  freqtrade avea nevoie de PYTHONPATH pentru importul `trading.*`). Daemonul NU e persistent
+  prin launchd în felia asta — după reboot se repornește manual; supravegherea kill-switch
+  intră odată cu `trading.enabled=true`.
 - ~~`.venv-py39` — de șters (3.12 rulează stabil din 06.07)~~ ✅ șters la #7 (12.07.2026).
 - Fallback-ul LiteLLM→CLI încă pe subprocess (WP9, cale rară) → oportunist, nu blochează.
 - ✅ WP6 voice: whisper-cpp + model GGML (`large-v3-turbo`, în `.models/`) **instalate și

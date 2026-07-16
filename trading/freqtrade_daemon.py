@@ -144,7 +144,15 @@ class FreqtradeDryRunDaemon:
         try:
             for sig in (signal.SIGTERM, signal.SIGINT):
                 previous_handlers[sig] = signal.signal(sig, self._request_stop)
-            proc = popen(cmd, cwd=str(PROJECT_ROOT), stdout=log_file, stderr=subprocess.STDOUT)
+            # Strategia (SampleStrategy) importă `trading.daily_context.bias_allows`;
+            # subprocess-ul `freqtrade` NU are cwd-ul pe sys.path (sys.path[0] = dir-ul
+            # binarului), deci fără PYTHONPATH importul pică cu „Impossible to load
+            # Strategy" — prins la prima pornire reală T1-exec (16.07.2026).
+            env = dict(os.environ)
+            env["PYTHONPATH"] = str(PROJECT_ROOT) + (
+                os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+            proc = popen(cmd, cwd=str(PROJECT_ROOT), stdout=log_file,
+                         stderr=subprocess.STDOUT, env=env)
             ledger.update_agent_status(AGENT_NAME, "running", pid=proc.pid, message="freqtrade dry-run")
             while proc.poll() is None and not self._stop_requested:
                 self.sync_trade_rows(ledger, self._read_freqtrade_rows(config))
