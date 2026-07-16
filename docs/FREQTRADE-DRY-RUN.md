@@ -14,6 +14,12 @@ La prima pornire, strategia tracked `trading/SampleStrategy_example.py` este cop
 în `trading/ft_userdata/strategies/SampleStrategy.py` (gitignored). Strategia aplică
 `bias_allows("long")` înainte de orice intrare.
 
+> **Capcană (prinsă 16.07.2026):** scriptul copiază exemplul DOAR dacă fișierul lipsește.
+> Dacă ai o strategie stale de la o felie anterioară (ex. „hello world"-ul din slice 2,
+> fără gardă), daemonul o va folosi pe aceea. Verifică după pornire:
+> `grep bias_allows trading/ft_userdata/strategies/SampleStrategy.py` — dacă nu apare,
+> șterge/înlocuiește fișierul cu exemplul și repornește.
+
 Logul este `.logs/freqtrade-dryrun.log`, iar PID-ul `.logs/freqtrade-dryrun.pid`.
 Heartbeat-ul, equity curve şi tranzacțiile oglindite din SQLite-ul dry-run Freqtrade se văd
 în `cache_db/trading.db`:

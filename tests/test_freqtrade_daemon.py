@@ -33,10 +33,16 @@ def test_daemon_smoke_starts_and_writes_heartbeat(tmp_path):
 
     # `python trade ...` ar esua; injectam un Popen controlat, pastrand verificarea de lifecycle.
     import subprocess
+    seen_env = {}
     def popen(_cmd, **kwargs):
+        seen_env.update(kwargs.get("env") or {})
         return subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.03)"], **kwargs)
 
     assert daemon.run(tmp_path / "daemon.log", popen=popen) == 0
+    # Strategia importă `trading.*` în subprocess-ul freqtrade → PYTHONPATH obligatoriu
+    # (fără el: „Impossible to load Strategy", prins la prima pornire reală).
+    from trading.freqtrade_daemon import PROJECT_ROOT
+    assert str(PROJECT_ROOT) in seen_env.get("PYTHONPATH", "")
     ledger = TradingLedger(ledger_path)
     status = ledger.get_agent_status(AGENT_NAME)[0]
     assert status["last_heartbeat"] and status["status"] == "stopped"
