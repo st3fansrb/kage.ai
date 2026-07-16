@@ -3750,21 +3750,27 @@ def _mission_ensure_worktree(slug: str) -> Optional[Path]:
     """WP-SD: pentru misiuni pe repo-ul Kage, creează/reutilizează un git worktree izolat
     — partajează `.git`-ul cu PROJECT_ROOT, dar NU comută checkout-ul viu; serviciile rulează
     neatinse pe branch-ul lor. Idempotent: o reluare (restart mid-misiune) găsește worktree-ul
-    deja creat și îl refolosește. Best-effort; None dacă eșuează (misiunea rămâne pe PROJECT_ROOT,
-    comportamentul de dinainte de WP-SD — mai sigur decât să o blocheze)."""
+    deja creat și îl refolosește. None = izolarea NU e disponibilă — apelantul (_mission_run)
+    oprește misiunea fail-closed, nu cade pe checkout-ul viu (Critical, review Codex 15.07)."""
     if not (PROJECT_ROOT / ".git").exists():
         return None
     branch = _mission_branch_name(slug)
     path = _mission_worktree_path(slug)
     if path.exists():
+        # Refolosim DOAR un worktree valid, pe branch-ul misiunii. Un director pe alt
+        # branch (intervenție manuală, dir reciclat) e refuzat — altfel commit-urile
+        # misiunii ar ajunge pe branch-ul greșit (High, review Codex 15.07).
         try:
             cur = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=str(path),
                                  capture_output=True, text=True, timeout=15).stdout.strip()
-            if cur != branch:
-                logger.warning(f"[mission-sd] worktree {path} pe branch neașteptat {cur!r}"
-                              f" (așteptat {branch!r}) — îl refolosesc oricum")
         except Exception as e:
-            logger.warning(f"[mission-sd] verificare worktree eșuată: {e}")
+            logger.error(f"[mission-sd] verificare worktree {path} eșuată ({e}) — refuz refolosirea")
+            return None
+        if cur != branch:
+            logger.error(f"[mission-sd] worktree {path} pe branch neașteptat {cur!r} "
+                         f"(așteptat {branch!r}) — REFUZAT. Șterge/mută directorul sau "
+                         f"readu-l pe {branch!r}, apoi reia misiunea.")
+            return None
         return path
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3985,13 +3991,20 @@ async def _mission_run(mission_id: str) -> None:
                 f"🌿 Misiune izolată — lucrez în worktree separat, branch "
                 f"<code>{_mission_branch_name(slug)}</code>. Serviciile live rămân neatinse.")
         else:
-            # Best-effort: worktree-ul a eșuat (ex. fără git) — cade pe comportamentul
-            # dinainte de WP-SD, mai bine decât să blocheze misiunea.
-            effective_cwd = original_cwd
-            effective_path = (row0 or {}).get("path", "")
-            branch = _mission_git_ensure_branch(slug)
-            if branch:
-                await _mission_notify(f"🌿 Lucrez pe branch <code>{branch}</code>.")
+            # Fail-closed (Critical, review Codex 15.07.2026): fără worktree NU rulăm
+            # pe checkout-ul viu — pytest-ul și edit-urile misiunii ar concura cu
+            # serviciile care rulează chiar din el. Misiunea devine `paused`: repari
+            # cauza (log [mission-sd]) și reiei cu `!mission resume`.
+            _mission_update(mission_id, status="paused")
+            await _mission_notify(
+                "⛔ Misiune oprită fail-closed: nu pot crea/refolosi worktree-ul izolat "
+                f"(<code>{_mission_worktree_path(slug)}</code>; cauza în "
+                ".logs/orchestrator.log, tag [mission-sd]). NU rulez pe checkout-ul viu. "
+                "Repară cauza și reia cu <code>!mission resume</code>.")
+            _mission_caffeinate_stop()
+            if _active_mission_id == mission_id:
+                _active_mission_id = None
+            return
     else:
         effective_cwd = original_cwd
         effective_path = (row0 or {}).get("path", "")

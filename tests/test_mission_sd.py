@@ -88,6 +88,23 @@ def test_ensure_worktree_none_without_git_repo(tmp_path, monkeypatch):
     assert orchestrator._mission_ensure_worktree("x") is None
 
 
+def test_ensure_worktree_refuses_wrong_branch(gitrepo):
+    """High (review Codex 15.07): un director existent pe ALT branch e refuzat, nu
+    refolosit — altfel commit-urile misiunii ar ajunge pe branch-ul greșit."""
+    path = orchestrator._mission_ensure_worktree("wpsd-mismatch")
+    assert path is not None
+    _git(path, "checkout", "-q", "-b", "alt-branch")     # intervenție manuală
+    assert orchestrator._mission_ensure_worktree("wpsd-mismatch") is None
+
+
+def test_ensure_worktree_refuses_non_worktree_dir(gitrepo):
+    """Un director rezidual care nu e worktree git valid e refuzat (rev-parse pică)."""
+    path = orchestrator._mission_worktree_path("wpsd-junk")
+    path.mkdir(parents=True)
+    (path / "junk.txt").write_text("nu e worktree", encoding="utf-8")
+    assert orchestrator._mission_ensure_worktree("wpsd-junk") is None
+
+
 # ── _mission_seed_worktree_path ─────────────────────────────────────────────────
 
 def test_seed_worktree_copies_missing_mission_md(gitrepo):
@@ -250,6 +267,37 @@ async def test_kage_self_mission_isolates_in_worktree_and_never_touches_live_bra
 
     # worktree-ul (directorul de lucru) curățat la succes — spec: păstrat doar la eșec.
     assert not Path(worktree_cwd).exists()
+
+
+@pytest.mark.asyncio
+async def test_kage_self_mission_fails_closed_without_worktree(mission_env, gitrepo, monkeypatch):
+    """Critical (review Codex 15.07): dacă worktree-ul nu poate fi creat/refolosit,
+    misiunea pe repo-ul Kage se OPREȘTE (paused + alertă) — nu cade pe checkout-ul viu."""
+    orch = mission_env
+    slug = _write_mission(gitrepo, "self-noiso", _ONE_WP)
+    mid, err = orch._mission_create(slug, cwd=None)
+    assert err is None and mid
+    runner = _FakeRunner([[_result_ev()]])
+    monkeypatch.setattr(orch, "_agent_runner", runner)
+    monkeypatch.setattr(orch, "_mission_ensure_worktree", lambda s: None)
+    ensured = []
+    monkeypatch.setattr(orch, "_mission_git_ensure_branch",
+                        lambda s: ensured.append(s))
+    notes = []
+
+    async def _note(t):
+        notes.append(t)
+    monkeypatch.setattr(orch, "_mission_notify", _note)
+
+    live_head_before = _git(gitrepo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+    await orch._mission_run(mid)
+
+    assert orch._mission_row(mid)["status"] == "paused"        # fail-closed, reluabil
+    assert runner.calls == []                                   # agentul NU a pornit
+    assert ensured == []                                        # checkout-ul viu neatins
+    assert _git(gitrepo, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() == live_head_before
+    assert orch._active_mission_id is None                      # slotul de misiune eliberat
+    assert notes and "fail-closed" in notes[0]
 
 
 @pytest.mark.asyncio
