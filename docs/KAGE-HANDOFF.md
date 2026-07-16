@@ -378,8 +378,12 @@ Raționament:
 
 - `_briefing_missions()` întoarce încă `None` (promis „după WP11") → cablare la tabelele
   `missions`/`mission_wps` în **WP12**.
-- Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`
-  (fișier gitignored) → **T1-exec**.
+- ~~Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`~~
+  ✅ **T1-exec livrat** (15.07.2026, Codex CX1, PR #36): daemon paper-only + heartbeat/equity
+  în `trading.db` + `SampleStrategy_example.py` cu `bias_allows` + scripturi start/stop +
+  `docs/FREQTRADE-DRY-RUN.md`. Pas manual rămas (Stefan): copiază strategia example →
+  fișierul gitignored și pornește daemonul (`scripts/start_freqtrade_dryrun.sh`) — ceasul
+  celor ~3 luni de paper pornește abia atunci.
 - ~~`.venv-py39` — de șters (3.12 rulează stabil din 06.07)~~ ✅ șters la #7 (12.07.2026).
 - Fallback-ul LiteLLM→CLI încă pe subprocess (WP9, cale rară) → oportunist, nu blochează.
 - ✅ WP6 voice: whisper-cpp + model GGML (`large-v3-turbo`, în `.models/`) **instalate și
@@ -1186,11 +1190,13 @@ keyframes pe `select='gt(scene,0.3)'`) inspirate din `github.com/martinopiaggi/s
 structura pattern-urilor `analyze_claims`/`extract_wisdom` din `github.com/danielmiessler/Fabric`
 rescrisă în română pentru schema noastră JSON (afirmație → dovezi → red flags → verdict).
 
-**⏳ Slice 2 (condiționat de #7 merge-uit):** pasul vizual PLĂTIT (OCR pe keyframes cu Gemini
-Flash-Lite prin OpenRouter) și analiza adâncă 🔎 T5. Ambele ating plafonul #7, care nu e încă
-în dev — până atunci: keyframes se extrag, dar descrierea vizuală plătită și T5 dau mesaj
-onest „se cablează în slice 2". Fallback-ul vizual pe T2 local (per cadru) rămâne tot pentru
-slice 2 (necesită verificarea suportului vision prin Ollama/LiteLLM). **Precondiții
+**✅ Slice 2 livrat (16.07.2026, Codex CX2, PR #37):** pasul vizual PLĂTIT = OCR/descriere
+per keyframe cu **Qwen3-VL prin OpenRouter** (PNG base64; nota din spec despre Gemini era
+pre-WP-RMG — alternativa OpenRouter aleasă de Codex, acceptată la review) + analiza adâncă
+🔎 pe Sonnet tot prin OpenRouter. Ambele fail-closed pe plafonul EUR (#7, livrat 12.07) cu
+costul estimat înregistrat în `trading.db`; auto-trigger vizual când transcriptul trădează
+conținut vizual („uite aici", „graficul"…). Cu `api_budget.enabled=false` (default) apelurile
+plătite sunt refuzate — activarea = decizia lui Stefan în config. **Precondiții
 rezolvate (13.07.2026):** yt-dlp instalat în `.venv` (cale absolută în config); ffmpeg +
 Whisper `large-v3-turbo` deja instalate; **gaura de PATH din `start_all.sh` reparată**
 (launchd pornea cu PATH minimal fără `/opt/homebrew/bin` → ffmpeg/whisper/yt-dlp/ollama
