@@ -186,7 +186,7 @@
     "language": "auto"
   },
 
-  "_comment_video_intel": "WP-V: fluxul normal (subtitrări/Whisper/T2) costă 0. 🖼 trimite PNG-uri base64 prin LiteLLM către T3/Haiku, iar 🔎 reanalizează prin T5/Sonnet. Ambele verifică fail-closed plafonul EUR şi înregistrează costul estimat în trading.db; cu api_budget.enabled=false sunt refuzate. Gemini nu este folosit.",
+  "_comment_video_intel": "WP-V: fluxul normal (subtitrări/Whisper/T2) costă 0. 🖼 trimite PNG-uri base64 prin OpenRouter la visual_model (Qwen3-VL), iar 🔎 reanalizează prin OpenRouter pe deep_model (Sonnet). Ambele verifică fail-closed plafonul EUR (#7) şi înregistrează costul estimat în trading.db; cu api_budget.enabled=false sunt refuzate. Gemini nu este folosit; LiteLLM nu e implicat în pasul vizual.",
   "video_intel": {
     "enabled": true,
     "ytdlp_bin": "yt-dlp",
