@@ -45,3 +45,18 @@ mediu cu config/cache temporare ori validează comanda înainte de execuție.
 | Worktree şters la succes, păstrat la eșec | `tests/test_mission_sd.py:121`–`131`, `257`–`274` | Acoperit. |
 | Restart mid-misiune | `_mission_resume_on_startup()` relansează starea `running`; seed-ul nu suprascrie progresul | Parțial: există teste pentru seed/reuse, nu un test end-to-end cu restart. |
 | Pytest/misiune nu atinge `kage_config.json` sau `cache_db/` live | Nu există izolare a subprocess-ului de verificare | Neacoperit: constatarea High de mai sus. |
+
+## Remediere (16.07.2026)
+
+- **Critical (fallback pe checkout-ul viu)** — ✅ reparat: `_mission_run` oprește misiunea
+  fail-closed (`paused` + alertă Telegram cu calea worktree-ului și pointer la log) când
+  `_mission_ensure_worktree` întoarce None; nu mai există nicio cale prin care o misiune
+  Kage-self să ruleze pe PROJECT_ROOT. Test: `test_kage_self_mission_fails_closed_without_worktree`.
+- **High (worktree pe branch greșit refolosit)** — ✅ reparat: `_mission_ensure_worktree`
+  REFUZĂ un director existent care nu e worktree git valid pe `mission/<slug>` (branch
+  diferit, director rezidual, rev-parse eșuat → None → fail-closed prin Critical-fix).
+  Teste: `test_ensure_worktree_refuses_wrong_branch`, `test_ensure_worktree_refuses_non_worktree_dir`.
+- **High (verificările misiunii fără barieră pe datele live)** — ⏳ DESCHIS: cere izolarea
+  subprocess-ului de verificare (config/cache temporare sau validarea comenzii). Se
+  adresează la WP-G2 (izolare reală) sau ca felie separată înainte de misiuni Kage-self
+  nesupravegheate; până atunci mitigarea e review-ul uman al `mission.md` la aprobare.
