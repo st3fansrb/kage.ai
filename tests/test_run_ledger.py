@@ -4,7 +4,8 @@ Acoperă: schema + helperii _run_start/_run_event/_run_update/_run_end, deducere
 persistența aprobărilor de risc (supraviețuire restart), endpoint-ul /api/runs, fix-ul D9
 (cache hit salvat în SQLite + stream disconnect-safe), și un run creat per chat real.
 
-Totul pe SQLite in-memory + monkeypatch; niciun apel real de rețea.
+WP-PG: runs/run_events trăiesc în Postgres (fixture `pg`, DB de test); messages +
+pending_approvals rămân pe SQLite in-memory. Niciun apel real de rețea.
 """
 import asyncio
 import json
@@ -14,16 +15,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 import orchestrator
+import pg_store
 
 
 @pytest.fixture
-def ledger_db(monkeypatch):
-    """DB in-memory cu toate tabelele WP8 + messages."""
+def ledger_db(pg, monkeypatch):
+    """runs/run_events → PG de test (via `pg`); messages + pending_approvals → SQLite."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("""CREATE TABLE messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT DEFAULT 'default',
         role TEXT, content TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
-    orchestrator._ensure_runs_table(conn)
     orchestrator._ensure_approvals_table(conn)
     conn.commit()
     monkeypatch.setattr(orchestrator, "_db_conn", conn)
@@ -42,12 +43,12 @@ def client(monkeypatch):
 def test_run_start_creates_row(ledger_db):
     rid = orchestrator._run_start("chat", session_id="s1", channel="ui", input_text="salut")
     assert rid
-    row = ledger_db.execute("SELECT kind, session_id, channel, input, status FROM runs WHERE id=?", (rid,)).fetchone()
+    row = pg_store.fetchone("SELECT kind, session_id, channel, input, status FROM runs WHERE id=%s", (rid,))
     assert row == ("chat", "s1", "ui", "salut", "running")
 
 
-def test_run_start_none_without_db(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_db_conn", None)
+def test_run_start_none_without_db():
+    # reset_global_state lasă pg_store neconfigurat → ledgerul degradează la no-op
     assert orchestrator._run_start("chat") is None
 
 
@@ -57,10 +58,10 @@ def test_run_event_and_update_and_end(ledger_db):
     orchestrator._run_update(rid, tier=3, model="haiku", cache_hit=1)
     orchestrator._run_end(rid, "done", duration_ms=42)
 
-    ev = ledger_db.execute("SELECT type, payload FROM run_events WHERE run_id=?", (rid,)).fetchone()
+    ev = pg_store.fetchone("SELECT type, payload FROM run_events WHERE run_id=%s", (rid,))
     assert ev[0] == "routing"
     assert json.loads(ev[1])["tier"] == 3
-    row = ledger_db.execute("SELECT tier, model, cache_hit, status, duration_ms, finished_at FROM runs WHERE id=?", (rid,)).fetchone()
+    row = pg_store.fetchone("SELECT tier, model, cache_hit, status, duration_ms, finished_at FROM runs WHERE id=%s", (rid,))
     assert row[0] == 3 and row[1] == "haiku" and row[2] == 1
     assert row[3] == "done" and row[4] == 42 and row[5] is not None
 
@@ -68,13 +69,13 @@ def test_run_event_and_update_and_end(ledger_db):
 def test_run_update_ignores_unknown_fields(ledger_db):
     rid = orchestrator._run_start("chat")
     orchestrator._run_update(rid, tier=2, bogus="DROP")  # bogus ignorat, nu crapă
-    assert ledger_db.execute("SELECT tier FROM runs WHERE id=?", (rid,)).fetchone()[0] == 2
+    assert pg_store.fetchone("SELECT tier FROM runs WHERE id=%s", (rid,))[0] == 2
 
 
 def test_run_event_payload_truncated(ledger_db):
     rid = orchestrator._run_start("chat")
     orchestrator._run_event(rid, "big", {"blob": "x" * 10000})
-    payload = ledger_db.execute("SELECT payload FROM run_events WHERE run_id=?", (rid,)).fetchone()[0]
+    payload = pg_store.fetchone("SELECT payload FROM run_events WHERE run_id=%s", (rid,))[0]
     assert len(payload) <= 4096
 
 
@@ -169,8 +170,8 @@ def test_cache_hit_saves_history_and_run(ledger_db, client, monkeypatch):
     # D9: perechea apare în istoricul SQLite
     msgs = ledger_db.execute("SELECT role, content FROM messages WHERE session_id='sess1' ORDER BY id").fetchall()
     assert msgs == [("user", "întrebare"), ("assistant", "Răspunsul din cache.")]
-    # Run complet cu cache_hit
-    run = ledger_db.execute("SELECT kind, cache_hit, status FROM runs ORDER BY created_at DESC LIMIT 1").fetchone()
+    # Run complet cu cache_hit (în Postgres, WP-PG)
+    run = pg_store.fetchone("SELECT kind, cache_hit, status FROM runs ORDER BY created_at DESC LIMIT 1")
     assert run == ("chat", 1, "done")
 
 

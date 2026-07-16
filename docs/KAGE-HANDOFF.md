@@ -1422,7 +1422,7 @@ misiune dublă) · paginare pe `/api/missions` și usage · rate limiter activ c
 depășită · suite de contract tests noi · raport de latență p50/p95 pe 2–3 endpoint-uri ·
 pytest verde.
 
-### WP-PG — Migrare stare partajată + telemetrie pe PostgreSQL · efort: un weekend · după R0 · a doua din pista data-stack (§4)
+### WP-PG — Migrare stare partajată + telemetrie pe PostgreSQL · efort: un weekend · după R0 · a doua din pista data-stack (§4) · ✅ IMPLEMENTAT (16.07.2026)
 
 **Scop:** azi coordonarea cross-proces (orchestrator, gateway, mission_runner, widget, jobs)
 merge prin fișiere cu lock (`status.json.lock`, `scheduled_tasks.json.lock`), iar istoricul,
@@ -1456,6 +1456,24 @@ adăuga dependență de Postgres: orchestratorul continuă să scrie `status.jso
 **Acceptare:** scrierile de telemetrie/stare merg în Postgres · lock-urile migrate șterse
 (sau documentate ca view derivat) · `pg_dump` în backupul nocturn · restart test: orchestrator
 pornit înaintea Postgres nu moare · pytest verde + teste pe stratul de acces.
+
+**Livrat (16.07.2026):** `pg_store.py` (conexiune sync + RLock, autocommit, retry cu
+deadline la startup + reconectare leneșă per operație, DDL, tranzacții explicite) · cele
+7 tabele rewire-uite în orchestrator (psycopg, SQL de mână, fără ORM; timestamps TEXT
+ISO-8601 — tipizarea strictă vine la WP-ETL în staging) · cutover idempotent la startup
+cu verificare de rânduri ÎN tranzacție — verificat live pe copia datelor reale (:4101,
+DB `kage_smoke`): usage 26/26, runs 14/14, run_events 68/68, missions 1/1, mission_wps
+3/3, job_runs 3/3, restart fără re-migrare, scheduler încarcă din PG · `status.json` =
+view derivat scris atomic (tmp+rename; widget-ul neatins) · FileLock eliminat complet ·
+`pg_dump` în arhiva nocturnă + restore documentat (RESTORE.md §2a) · Postgres pornit de
+`start_all.sh` · teste: fixture PG pe DB temporar per sesiune (specul „nu Postgres-ul de
+producție"), **507 verzi, +12 noi** (singurul fail = `test_push_to_bare_remote`,
+pre-existent) · pornirea cu PG mort verificată live (:4102 — servește degradat +
+notifică pe Telegram). Notă: „schema proiectată de Stefan, ghidat" din pasul 2 a fost
+înlocuită de decizia „pista de învățare v2" (§4, 15.07.2026) — fișa de interviu:
+`docs/fise-interviu/wp-pg-postgres.md`. **Cutover-ul de PRODUCȚIE = primul restart cu
+codul nou** (merge → restart anunțat): `postgresql@16` instalat + pornit, baza `kage`
+creată; sursele vechi (SQLite/JSON) rămân pe disc ca arhive, nu se șterg.
 
 ### WP-ETL — Pipeline de analytics peste telemetrie (+ point-in-time lineage) · efort: un weekend · după WP-PG · Codex proposal: T3 (acceptat, integrat, §4)
 

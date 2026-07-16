@@ -61,6 +61,23 @@ else
   port_up 4000 && echo "  ✓ LiteLLM pornit" || echo "  ✗ LiteLLM — eroare, vezi $LOGS/litellm.log"
 fi
 
+# ── PostgreSQL 16 :5432 (WP-PG) ───────────────────────────────────────────────
+# Stare partajată + telemetrie. Nativ prin Homebrew, NU Docker (regula de RAM din
+# WP-G2). Pornit ÎNAINTEA orchestratorului (care oricum are retry la startup —
+# launchd nu garantează ordinea la boot).
+PG_DATA="${PG_DATA:-/opt/homebrew/var/postgresql@16}"
+PG_CTL="/opt/homebrew/opt/postgresql@16/bin/pg_ctl"
+if port_up 5432; then
+  echo "  ✓ PostgreSQL     :5432"
+elif [[ -x "$PG_CTL" && -d "$PG_DATA" ]]; then
+  echo "  → Pornesc PostgreSQL 16..."
+  "$PG_CTL" -D "$PG_DATA" -l "$LOGS/postgres.log" start >/dev/null 2>&1
+  sleep 1
+  port_up 5432 && echo "  ✓ PostgreSQL pornit" || echo "  ✗ PostgreSQL — eroare, vezi $LOGS/postgres.log"
+else
+  echo "  ! PostgreSQL sărit (lipsă postgresql@16) — brew install postgresql@16"
+fi
+
 # ── Orchestrator :4001 ────────────────────────────────────────────────────────
 if port_up 4001; then
   echo "  ✓ Orchestrator   :4001"

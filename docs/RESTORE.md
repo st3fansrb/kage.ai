@@ -65,6 +65,23 @@ curl -s localhost:4001/health
 sqlite3 cache_db/chat_history.db 'SELECT COUNT(*) FROM messages;'
 ```
 
+## 2a. Restore Postgres (telemetrie + stare: usage, runs, missions, scheduled_tasks)
+
+Din WP-PG, arhiva conține și `kage.pgdump` (format custom `pg_dump`). Restore:
+
+```bash
+# 1. extrage dump-ul din arhivă
+tar -xzf cache_db-YYYYMMDD-HHMMSS.tar.gz -C /tmp kage.pgdump
+
+# 2. restaurează peste baza kage (recreează obiectele)
+/opt/homebrew/opt/postgresql@16/bin/pg_restore \
+  --clean --if-exists --no-owner -d kage /tmp/kage.pgdump
+```
+
+Pe o mașină nouă: `brew install postgresql@16`, pornește-l (`start_all.sh` o face),
+`createdb kage`, apoi comanda de mai sus. Fără dump, orchestratorul pornește oricum —
+schema se recreează goală la startup (`pg_store.ensure_schema`), pierzi doar istoricul.
+
 ## 2b. Restore config din arhivă (dezastru complet)
 
 Arhiva conține `kage_config.json` la rădăcină (token-uri, remote, chei). Restore-ul
