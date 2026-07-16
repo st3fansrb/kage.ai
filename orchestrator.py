@@ -27,7 +27,6 @@ import httpx
 import yaml
 import chromadb
 import sqlite3
-from filelock import FileLock
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
@@ -37,6 +36,7 @@ import telegram_gateway as _tg_module
 import video_intel as _vi
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
 import mission_runner as _mr
+import pg_store
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -79,8 +79,8 @@ VAULT_GIT_REMOTE = str(_cfg.get("vault_git_remote", "")).strip()
 CLAUDE_CLI   = _find_cli("claude")
 
 RISK_SETTINGS        = PROJECT_ROOT / "risk_settings.json"
+# STATUS_FILE = view derivat pentru widget (sursa de adevăr: Postgres, WP-PG).
 STATUS_FILE          = PROJECT_ROOT / "status.json"
-USAGE_LOG            = PROJECT_ROOT / "usage_log.jsonl"
 # Config unificat (WP1b): kage_config.json e sursa; ntfy_config.json rămâne doar
 # fallback legacy pentru instalări vechi.
 KAGE_CONFIG_PATH     = next(
@@ -97,6 +97,10 @@ ENABLE_SUMMARIZATION = _cfg.get("enable_summarization", False)
 MEMORY_TOP_K               = _cfg.get("memory_top_k", 5)
 MEMORY_DEDUP_THRESHOLD     = _cfg.get("memory_dedup_threshold", 0.95)
 MEMORY_RELEVANCE_THRESHOLD = _cfg.get("memory_relevance_threshold", 0.70)
+# WP-PG: stare partajată + telemetrie pe PostgreSQL. DSN gol = strat dezactivat
+# (funcțiile degradează la default-uri, ca vechiul `_db_conn is None`).
+PG_DSN               = str(_cfg.get("postgres_dsn", "dbname=kage")).strip()
+PG_STARTUP_RETRY_S   = float(_cfg.get("postgres_startup_retry_seconds", 30))
 
 # ── Workspace confinement (opțional, Faza 19) ─────────────────────────────────
 ALLOWED_TASK_ROOTS = [
@@ -795,9 +799,25 @@ def _parse_cron(cron_str: str) -> dict:
     return dict(zip(["minute", "hour", "day", "month", "day_of_week"], parts))
 
 
+def _scheduled_tasks_all() -> list[dict]:
+    """Taskurile programate din Postgres, în forma dict folosită de scheduler
+    (aceeași ca vechiul scheduled_tasks.json — apelanții nu văd diferența)."""
+    if not pg_store.configured():
+        return []
+    try:
+        rows = pg_store.fetchall(
+            "SELECT id, cron, message, tier_override, enabled FROM scheduled_tasks "
+            "ORDER BY created_at NULLS FIRST, id")
+    except Exception as e:
+        logger.warning(f"[schedule] citirea taskurilor a eșuat: {e}")
+        return []
+    return [{"id": r[0], "cron": r[1], "message": r[2],
+             "tier_override": r[3], "enabled": bool(r[4])} for r in rows]
+
+
 def _persist_new_task(cron_str: str, message: str, tier_override=None) -> dict:
     """Cale unică de creare a unui task programat (folosită de `!schedule` și de
-    endpoint-ul /api/schedule): validează cronul, persistă în scheduled_tasks.json
+    endpoint-ul /api/schedule): validează cronul, persistă în Postgres
     și înregistrează jobul în scheduler. Ridică ValueError la cron invalid."""
     cron_kwargs = _parse_cron(cron_str)  # ValueError → propagat la apelant
     new_task = {
@@ -807,16 +827,11 @@ def _persist_new_task(cron_str: str, message: str, tier_override=None) -> dict:
         "tier_override": tier_override,
         "enabled": True,
     }
-    lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
-    with lock.acquire(timeout=2):
-        tasks: list = []
-        if SCHEDULED_TASKS_FILE.exists():
-            try:
-                tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-            except Exception:
-                pass
-        tasks.append(new_task)
-        SCHEDULED_TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
+    pg_store.execute(
+        "INSERT INTO scheduled_tasks (id, cron, message, tier_override, enabled, created_at) "
+        "VALUES (%s, %s, %s, %s, TRUE, %s)",
+        (new_task["id"], cron_str, message, tier_override,
+         datetime.datetime.now().isoformat()))
     if _scheduler:
         _scheduler.add_job(
             _run_scheduled_task, "cron",
@@ -1026,26 +1041,24 @@ def _ensure_job_runs_table(conn) -> None:
 
 
 def _job_run_begin(job_id: str) -> Optional[int]:
-    if _db_conn is None:
+    if not pg_store.configured():
         return None
     try:
-        cur = _db_conn.execute(
-            "INSERT INTO job_runs (job_id, started_at) VALUES (?, ?)",
+        row = pg_store.fetchone(
+            "INSERT INTO job_runs (job_id, started_at) VALUES (%s, %s) RETURNING id",
             (job_id, datetime.datetime.now().isoformat()))
-        _db_conn.commit()
-        return cur.lastrowid
+        return row[0] if row else None
     except Exception as e:
         logger.debug(f"[watchdog] job_run_begin eșuat: {e}")
         return None
 
 
 def _job_run_end(rid: Optional[int], status: str) -> None:
-    if _db_conn is None or rid is None:
+    if not pg_store.configured() or rid is None:
         return
     try:
-        _db_conn.execute("UPDATE job_runs SET finished_at=?, status=? WHERE id=?",
+        pg_store.execute("UPDATE job_runs SET finished_at=%s, status=%s WHERE id=%s",
                          (datetime.datetime.now().isoformat(), status, rid))
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[watchdog] job_run_end eșuat: {e}")
 
@@ -1079,19 +1092,18 @@ def _recover_interrupted_jobs() -> None:
     """La startup: joburi programate care au ÎNCEPUT dar nu s-au terminat (proces ucis
     mid-run) → marchează `interrupted`, re-declanșează cele recuperabile + alertă Telegram.
     Rezolvă cazul din 09.07 (scan de 19:00 tăiat de un restart, pierdut tăcut până a doua zi)."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return
     try:
-        rows = _db_conn.execute(
-            "SELECT id, job_id, started_at FROM job_runs WHERE finished_at IS NULL").fetchall()
+        rows = pg_store.fetchall(
+            "SELECT id, job_id, started_at FROM job_runs WHERE finished_at IS NULL")
     except Exception:
         return
     recoverable = _recoverable_jobs()
     for rid, job_id, started in rows:
         try:
-            _db_conn.execute("UPDATE job_runs SET finished_at=?, status='interrupted' WHERE id=?",
+            pg_store.execute("UPDATE job_runs SET finished_at=%s, status='interrupted' WHERE id=%s",
                              (datetime.datetime.now().isoformat(), rid))
-            _db_conn.commit()
         except Exception:
             pass
         fn = recoverable.get(job_id)
@@ -1116,30 +1128,149 @@ async def _heartbeat_ping() -> None:
         logger.debug(f"[watchdog] heartbeat eșuat: {e}")
 
 
+# ── WP-PG: Postgres — conexiune la startup + migrare cutover ─────────────────
+# Ordinea contează: handlerele de startup rulează în ordinea înregistrării, iar
+# scheduler-ul (mai jos) citește scheduled_tasks din PG — deci PG se conectează primul.
+
+def _pg_migrate_table(sqlite_conn, table: str, columns: list[str]) -> tuple[int, int]:
+    """Copiază un tabel SQLite → PG dacă tabelul PG e gol (idempotent). Rulează în
+    tranzacție: verificarea numărului de rânduri e ÎN aceeași tranzacție cu insertul —
+    mismatch → rollback, nu date parțiale. Întoarce (rânduri_sursă, rânduri_migrate)."""
+    dst_count = pg_store.fetchone(f"SELECT COUNT(*) FROM {table}")[0]
+    if dst_count > 0:
+        return (-1, dst_count)  # deja migrat — nu re-copiem peste date vii
+    try:
+        rows = sqlite_conn.execute(
+            f"SELECT {', '.join(columns)} FROM {table}").fetchall()
+    except sqlite3.OperationalError:
+        return (0, 0)  # tabelul nu există în SQLite (instalare nouă)
+    if not rows:
+        return (0, 0)
+    placeholders = ", ".join(["%s"] * len(columns))
+    with pg_store.transaction() as conn:
+        for r in rows:
+            conn.execute(
+                f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})", r)
+        migrated = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        if migrated != len(rows):
+            raise RuntimeError(f"{table}: {migrated} migrate ≠ {len(rows)} sursă")
+    return (len(rows), migrated)
+
+
+# id-urile BIGSERIAL nu se copiază din SQLite (rowid-uri istorice fără sens referențial);
+# excepție run_events unde ordinea per run e dată de id → păstrăm ts ca ordine (ORDER BY id
+# la citire rămâne corect fiindcă insertul respectă ordinea din SQLite).
+_PG_MIGRATE_TABLES: list[tuple[str, list[str]]] = [
+    ("usage", ["ts", "tier", "model", "cloud", "agent", "duration_ms", "preview"]),
+    ("runs", ["id", "kind", "session_id", "channel", "input", "tier", "model",
+              "routing_method", "routing_confidence", "routing_neighbor", "cache_hit",
+              "budget_state", "status", "cost_usd", "duration_ms", "created_at",
+              "finished_at"]),
+    ("run_events", ["run_id", "ts", "type", "payload"]),
+    ("missions", ["id", "slug", "title", "path", "cwd", "status", "current_idx",
+                  "sdk_session_id", "created_at", "updated_at"]),
+    ("mission_wps", ["mission_id", "idx", "title", "status", "detail", "finished_at"]),
+    ("job_runs", ["job_id", "started_at", "finished_at", "status"]),
+]
+
+
+def _migrate_state_to_pg() -> None:
+    """Cutover-ul WP-PG (idempotent, la startup): SQLite → PG pentru tabelele de
+    telemetrie/stare + scheduled_tasks.json / status.json → tabelele lor. Sursele NU
+    se șterg — rămân arhive pe disc (patternul usage_log.jsonl de la WP5)."""
+    summary: list[str] = []
+    db_path = CACHE_DB_PATH / "chat_history.db"
+    if db_path.exists():
+        src = sqlite3.connect(str(db_path))
+        try:
+            for table, cols in _PG_MIGRATE_TABLES:
+                srcn, dstn = _pg_migrate_table(src, table, cols)
+                if srcn == -1:
+                    continue  # deja migrat
+                if srcn:
+                    summary.append(f"{table} {dstn}/{srcn}")
+        finally:
+            src.close()
+    # scheduled_tasks.json → tabel (doar dacă tabelul e gol)
+    if pg_store.fetchone("SELECT COUNT(*) FROM scheduled_tasks")[0] == 0 \
+            and SCHEDULED_TASKS_FILE.exists():
+        try:
+            tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            tasks = []
+        n = 0
+        for t in tasks if isinstance(tasks, list) else []:
+            if not t.get("id"):
+                continue
+            pg_store.execute(
+                "INSERT INTO scheduled_tasks (id, cron, message, tier_override, enabled) "
+                "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+                (t["id"], t.get("cron", ""), t.get("message", ""),
+                 t.get("tier_override"), bool(t.get("enabled", True))))
+            n += 1
+        if n:
+            summary.append(f"scheduled_tasks {n}")
+    # status.json → rândul unic din `status` (doar dacă lipsește)
+    if pg_store.fetchone("SELECT COUNT(*) FROM status")[0] == 0 and STATUS_FILE.exists():
+        try:
+            s = json.loads(STATUS_FILE.read_text(encoding="utf-8"))
+            pg_store.execute(
+                "INSERT INTO status (id, active, tier, model, task_preview, obsidian, "
+                "started_at, last_updated) VALUES (1, %s, %s, %s, %s, %s, %s, %s)",
+                (bool(s.get("active")), s.get("tier"), s.get("model"),
+                 s.get("task_preview"), bool(s.get("obsidian")),
+                 s.get("started_at"), s.get("last_updated")))
+            summary.append("status 1")
+        except Exception:
+            pass
+    if summary:
+        logger.info(f"[pg] cutover: {', '.join(summary)}")
+
+
+@app.on_event("startup")
+async def startup_postgres():
+    if not PG_DSN:
+        logger.warning("[pg] postgres_dsn gol — stratul PG dezactivat")
+        return
+    pg_store.configure(PG_DSN)
+    # Retry cu deadline: launchd nu garantează ordinea de pornire — orchestratorul
+    # pornit înaintea Postgres așteaptă, nu moare (criteriu de acceptare WP-PG).
+    ok = await asyncio.to_thread(pg_store.connect_with_retry, PG_STARTUP_RETRY_S)
+    if not ok:
+        logger.error(f"[pg] Postgres indisponibil după {PG_STARTUP_RETRY_S:.0f}s — "
+                     "continui degradat; reconectare leneșă la prima operație")
+        _notify("⚠️ Postgres indisponibil",
+                "Kage a pornit fără Postgres — telemetria și taskurile programate "
+                "sunt degradate până revine.", priority="high")
+        return
+    try:
+        await asyncio.to_thread(pg_store.ensure_schema)
+        await asyncio.to_thread(_migrate_state_to_pg)
+        logger.info("[pg] Postgres conectat, schema ok")
+    except Exception as e:
+        logger.error(f"[pg] schema/migrare eșuată: {e}")
+
+
 @app.on_event("startup")
 async def startup_scheduler():
     global _scheduler
     try:
         _scheduler = AsyncIOScheduler()
         loaded = 0
-        lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
-        with lock.acquire(timeout=2):
-            if SCHEDULED_TASKS_FILE.exists():
-                tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-                for task in tasks:
-                    if not task.get("enabled", True):
-                        continue
-                    try:
-                        cron_kwargs = _parse_cron(task.get("cron", ""))
-                        _scheduler.add_job(
-                            _run_scheduled_task, "cron",
-                            id=task.get("id", uuid.uuid4().hex[:12]),
-                            kwargs={"task": task},
-                            **cron_kwargs,
-                        )
-                        loaded += 1
-                    except Exception as e:
-                        logger.warning(f"Task {task.get('id')} skip: {e}")
+        for task in _scheduled_tasks_all():
+            if not task.get("enabled", True):
+                continue
+            try:
+                cron_kwargs = _parse_cron(task.get("cron", ""))
+                _scheduler.add_job(
+                    _run_scheduled_task, "cron",
+                    id=task.get("id", uuid.uuid4().hex[:12]),
+                    kwargs={"task": task},
+                    **cron_kwargs,
+                )
+                loaded += 1
+            except Exception as e:
+                logger.warning(f"Task {task.get('id')} skip: {e}")
         _scheduler.add_job(_vault_git_commit_job, "cron", hour=3, minute=0, id="__vault_git_commit__")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
         _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
@@ -1282,21 +1413,15 @@ async def startup_cache():
         if "session_id" not in existing_cols:
             _db_conn.execute("ALTER TABLE messages ADD COLUMN session_id TEXT NOT NULL DEFAULT 'default'")
         _db_conn.execute("CREATE INDEX IF NOT EXISTS idx_session ON messages(session_id)")
-        # Usage log (WP5): mutat din usage_log.jsonl în SQLite ca să nu mai citim
-        # fișierul integral la fiecare poll de 10s al dashboard-ului.
-        _ensure_usage_table(_db_conn)
-        _backfill_usage_from_jsonl(_db_conn)
+        # WP-PG: usage / runs / run_events / missions / mission_wps / job_runs au
+        # migrat în Postgres (pg_store) — SQLite păstrează DOAR chat history +
+        # tabelele single-proces de mai jos.
         # Job hunter (WP-J): tabel de dedup + stare per anunț.
         _ensure_jobs_table(_db_conn)
-        # Run ledger + aprobări persistente (WP8): rulează după celelalte tabele.
-        _ensure_runs_table(_db_conn)
+        # Aprobări persistente (WP8).
         _ensure_approvals_table(_db_conn)
         # WP9: mapare sesiuni pentru resume (Agent SDK).
         _ensure_agent_sessions_table(_db_conn)
-        # WP11: mission runner — stare care supraviețuiește restartului.
-        _ensure_missions_table(_db_conn)
-        # WP12: urmă a rulărilor de joburi programate (recuperare după restart).
-        _ensure_job_runs_table(_db_conn)
         # R0: chei de idempotență pentru endpoint-urile care pornesc muncă.
         _ensure_idempotency_table(_db_conn)
         _db_conn.commit()
@@ -1435,13 +1560,13 @@ async def health():
     today, tomorrow = _usage_day_bounds()
     requests_today = cloud_today = 0
     last_request = None
-    if _db_conn is not None:
+    if pg_store.configured():
         try:
-            row = _db_conn.execute(
+            row = pg_store.fetchone(
                 "SELECT COUNT(*), COALESCE(SUM(cloud), 0), MAX(ts) "
-                "FROM usage WHERE ts >= ? AND ts < ?",
+                "FROM usage WHERE ts >= %s AND ts < %s",
                 (today, tomorrow),
-            ).fetchone()
+            )
             requests_today, cloud_today, last_request = int(row[0]), int(row[1]), row[2]
         except Exception:
             pass
@@ -1517,21 +1642,21 @@ async def api_sessions():
 @app.get("/api/runs")
 async def api_runs(limit: int = 50):
     """Run ledger (WP8): ultimele run-uri, cele mai recente primele."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return []
     limit = max(1, min(int(limit), 500))
     try:
-        cur = _db_conn.execute(
+        rows = pg_store.fetchall(
             "SELECT id, kind, channel, tier, model, routing_method, routing_confidence, "
             "cache_hit, budget_state, status, cost_usd, duration_ms, created_at, finished_at, "
-            "substr(input, 1, 80) FROM runs ORDER BY created_at DESC LIMIT ?",
+            "substr(input, 1, 80) FROM runs ORDER BY created_at DESC LIMIT %s",
             (limit,),
         )
         cols = ["id", "kind", "channel", "tier", "model", "routing_method", "routing_confidence",
                 "cache_hit", "budget_state", "status", "cost_usd", "duration_ms", "created_at",
                 "finished_at", "input"]
         out = []
-        for row in cur.fetchall():
+        for row in rows:
             d = dict(zip(cols, row))
             d["cost_eur"] = _usd_to_eur(d.get("cost_usd"))
             out.append(d)
@@ -1544,17 +1669,20 @@ async def api_runs(limit: int = 50):
 @app.get("/api/runs/{run_id}")
 async def api_run_detail(run_id: str):
     """Un run + toate evenimentele lui (decision trace) — WP8."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return JSONResponse({"error": "db indisponibil"}, status_code=503)
+    rcols = ["id", "kind", "session_id", "channel", "input", "tier", "model",
+             "routing_method", "routing_confidence", "routing_neighbor", "cache_hit",
+             "budget_state", "status", "cost_usd", "duration_ms", "created_at", "finished_at"]
     try:
-        rrow = _db_conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        rrow = pg_store.fetchone(
+            f"SELECT {', '.join(rcols)} FROM runs WHERE id=%s", (run_id,))
         if rrow is None:
             return JSONResponse({"error": "run inexistent"}, status_code=404)
-        rcols = [d[0] for d in _db_conn.execute("SELECT * FROM runs WHERE id=? LIMIT 0", (run_id,)).description]
         run = dict(zip(rcols, rrow))
-        evs = _db_conn.execute(
-            "SELECT ts, type, payload FROM run_events WHERE run_id=? ORDER BY id", (run_id,)
-        ).fetchall()
+        evs = pg_store.fetchall(
+            "SELECT ts, type, payload FROM run_events WHERE run_id=%s ORDER BY id", (run_id,)
+        )
         run["events"] = [
             {"ts": ts, "type": t, "payload": (json.loads(p) if p else None)}
             for ts, t, p in evs
@@ -1620,18 +1748,18 @@ def _mc_approvals() -> list[dict]:
 
 def _mc_runs(limit: int = 40) -> list[dict]:
     """Ultimele run-uri din ledger, ca dict-uri (sursă pentru Agenți + Activity)."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return []
     try:
-        cur = _db_conn.execute(
+        rows = pg_store.fetchall(
             "SELECT id, kind, channel, tier, model, status, cost_usd, duration_ms, "
             "created_at, finished_at, substr(input, 1, 80) FROM runs "
-            "ORDER BY created_at DESC LIMIT ?",
+            "ORDER BY created_at DESC LIMIT %s",
             (max(1, min(int(limit), 200)),),
         )
         cols = ["id", "kind", "channel", "tier", "model", "status", "cost_usd",
                 "duration_ms", "created_at", "finished_at", "input"]
-        return [dict(zip(cols, r)) for r in cur.fetchall()]
+        return [dict(zip(cols, r)) for r in rows]
     except Exception:
         return []
 
@@ -1700,13 +1828,13 @@ def _mc_budget() -> dict:
     except Exception:
         max_cloud = 20
     spent = 0.0
-    if _db_conn is not None:
+    if pg_store.configured():
         try:
             today, tomorrow = _usage_day_bounds()
-            row = _db_conn.execute(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE created_at >= ? AND created_at < ?",
+            row = pg_store.fetchone(
+                "SELECT COALESCE(SUM(cost_usd), 0) FROM runs WHERE created_at >= %s AND created_at < %s",
                 (today, tomorrow),
-            ).fetchone()
+            )
             spent = float(row[0] or 0.0)
         except Exception:
             pass
@@ -1872,14 +2000,14 @@ async def deploy_confirm():
 @app.get("/v1/missions", response_model=List[MissionSummaryResponse])
 async def api_missions(limit: int = 50, offset: int = 0):
     """Lista misiunilor + progresul lor (WP11)."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return []
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
     try:
-        rows = _db_conn.execute(
+        rows = pg_store.fetchall(
             "SELECT id, slug, title, status, current_idx, created_at, updated_at "
-            "FROM missions ORDER BY created_at DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+            "FROM missions ORDER BY created_at DESC LIMIT %s OFFSET %s", (limit, offset))
         cols = ["id", "slug", "title", "status", "current_idx", "created_at", "updated_at"]
         out = []
         for row in rows:
@@ -1936,13 +2064,13 @@ async def api_usage(limit: int = 50, offset: int = 0):
     """Istoric usage paginat; endpoint aditiv pentru dashboard şi API clients."""
     limit = max(1, min(int(limit), 100))
     offset = max(0, int(offset))
-    if _db_conn is None:
+    if not pg_store.configured():
         return {"items": [], "limit": limit, "offset": offset, "total": 0}
     try:
-        total = int(_db_conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0])
-        rows = _db_conn.execute(
+        total = int(pg_store.fetchone("SELECT COUNT(*) FROM usage")[0])
+        rows = pg_store.fetchall(
             "SELECT id, ts, tier, model, cloud, agent, duration_ms, preview "
-            "FROM usage ORDER BY ts DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+            "FROM usage ORDER BY ts DESC LIMIT %s OFFSET %s", (limit, offset))
         items = [
             {"id": r[0], "ts": r[1], "tier": r[2], "model": r[3], "cloud": bool(r[4]),
              "agent": r[5], "duration_ms": r[6], "preview": r[7]}
@@ -1959,8 +2087,6 @@ async def schedule_endpoint(request: Request):
     body = await request.json()
     action = body.get("action", "list")
 
-    # "add" folosește calea unică _persist_new_task (are propriul lock) — în afara
-    # blocului de lock de mai jos ca să nu achiziționeze lock-ul de două ori.
     if action == "add":
         try:
             new_task = _persist_new_task(
@@ -1972,28 +2098,21 @@ async def schedule_endpoint(request: Request):
             return {"error": str(e)}
         return {"ok": True, "task": new_task}
 
-    lock = FileLock(str(SCHEDULED_TASKS_FILE) + ".lock")
-    with lock.acquire(timeout=2):
-        tasks: list = []
-        if SCHEDULED_TASKS_FILE.exists():
+    if action == "list":
+        return {"tasks": _scheduled_tasks_all()}
+
+    if action == "remove":
+        task_id = body.get("id")
+        try:
+            pg_store.execute("DELETE FROM scheduled_tasks WHERE id=%s", (task_id,))
+        except Exception as e:
+            return {"error": f"ștergerea a eșuat: {e}"}
+        if _scheduler:
             try:
-                tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
+                _scheduler.remove_job(task_id)
             except Exception:
                 pass
-
-        if action == "list":
-            return {"tasks": tasks}
-
-        if action == "remove":
-            task_id = body.get("id")
-            tasks = [t for t in tasks if t.get("id") != task_id]
-            SCHEDULED_TASKS_FILE.write_text(json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8")
-            if _scheduler:
-                try:
-                    _scheduler.remove_job(task_id)
-                except Exception:
-                    pass
-            return {"ok": True}
+        return {"ok": True}
 
     return {"error": "Unknown action. Use: list | add | remove"}
 
@@ -2543,8 +2662,14 @@ async def decide_tier(message: str) -> tuple[int, bool, float, str]:
     if "!retry" in msg_lower:
         last_tier = 1
         try:
-            status = json.loads(STATUS_FILE.read_text())
-            last_tier = int(status.get("tier", 1))
+            # WP-PG: sursa de adevăr e Postgres; status.json rămâne doar view
+            # derivat pentru widget (fallback dacă PG e indisponibil).
+            st = _status_row()
+            if st.get("tier") is not None:
+                last_tier = int(st["tier"])
+            else:
+                status = json.loads(STATUS_FILE.read_text())
+                last_tier = int(status.get("tier", 1))
         except Exception:
             pass
         next_tier = min(last_tier + 1, 6)
@@ -2883,34 +3008,6 @@ async def _route_intent(text: str) -> Optional[StreamingResponse]:
 # (routing, cache, memory, budget, result). Toate scrierile degradează grațios: dacă DB-ul
 # lipsește sau dă eroare, chat-ul continuă neafectat (ledgerul e best-effort, nu blochează).
 
-def _ensure_runs_table(conn) -> None:
-    """Creează tabelele `runs` + `run_events` (idempotent)."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS runs (
-            id TEXT PRIMARY KEY,
-            kind TEXT NOT NULL,
-            session_id TEXT, channel TEXT,
-            input TEXT, tier INTEGER, model TEXT,
-            routing_method TEXT, routing_confidence REAL, routing_neighbor TEXT,
-            cache_hit INTEGER DEFAULT 0, budget_state TEXT,
-            status TEXT NOT NULL,
-            cost_usd REAL, duration_ms INTEGER,
-            created_at TEXT NOT NULL, finished_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS run_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL,
-            ts TEXT NOT NULL,
-            type TEXT NOT NULL,
-            payload TEXT
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id)")
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_runs_created ON runs(created_at)")
-
-
 def _ensure_approvals_table(conn) -> None:
     """Aprobările de risc persistate (WP8 §3): supraviețuiesc restartului orchestratorului.
     `status`: pending | confirm | block. La restart, rândurile `pending` revin în UI, iar
@@ -2938,17 +3035,16 @@ def _channel_for(session_id: str) -> str:
 def _run_start(kind: str, *, session_id: Optional[str] = None, channel: Optional[str] = None,
                input_text: Optional[str] = None, status: str = "running") -> Optional[str]:
     """Deschide un run în ledger. Întoarce run_id (uuid4 hex) sau None dacă DB-ul lipsește."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return None
     run_id = uuid.uuid4().hex
     try:
-        _db_conn.execute(
+        pg_store.execute(
             "INSERT INTO runs (id, kind, session_id, channel, input, status, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (run_id, kind, session_id, channel, (input_text or "")[:2000], status,
              datetime.datetime.now().isoformat()),
         )
-        _db_conn.commit()
         return run_id
     except Exception as e:
         logger.debug(f"[run-ledger] _run_start eșuat: {e}")
@@ -2957,15 +3053,14 @@ def _run_start(kind: str, *, session_id: Optional[str] = None, channel: Optional
 
 def _run_event(run_id: Optional[str], ev_type: str, payload: Optional[dict] = None) -> None:
     """Adaugă un eveniment la un run. Payload JSON, trunchiat la ~4KB. Best-effort."""
-    if _db_conn is None or not run_id:
+    if not pg_store.configured() or not run_id:
         return
     try:
         p = json.dumps(payload, ensure_ascii=False)[:4096] if payload is not None else None
-        _db_conn.execute(
-            "INSERT INTO run_events (run_id, ts, type, payload) VALUES (?, ?, ?, ?)",
+        pg_store.execute(
+            "INSERT INTO run_events (run_id, ts, type, payload) VALUES (%s, %s, %s, %s)",
             (run_id, datetime.datetime.now().isoformat(), ev_type, p),
         )
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[run-ledger] _run_event eșuat: {e}")
 
@@ -2978,18 +3073,17 @@ _RUN_UPDATABLE = {
 
 def _run_update(run_id: Optional[str], **fields) -> None:
     """Setează câmpuri pe rândul run-ului (doar cele din _RUN_UPDATABLE). Best-effort."""
-    if _db_conn is None or not run_id or not fields:
+    if not pg_store.configured() or not run_id or not fields:
         return
     cols = [k for k in fields if k in _RUN_UPDATABLE]
     if not cols:
         return
     try:
-        assignments = ", ".join(f"{c}=?" for c in cols)
-        _db_conn.execute(
-            f"UPDATE runs SET {assignments} WHERE id=?",
+        assignments = ", ".join(f"{c}=%s" for c in cols)
+        pg_store.execute(
+            f"UPDATE runs SET {assignments} WHERE id=%s",
             (*[fields[c] for c in cols], run_id),
         )
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[run-ledger] _run_update eșuat: {e}")
 
@@ -2997,15 +3091,14 @@ def _run_update(run_id: Optional[str], **fields) -> None:
 def _run_end(run_id: Optional[str], status: str, *, cost_usd: Optional[float] = None,
              duration_ms: Optional[int] = None) -> None:
     """Închide un run: status final + finished_at (+ cost/durată opționale). Best-effort."""
-    if _db_conn is None or not run_id:
+    if not pg_store.configured() or not run_id:
         return
     try:
-        _db_conn.execute(
-            "UPDATE runs SET status=?, finished_at=?, cost_usd=COALESCE(?, cost_usd), "
-            "duration_ms=COALESCE(?, duration_ms) WHERE id=?",
+        pg_store.execute(
+            "UPDATE runs SET status=%s, finished_at=%s, cost_usd=COALESCE(%s, cost_usd), "
+            "duration_ms=COALESCE(%s, duration_ms) WHERE id=%s",
             (status, datetime.datetime.now().isoformat(), cost_usd, duration_ms, run_id),
         )
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[run-ledger] _run_end eșuat: {e}")
 
@@ -3229,32 +3322,13 @@ async def _mission_pick_model(prompt: str):
     return tier, MISSION_DEFAULT_MODEL
 
 
-def _ensure_missions_table(conn) -> None:
-    """Tabele `missions` + `mission_wps` (stare care supraviețuiește restartului)."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS missions (
-            id TEXT PRIMARY KEY, slug TEXT, title TEXT, path TEXT, cwd TEXT,
-            status TEXT NOT NULL, current_idx INTEGER DEFAULT 0,
-            sdk_session_id TEXT, created_at TEXT NOT NULL, updated_at TEXT
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS mission_wps (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, mission_id TEXT NOT NULL,
-            idx INTEGER NOT NULL, title TEXT, status TEXT NOT NULL DEFAULT 'pending',
-            detail TEXT, finished_at TEXT
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_mission_wps ON mission_wps(mission_id)")
-
-
 def _mission_row(mission_id: str) -> Optional[dict]:
-    if _db_conn is None or not mission_id:
+    if not pg_store.configured() or not mission_id:
         return None
     try:
-        r = _db_conn.execute(
+        r = pg_store.fetchone(
             "SELECT id, slug, title, path, cwd, status, current_idx, sdk_session_id "
-            "FROM missions WHERE id=?", (mission_id,)).fetchone()
+            "FROM missions WHERE id=%s", (mission_id,))
     except Exception:
         return None
     if not r:
@@ -3264,42 +3338,40 @@ def _mission_row(mission_id: str) -> Optional[dict]:
 
 
 def _mission_update(mission_id: str, **fields) -> None:
-    if _db_conn is None or not mission_id:
+    if not pg_store.configured() or not mission_id:
         return
     cols = [k for k in fields if k in _MISSION_UPDATABLE]
     if not cols:
         return
     try:
-        assignments = ", ".join(f"{c}=?" for c in cols) + ", updated_at=?"
-        _db_conn.execute(f"UPDATE missions SET {assignments} WHERE id=?",
+        assignments = ", ".join(f"{c}=%s" for c in cols) + ", updated_at=%s"
+        pg_store.execute(f"UPDATE missions SET {assignments} WHERE id=%s",
                          (*[fields[c] for c in cols], datetime.datetime.now().isoformat(), mission_id))
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[mission] update eșuat: {e}")
 
 
 def _mission_wp_set(mission_id: str, idx: int, status: str, detail: Optional[str] = None) -> None:
-    if _db_conn is None:
+    if not pg_store.configured():
         return
     try:
         fin = datetime.datetime.now().isoformat() if status in ("done", "failed") else None
-        _db_conn.execute(
-            "UPDATE mission_wps SET status=?, detail=COALESCE(?, detail), finished_at=? "
-            "WHERE mission_id=? AND idx=?",
+        pg_store.execute(
+            "UPDATE mission_wps SET status=%s, detail=COALESCE(%s, detail), finished_at=%s "
+            "WHERE mission_id=%s AND idx=%s",
             (status, detail, fin, mission_id, idx))
-        _db_conn.commit()
     except Exception as e:
         logger.debug(f"[mission] wp_set eșuat: {e}")
 
 
 def _mission_wps(mission_id: str) -> list:
-    if _db_conn is None:
+    if not pg_store.configured():
         return []
     try:
         return [{"idx": r[0], "title": r[1], "status": r[2], "detail": r[3]}
-                for r in _db_conn.execute(
+                for r in pg_store.fetchall(
                     "SELECT idx, title, status, detail FROM mission_wps "
-                    "WHERE mission_id=? ORDER BY idx", (mission_id,)).fetchall()]
+                    "WHERE mission_id=%s ORDER BY idx", (mission_id,))]
     except Exception:
         return []
 
@@ -3319,7 +3391,7 @@ def _mission_resolve_path(slug_or_path: str):
 def _mission_create(slug_or_path: str, cwd: Optional[str] = None):
     """Încarcă un mission.md, parsează WP-urile și inserează starea în DB.
     Întoarce (mission_id, None) sau (None, mesaj_eroare)."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return None, "DB indisponibil"
     path = _mission_resolve_path(slug_or_path)
     if path is None:
@@ -3337,15 +3409,17 @@ def _mission_create(slug_or_path: str, cwd: Optional[str] = None):
     now = datetime.datetime.now().isoformat()
     first_pending = next((i for i, wp in enumerate(mission.wps) if not wp.done), len(mission.wps))
     try:
-        _db_conn.execute(
-            "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)",
-            (mission_id, slug, mission.title, str(path), workspace, first_pending, now, now))
-        for i, wp in enumerate(mission.wps):
-            _db_conn.execute(
-                "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (?, ?, ?, ?)",
-                (mission_id, i, wp.title, "done" if wp.done else "pending"))
-        _db_conn.commit()
+        # Tranzacție explicită: misiunea + WP-urile ei apar atomic (nu există fereastră
+        # în care un cititor concurent să vadă misiunea fără WP-uri).
+        with pg_store.transaction() as conn:
+            conn.execute(
+                "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'running', %s, %s, %s)",
+                (mission_id, slug, mission.title, str(path), workspace, first_pending, now, now))
+            for i, wp in enumerate(mission.wps):
+                conn.execute(
+                    "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (%s, %s, %s, %s)",
+                    (mission_id, i, wp.title, "done" if wp.done else "pending"))
     except Exception as e:
         return None, f"insert misiune eșuat: {e}"
     return mission_id, None
@@ -3421,19 +3495,20 @@ async def _mission_draft_text(direction: str, prior_md: Optional[str] = None,
     return md
 
 
-def _mission_insert_wps(mission_id: str, wps) -> None:
-    """(Re)scrie rândurile mission_wps pentru un draft — toate `pending`."""
-    _db_conn.execute("DELETE FROM mission_wps WHERE mission_id=?", (mission_id,))
+def _mission_insert_wps(conn, mission_id: str, wps) -> None:
+    """(Re)scrie rândurile mission_wps pentru un draft — toate `pending`.
+    Primește conexiunea tranzacției (apelanții rulează în pg_store.transaction())."""
+    conn.execute("DELETE FROM mission_wps WHERE mission_id=%s", (mission_id,))
     for i, wp in enumerate(wps):
-        _db_conn.execute(
-            "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (?, ?, ?, 'pending')",
+        conn.execute(
+            "INSERT INTO mission_wps (mission_id, idx, title, status) VALUES (%s, %s, %s, 'pending')",
             (mission_id, i, wp.title))
 
 
 async def _mission_new(direction: str, cwd: Optional[str] = None):
     """`!mission new`: redactează planul, îl scrie în `missions/<slug>/mission.md` și
     inserează un rând de misiune cu status `draft` (NU pornește). Întoarce (mission_id, err)."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return None, "DB indisponibil"
     try:
         md = await _mission_draft_text(direction)
@@ -3451,12 +3526,12 @@ async def _mission_new(direction: str, cwd: Optional[str] = None):
     mission_id = uuid.uuid4().hex
     now = datetime.datetime.now().isoformat()
     try:
-        _db_conn.execute(
-            "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, 'draft', 0, ?, ?)",
-            (mission_id, slug, mission.title, str(path), workspace, now, now))
-        _mission_insert_wps(mission_id, mission.wps)
-        _db_conn.commit()
+        with pg_store.transaction() as conn:
+            conn.execute(
+                "INSERT INTO missions (id, slug, title, path, cwd, status, current_idx, created_at, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, 'draft', 0, %s, %s)",
+                (mission_id, slug, mission.title, str(path), workspace, now, now))
+            _mission_insert_wps(conn, mission_id, mission.wps)
     except Exception as e:
         return None, f"insert draft eșuat: {e}"
     return mission_id, None
@@ -3464,11 +3539,11 @@ async def _mission_new(direction: str, cwd: Optional[str] = None):
 
 def _latest_draft_id() -> Optional[str]:
     """Cel mai recent draft (status `draft`), pentru `!mission revise` fără id explicit."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return None
     try:
-        r = _db_conn.execute(
-            "SELECT id FROM missions WHERE status='draft' ORDER BY created_at DESC LIMIT 1").fetchone()
+        r = pg_store.fetchone(
+            "SELECT id FROM missions WHERE status='draft' ORDER BY created_at DESC LIMIT 1")
     except Exception:
         return None
     return r[0] if r else None
@@ -3496,10 +3571,10 @@ async def _mission_revise(mission_id: str, instructions: str):
     except Exception as e:
         return None, f"nu pot scrie mission.md: {e}"
     try:
-        _db_conn.execute("UPDATE missions SET title=?, updated_at=? WHERE id=?",
+        with pg_store.transaction() as conn:
+            conn.execute("UPDATE missions SET title=%s, updated_at=%s WHERE id=%s",
                          (mission.title, datetime.datetime.now().isoformat(), mission_id))
-        _mission_insert_wps(mission_id, mission.wps)
-        _db_conn.commit()
+            _mission_insert_wps(conn, mission_id, mission.wps)
     except Exception as e:
         return None, f"update draft eșuat: {e}"
     return mission_id, None
@@ -3529,9 +3604,9 @@ def _mission_draft_discard(mission_id: str):
         return False, "nu e un draft"
     title = row["title"]
     try:
-        _db_conn.execute("DELETE FROM mission_wps WHERE mission_id=?", (mission_id,))
-        _db_conn.execute("DELETE FROM missions WHERE id=?", (mission_id,))
-        _db_conn.commit()
+        with pg_store.transaction() as conn:
+            conn.execute("DELETE FROM mission_wps WHERE mission_id=%s", (mission_id,))
+            conn.execute("DELETE FROM missions WHERE id=%s", (mission_id,))
     except Exception as e:
         return False, str(e)
     try:
@@ -4037,64 +4112,15 @@ async def _mission_notify(text: str) -> None:
 def _mission_resume_on_startup() -> None:
     """La startup, relansează misiunile rămase `running` (întrerupte de un restart) —
     reiau din WP-ul corect (starea e în DB). WP11 §2."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return
     try:
-        rows = _db_conn.execute("SELECT id, title FROM missions WHERE status='running'").fetchall()
+        rows = pg_store.fetchall("SELECT id, title FROM missions WHERE status='running'")
     except Exception:
         return
     for mid, title in rows:
         logger.info(f"[mission] reiau după restart: {title} ({mid})")
         _mission_launch(mid)
-
-
-def _ensure_usage_table(conn) -> None:
-    """Creează tabelul `usage` + index pe ts (idempotent)."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS usage (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ts TEXT NOT NULL,
-            tier INTEGER,
-            model TEXT,
-            cloud INTEGER NOT NULL DEFAULT 0,
-            agent TEXT,
-            duration_ms INTEGER,
-            preview TEXT
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)")
-
-
-def _backfill_usage_from_jsonl(conn) -> None:
-    """Import unic al usage_log.jsonl legacy în tabelul `usage`, dacă tabelul e gol.
-    Fișierul .jsonl rămâne pe disc ca arhivă istorică; scrierile noi merg în SQLite."""
-    try:
-        if conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0] > 0:
-            return
-        if not USAGE_LOG.exists():
-            return
-        imported = 0
-        for line in USAGE_LOG.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                e = json.loads(line)
-            except Exception:
-                continue
-            conn.execute(
-                "INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (e.get("ts", ""), e.get("tier"), e.get("model"),
-                 1 if e.get("cloud") else 0, e.get("agent"),
-                 e.get("duration_ms"), e.get("preview") or e.get("task_preview", "")),
-            )
-            imported += 1
-        conn.commit()
-        if imported:
-            logger.info(f"Usage backfill: imported {imported} legacy entries from usage_log.jsonl")
-    except Exception as e:
-        logger.warning(f"Usage backfill failed: {e}")
 
 
 def _usage_day_bounds() -> tuple[str, str]:
@@ -4108,14 +4134,14 @@ def _usage_counts_today() -> tuple[int, int]:
     today, tomorrow = _usage_day_bounds()
     if _usage_cache["date"] == today:
         return _usage_cache["total"], _usage_cache["cloud"]
-    # Day changed — rebuild from SQLite (index pe ts → interogare ieftină).
+    # Day changed — rebuild from Postgres (index pe ts → interogare ieftină).
     total = cloud = 0
-    if _db_conn is not None:
+    if pg_store.configured():
         try:
-            row = _db_conn.execute(
-                "SELECT COUNT(*), COALESCE(SUM(cloud), 0) FROM usage WHERE ts >= ? AND ts < ?",
+            row = pg_store.fetchone(
+                "SELECT COUNT(*), COALESCE(SUM(cloud), 0) FROM usage WHERE ts >= %s AND ts < %s",
                 (today, tomorrow),
-            ).fetchone()
+            )
             total, cloud = int(row[0]), int(row[1])
         except Exception:
             pass
@@ -4294,6 +4320,20 @@ async def _backup_cache_db() -> str:
                     dest.close()
                 except Exception as e:
                     logger.warning(f"[Backup] SQLite online backup eșuat, folosesc copia brută: {e}")
+            # WP-PG: dump Postgres (format custom, pg_restore-abil) în aceeași arhivă.
+            # Best-effort: un PG căzut nu pică backupul de cache_db (și invers).
+            pg_dump_path = Path(staging) / "kage.pgdump"
+            if pg_store.configured():
+                pgdump_bin = shutil.which("pg_dump") or "/opt/homebrew/opt/postgresql@16/bin/pg_dump"
+                try:
+                    res = subprocess.run(
+                        [pgdump_bin, "--format=custom", "--no-owner",
+                         f"--file={pg_dump_path}", "--dbname", PG_DSN],
+                        capture_output=True, text=True, timeout=120)
+                    if res.returncode != 0:
+                        logger.warning(f"[Backup] pg_dump eșuat: {(res.stderr or '').strip()[:200]}")
+                except Exception as e:
+                    logger.warning(f"[Backup] pg_dump eșuat: {e}")
             # WP-B: include kage_config.json în arhivă → restore complet dintr-un singur
             # fișier. Token-urile ajung DOAR în arhivă (iCloud), niciodată în git.
             cfg_copy = Path(staging) / "kage_config.json"
@@ -4301,6 +4341,8 @@ async def _backup_cache_db() -> str:
                 shutil.copy2(KAGE_CONFIG_PATH, cfg_copy)
             with tarfile.open(archive_path, "w:gz") as tar:
                 tar.add(staging_path, arcname="cache_db")
+                if pg_dump_path.exists():
+                    tar.add(pg_dump_path, arcname="kage.pgdump")
                 if cfg_copy.exists():
                     tar.add(cfg_copy, arcname="kage_config.json")
         # Rotație: păstrează ultimele BACKUP_KEEP arhive
@@ -4718,16 +4760,11 @@ def _briefing_new_jobs(since_hours: int = 24) -> dict:
 
 
 def _briefing_scheduled_today() -> list:
-    """Taskurile programate (scheduled_tasks.json) care se declanșează AZI, după cron.
-    Degradează la [] dacă fișierul lipsește/e corupt sau cronul e invalid."""
-    try:
-        if not SCHEDULED_TASKS_FILE.exists():
-            return []
-        tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+    """Taskurile programate (Postgres) care se declanșează AZI, după cron.
+    Degradează la [] dacă PG e indisponibil sau cronul e invalid."""
+    tasks = _scheduled_tasks_all()
     out: list = []
-    for task in tasks if isinstance(tasks, list) else []:
+    for task in tasks:
         if not task.get("enabled", True):
             continue
         try:
@@ -4750,16 +4787,16 @@ def _briefing_missions() -> Optional[list]:
     """Starea misiunilor pentru briefing (WP12): schițe + cele active/pauzate + cele
     terminate/eșuate în ultimele 24h. None dacă nu există niciuna relevantă (secțiune omisă).
     Fiecare element: {name, status} — consumat de `_briefing_render`."""
-    if _db_conn is None:
+    if not pg_store.configured():
         return None
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=1)).isoformat()
     try:
-        rows = _db_conn.execute(
+        rows = pg_store.fetchall(
             "SELECT title, status FROM missions "
             "WHERE status IN ('draft', 'running', 'paused') "
-            "   OR (status IN ('done', 'failed') AND updated_at >= ?) "
+            "   OR (status IN ('done', 'failed') AND updated_at >= %s) "
             "ORDER BY updated_at DESC LIMIT 5",
-            (cutoff,)).fetchall()
+            (cutoff,))
     except Exception:
         return None
     if not rows:
@@ -5482,17 +5519,17 @@ def _make_cache_hit_response(response_text: str, tier: int) -> StreamingResponse
 
 
 def _aggregate_usage() -> dict:
-    """Aggregate today's usage (SQLite) into dashboard data."""
+    """Aggregate today's usage (Postgres) into dashboard data."""
     today, tomorrow = _usage_day_bounds()
     today_entries: list[dict] = []
-    if _db_conn is not None:
+    if pg_store.configured():
         try:
-            cur = _db_conn.execute(
+            rows = pg_store.fetchall(
                 "SELECT ts, tier, model, cloud, agent, duration_ms, preview "
-                "FROM usage WHERE ts >= ? AND ts < ? ORDER BY ts",
+                "FROM usage WHERE ts >= %s AND ts < %s ORDER BY ts",
                 (today, tomorrow),
             )
-            for ts, tier, model, cloud, agent, duration_ms, preview in cur.fetchall():
+            for ts, tier, model, cloud, agent, duration_ms, preview in rows:
                 today_entries.append({
                     "ts": ts, "tier": tier, "model": model,
                     "cloud": bool(cloud), "agent": agent,
@@ -5521,13 +5558,7 @@ def _aggregate_usage() -> dict:
     except Exception:
         max_cloud = 20
 
-    task_count = 0
-    try:
-        if SCHEDULED_TASKS_FILE.exists():
-            tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-            task_count = sum(1 for t in tasks if t.get("enabled", True))
-    except Exception:
-        pass
+    task_count = sum(1 for t in _scheduled_tasks_all() if t.get("enabled", True))
 
     return {
         "total": total,
@@ -5989,8 +6020,8 @@ async def _handle_mission_command(message: str) -> StreamingResponse:
 
     if sub == "status":
         mid = _active_mission_id
-        if mid is None and _db_conn is not None:
-            r = _db_conn.execute("SELECT id FROM missions ORDER BY created_at DESC LIMIT 1").fetchone()
+        if mid is None and pg_store.configured():
+            r = pg_store.fetchone("SELECT id FROM missions ORDER BY created_at DESC LIMIT 1")
             mid = r[0] if r else None
         if mid is None:
             return _sse_text_response("Nicio misiune. Pornește una cu `!mission start <slug>`.")
@@ -6017,9 +6048,9 @@ async def _handle_mission_command(message: str) -> StreamingResponse:
 
     if sub == "resume":
         mid = _active_mission_id
-        if mid is None and _db_conn is not None:
-            r = _db_conn.execute(
-                "SELECT id FROM missions WHERE status='paused' ORDER BY updated_at DESC LIMIT 1").fetchone()
+        if mid is None and pg_store.configured():
+            r = pg_store.fetchone(
+                "SELECT id FROM missions WHERE status='paused' ORDER BY updated_at DESC LIMIT 1")
             mid = r[0] if r else None
         if mid is None:
             return _sse_text_response("Nicio misiune pe pauză de reluat.")
@@ -6028,10 +6059,10 @@ async def _handle_mission_command(message: str) -> StreamingResponse:
         return _sse_text_response(f"▶️ Reiau misiunea: «{(_mission_row(mid) or {}).get('title','')}».")
 
     if sub == "list":
-        if _db_conn is None:
+        if not pg_store.configured():
             return _sse_text_response("DB indisponibil.")
-        rows = _db_conn.execute(
-            "SELECT title, status FROM missions ORDER BY created_at DESC LIMIT 10").fetchall()
+        rows = pg_store.fetchall(
+            "SELECT title, status FROM missions ORDER BY created_at DESC LIMIT 10")
         if not rows:
             return _sse_text_response("Nicio misiune încă.")
         return _sse_text_response("**Misiuni:**\n" + "\n".join(f"  • {t} — `{s}`" for t, s in rows))
@@ -6098,13 +6129,7 @@ def _status_snapshot() -> StreamingResponse:
     misses = _cache_misses
     hit_pct = int(hits / (hits + misses) * 100) if (hits + misses) > 0 else 0
 
-    task_count = 0
-    try:
-        if SCHEDULED_TASKS_FILE.exists():
-            tasks = json.loads(SCHEDULED_TASKS_FILE.read_text(encoding="utf-8"))
-            task_count = sum(1 for t in tasks if t.get("enabled", True))
-    except Exception:
-        pass
+    task_count = sum(1 for t in _scheduled_tasks_all() if t.get("enabled", True))
 
     svc_checks = [("Ollama", 11434), ("LiteLLM", 4000), ("Orchestrator", 4001)]
     svc_str = "  ".join(f"{n} {'✓' if _port_up(p) else '✗'}" for n, p in svc_checks)
@@ -6147,17 +6172,16 @@ def _stop_snapshot() -> StreamingResponse:
 
 
 def _log_usage(tier: int, model: str, task_preview: str, duration_ms: Optional[int], agent: Optional[str] = None) -> None:
-    if _db_conn is None:
+    if not pg_store.configured():
         return
     is_cloud = tier >= 3 or agent is not None
     try:
-        _db_conn.execute(
+        pg_store.execute(
             "INSERT INTO usage (ts, tier, model, cloud, agent, duration_ms, preview) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
             (datetime.datetime.now().isoformat(), tier, model,
              1 if is_cloud else 0, agent, duration_ms, task_preview[:40]),
         )
-        _db_conn.commit()
         today = datetime.date.today().isoformat()
         if _usage_cache["date"] == today:
             _usage_cache["total"] += 1
@@ -6578,56 +6602,99 @@ async def _route_claude_autonomous(
 
 # ── Status widget state ───────────────────────────────────────────────────────
 
-def _write_status(active: bool, tier: int, model: str, task: Optional[str], obsidian: bool) -> None:
+def _status_row() -> dict:
+    """Rândul unic de status din Postgres (sursa de adevăr, WP-PG).
+    {} dacă lipsește sau PG e indisponibil."""
+    if not pg_store.configured():
+        return {}
     try:
-        payload = {
-            "active": active,
-            "tier": tier,
-            "model": model,
-            "task_preview": task,
-            "obsidian": obsidian,
-            "started_at": datetime.datetime.now().isoformat() if active else None,
-            "last_updated": datetime.datetime.now().isoformat(),
-        }
-        lock = FileLock(str(STATUS_FILE) + ".lock")
-        with lock.acquire(timeout=2):
-            STATUS_FILE.write_text(json.dumps(payload), encoding="utf-8")
+        r = pg_store.fetchone(
+            "SELECT active, tier, model, task_preview, obsidian, started_at, last_updated "
+            "FROM status WHERE id=1")
+    except Exception:
+        return {}
+    if not r:
+        return {}
+    return {"active": bool(r[0]), "tier": r[1], "model": r[2], "task_preview": r[3],
+            "obsidian": bool(r[4]), "started_at": r[5], "last_updated": r[6]}
+
+
+def _status_upsert(payload: dict) -> None:
+    pg_store.execute(
+        "INSERT INTO status (id, active, tier, model, task_preview, obsidian, started_at, last_updated) "
+        "VALUES (1, %(active)s, %(tier)s, %(model)s, %(task_preview)s, %(obsidian)s, "
+        "%(started_at)s, %(last_updated)s) "
+        "ON CONFLICT (id) DO UPDATE SET active=EXCLUDED.active, tier=EXCLUDED.tier, "
+        "model=EXCLUDED.model, task_preview=EXCLUDED.task_preview, obsidian=EXCLUDED.obsidian, "
+        "started_at=EXCLUDED.started_at, last_updated=EXCLUDED.last_updated",
+        payload)
+
+
+def _write_status_file(payload: dict) -> None:
+    """status.json = VIEW DERIVAT pentru widget-ul de menubar (proces separat, venv
+    separat — nu primește dependență de Postgres; capcana din specul WP-PG). Scriere
+    atomică tmp+rename în loc de FileLock: a rămas un singur scriitor (orchestratorul),
+    iar widget-ul doar citește — rename-ul POSIX îi garantează un JSON complet."""
+    try:
+        tmp = STATUS_FILE.with_name(STATUS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        os.replace(tmp, STATUS_FILE)
     except Exception as e:
-        logger.warning(f"Status write failed: {e}")
+        logger.warning(f"Status file write failed: {e}")
+
+
+def _write_status(active: bool, tier: int, model: str, task: Optional[str], obsidian: bool) -> None:
+    payload = {
+        "active": active,
+        "tier": tier,
+        "model": model,
+        "task_preview": task,
+        "obsidian": obsidian,
+        "started_at": datetime.datetime.now().isoformat() if active else None,
+        "last_updated": datetime.datetime.now().isoformat(),
+    }
+    try:
+        _status_upsert(payload)
+    except Exception as e:
+        logger.debug(f"[pg] status upsert eșuat: {e}")
+    _write_status_file(payload)
 
 
 def _write_status_idle(tier: int, model: str) -> None:
     try:
-        lock = FileLock(str(STATUS_FILE) + ".lock")
-        with lock.acquire(timeout=2):
-            existing: dict = {}
-            if STATUS_FILE.exists():
-                try:
-                    existing = json.loads(STATUS_FILE.read_text())
-                except Exception:
-                    pass
+        existing = _status_row()
+        if not existing and STATUS_FILE.exists():
+            try:
+                existing = json.loads(STATUS_FILE.read_text())
+            except Exception:
+                existing = {}
 
-            # Compute duration for usage log
-            duration_ms: Optional[int] = None
-            started_at_str = existing.get("started_at")
-            if started_at_str:
-                try:
-                    started = datetime.datetime.fromisoformat(started_at_str)
-                    duration_ms = int((datetime.datetime.now() - started).total_seconds() * 1000)
-                except Exception:
-                    pass
+        # Compute duration for usage log
+        duration_ms: Optional[int] = None
+        started_at_str = existing.get("started_at")
+        if started_at_str:
+            try:
+                started = datetime.datetime.fromisoformat(started_at_str)
+                duration_ms = int((datetime.datetime.now() - started).total_seconds() * 1000)
+            except Exception:
+                pass
 
-            _log_usage(tier, model, existing.get("task_preview") or "", duration_ms)
+        _log_usage(tier, model, existing.get("task_preview") or "", duration_ms)
 
-            existing.update({
-                "active": False,
-                "task_preview": None,
-                "started_at": None,
-                "last_updated": datetime.datetime.now().isoformat(),
-                "tier": tier,
-                "model": model,
-            })
-            STATUS_FILE.write_text(json.dumps(existing), encoding="utf-8")
+        payload = {
+            "active": False,
+            "tier": tier,
+            "model": model,
+            "task_preview": None,
+            "obsidian": bool(existing.get("obsidian")),
+            "started_at": None,
+            "last_updated": datetime.datetime.now().isoformat(),
+        }
+        try:
+            _status_upsert(payload)
+        except Exception as e:
+            logger.debug(f"[pg] status upsert eșuat: {e}")
+        _write_status_file(payload)
     except Exception as e:
         logger.warning(f"Status idle write failed: {e}")
 

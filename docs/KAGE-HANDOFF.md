@@ -308,6 +308,20 @@ Confirmate empiric în `.logs/orchestrator.log` (detalii + dovezi: `KAGE-EVALUAR
     rămas e cel din secțiunea „Reordonare" de mai jos, cu R0 și G1-minim intercalate.
   - Implementarea concretă a itemilor acceptați trebuie să menționeze `Codex proposal: Gx`/`Tx`
     în commit/PR (regula de trasabilitate din `CODEX-PROPUNERI.md`).
+- **Pista de învățare v2 — hibrid defend-first (15.07.2026, Stefan):** formatul v1 din §8
+  (Explică/Apără/Extinde per subsistem + „Stefan scrie corpul" pe toate părțile ML din
+  decizia „mod de execuție ML" de mai sus) s-a dovedit prea scump ca timp — cere sesiuni
+  dedicate la laptop, iar scrisul de cod de mână e cea mai lentă formă de învățare pe minut
+  investit; valoarea de interviu vine din apărarea deciziilor, nu din tastat. Decizii:
+  (a) regimul de bază devine **defend-only** — modelul construiește tot, iar la închiderea
+  fiecărui WP cu valoare de interviu generează o **fișă de interviu** (`docs/fise-interviu/`,
+  ~1 pagină, citită în ~10 min); (b) singura alocare fixă de timp = **o sesiune de weekend
+  de 2–3h** (Apără + un exercițiu practic); (c) **scrise de mână rămân DOAR piesele-fanion:
+  HMM-ul de regim de la zero și Dixon-Coles** — restul vechii liste „Stefan, ghidat"
+  (purged CV + meta-labeling, interpretarea rapoartelor) trece pe defend-only + Extinde mic;
+  (d) nivelul „Explică" se pliază în „Apără" (fișa citită în prealabil înlocuiește
+  descrierea de la zero). Acest bloc AMENDEAZĂ decizia „mod de execuție ML" (09.07.2026);
+  mecanica operațională completă = §8 (rescris).
 
 ---
 
@@ -1409,7 +1423,7 @@ misiune dublă) · paginare pe `/api/missions` și usage · rate limiter activ c
 depășită · suite de contract tests noi · raport de latență p50/p95 pe 2–3 endpoint-uri ·
 pytest verde.
 
-### WP-PG — Migrare stare partajată + telemetrie pe PostgreSQL · efort: un weekend · după R0 · a doua din pista data-stack (§4)
+### WP-PG — Migrare stare partajată + telemetrie pe PostgreSQL · efort: un weekend · după R0 · a doua din pista data-stack (§4) · ✅ IMPLEMENTAT (16.07.2026)
 
 **Scop:** azi coordonarea cross-proces (orchestrator, gateway, mission_runner, widget, jobs)
 merge prin fișiere cu lock (`status.json.lock`, `scheduled_tasks.json.lock`), iar istoricul,
@@ -1443,6 +1457,24 @@ adăuga dependență de Postgres: orchestratorul continuă să scrie `status.jso
 **Acceptare:** scrierile de telemetrie/stare merg în Postgres · lock-urile migrate șterse
 (sau documentate ca view derivat) · `pg_dump` în backupul nocturn · restart test: orchestrator
 pornit înaintea Postgres nu moare · pytest verde + teste pe stratul de acces.
+
+**Livrat (16.07.2026):** `pg_store.py` (conexiune sync + RLock, autocommit, retry cu
+deadline la startup + reconectare leneșă per operație, DDL, tranzacții explicite) · cele
+7 tabele rewire-uite în orchestrator (psycopg, SQL de mână, fără ORM; timestamps TEXT
+ISO-8601 — tipizarea strictă vine la WP-ETL în staging) · cutover idempotent la startup
+cu verificare de rânduri ÎN tranzacție — verificat live pe copia datelor reale (:4101,
+DB `kage_smoke`): usage 26/26, runs 14/14, run_events 68/68, missions 1/1, mission_wps
+3/3, job_runs 3/3, restart fără re-migrare, scheduler încarcă din PG · `status.json` =
+view derivat scris atomic (tmp+rename; widget-ul neatins) · FileLock eliminat complet ·
+`pg_dump` în arhiva nocturnă + restore documentat (RESTORE.md §2a) · Postgres pornit de
+`start_all.sh` · teste: fixture PG pe DB temporar per sesiune (specul „nu Postgres-ul de
+producție"), **507 verzi, +12 noi** (singurul fail = `test_push_to_bare_remote`,
+pre-existent) · pornirea cu PG mort verificată live (:4102 — servește degradat +
+notifică pe Telegram). Notă: „schema proiectată de Stefan, ghidat" din pasul 2 a fost
+înlocuită de decizia „pista de învățare v2" (§4, 15.07.2026) — fișa de interviu:
+`docs/fise-interviu/wp-pg-postgres.md`. **Cutover-ul de PRODUCȚIE = primul restart cu
+codul nou** (merge → restart anunțat): `postgresql@16` instalat + pornit, baza `kage`
+creată; sursele vechi (SQLite/JSON) rămân pe disc ca arhive, nu se șterg.
 
 ### WP-ETL — Pipeline de analytics peste telemetrie (+ point-in-time lineage) · efort: un weekend · după WP-PG · Codex proposal: T3 (acceptat, integrat, §4)
 
@@ -1987,25 +2019,51 @@ facturează per-secundă pe un profil bursty → practic zero; free tier + credi
 
 ---
 
-## 8. Pista de învățare & verificarea înțelegerii (mod interviu) — adăugată 09.07.2026
+## 8. Pista de învățare & verificarea înțelegerii (mod interviu) — v2, rescrisă 15.07.2026
 
-**Scop:** proiectul e material de CV pentru un rol în direcția AI; valoarea = capacitatea lui
-Stefan de a-l APĂRA la interviu (vezi decizia „mod de execuție ML" din §4). Această secțiune
-acoperă două goluri: (a) subsistemele deja construite de model, pe care Stefan trebuie să le
-stăpânească retroactiv; (b) subsistemele viitoare cu valoare de interviu, care se construiesc
-în mod ghidat. Rulează în PARALEL cu ordinea din §5 — nu e un WP, e un mod de lucru.
+**Scop (neschimbat):** proiectul e material de CV pentru un rol în direcția AI; valoarea =
+capacitatea lui Stefan de a-l APĂRA la interviu. Această secțiune acoperă două goluri:
+(a) subsistemele deja construite de model, pe care Stefan trebuie să le stăpânească
+retroactiv; (b) subsistemele viitoare cu valoare de interviu. Rulează în PARALEL cu
+ordinea din §5 — nu e un WP, e un mod de lucru.
 
-**Metoda — 3 niveluri per subsistem, bifate aici:**
+**De ce v2:** formatul v1 (Explică/Apără/Extinde + corp de funcții scris de Stefan pe
+toate părțile ML) cerea sesiuni dedicate per subsistem și s-a dovedit prea scump ca timp
+(decizia din §4, 15.07.2026). Principiul v2: greutatea se mută de pe *scris cod* pe
+*apărat decizii* — asta se antrenează cel mai dens pe minut investit.
 
-1. **Explică** — Stefan descrie mecanismul + DE CE e așa (nu doar ce face); modelul corectează.
-2. **Apără** — modelul joacă intervievatorul: întrebări adversariale de profunzime
-   („de ce k-NN ponderat și nu 1-NN?", „ce se strică fără purged CV?"). Un subsistem/sesiune.
-3. **Extinde** — Stefan face SINGUR o modificare mică țintită (dovada înțelegerii);
-   modelul doar revizuiește.
+**Bugetul de timp (v2):** o singură alocare fixă — **sesiunea de weekend, 2–3h**. În
+timpul săptămânii nu există obligații; fișele de interviu se citesc oricând (~10 min/buc).
+
+**Mecanica v2:**
+
+1. **Fișă de interviu per WP** — la închiderea oricărui WP cu valoare de interviu, modelul
+   generează `docs/fise-interviu/<wp>.md` (~1 pagină): decizia + DE CE, alternativele
+   respinse + de ce nu, trade-off-urile acceptate, 3–5 întrebări adversariale. Răspunsurile
+   la întrebări stau într-o secțiune separată la finalul fișei (self-test: Stefan răspunde
+   întâi, verifică după). Generarea fișei e **criteriu de închidere al WP-ului**, obligația
+   modelului, nu a lui Stefan. Pentru subsistemele deja construite, fișele se generează
+   retroactiv (prima: rutare semantică + cache).
+2. **Sesiunea de weekend (2–3h):**
+   - **~30 min Apără**, rapid-fire, pe 1–2 subsisteme cu fișa citită în prealabil — modelul
+     joacă intervievatorul (întrebări adversariale de profunzime: „de ce k-NN ponderat și
+     nu 1-NN?", „ce se strică fără purged CV?"). Nivelul „Explică" din v1 dispare ca pas
+     separat — e absorbit aici (cine apără, poate și explica).
+   - **restul sesiunii**, una dintre: (i) lucru la **piesa-fanion** activă (vezi 3),
+     (ii) un exercițiu **Extinde** — modificare mică țintită, 30–45 min, făcută SINGUR,
+     modelul doar revizuiește, (iii) recuperare Apără din backlog-ul „deja construite".
+3. **Piesele-fanion — singurele scrise de mână** (metoda veche: modelul scrie scheletul +
+   testele, Stefan scrie corpul, review de senior după, alternativa explicată abia DUPĂ
+   încercare): **HMM-ul de regim de la zero** (numpy, EM) și **Dixon-Coles** (T2 sports).
+   Restul vechii liste „Stefan, ghidat" (purged CV + meta-labeling, interpretarea
+   rapoartelor de validare) → defend-only + eventual Extinde.
+4. **Bifele devin F/A/X** — Fișă citită / Apărat / Extins. Extinde e obligatoriu doar
+   pentru top-3 ca valoare de interviu (rutare semantică+cache, executor Agent SDK,
+   risk gate); la rest e opțional.
 
 **Subsistemele DEJA construite — de recuperat prin înțelegere (ordinea = valoarea de interviu):**
 
-| Subsistem | Concepte de interviu | Exercițiu „Extinde" propus | E/A/X |
+| Subsistem | Concepte de interviu | Exercițiu „Extinde" propus | F/A/X |
 | --- | --- | --- | --- |
 | Rutare semantică + cache semantic + memorie (`decide_tier`, `_semantic_classify`, `_cache_policy`, ChromaDB) | embeddings, vector DB, k-NN ponderat, praguri de similaritate, TTL, cache invalidation | scrie un test care demonstrează capcana follow-up-ului din cache (de ce >1 tură = skip) | ☐ ☐ ☐ |
 | Executorul pe Agent SDK (`agent_runner.py`: buclă tool-use, streaming, hooks, resume, inactivity timeout) | agents, tool calling, HITL gates, session state | adaugă un tip nou de eveniment normalizat + testul lui | ☐ ☐ ☐ |
@@ -2013,13 +2071,14 @@ stăpânească retroactiv; (b) subsistemele viitoare cu valoare de interviu, car
 | Risk gate + aprobări HITL (`risk_hook.evaluate_risk`, fluxul Telegram, fail-closed) | AI safety patterns, deny/allow/escalate, prompt injection | adaugă un pattern nou de risc cu test (inclusiv un false-positive evitat) | ☐ ☐ ☐ |
 | Run ledger + decision trace (WP8) | observabilitate LLM, trace schema, cost tracking | scrie un query care răspunde la o întrebare de debugging reală din `runs`/`run_events` | ☐ ☐ ☐ |
 
-**Subsistemele VIITOARE — se construiesc ghidat (schelet+teste de la model, corp de la Stefan):**
+**Subsistemele VIITOARE — construite de model, apărate de Stefan (fișă + Apără; scrise de
+mână DOAR piesele-fanion, marcate ★):**
 
 | Subsistem | Când | Concepte de interviu |
 | --- | --- | --- |
 | Logica Advisorului (WP13): promptul adversarial, context minimal, structura verdictului | la WP13 | LLM-as-judge, evaluare, debate patterns, anchoring |
-| HMM de regim de la zero (numpy, EM) | la upgrade 3.2 | EM, MLE, modele generative (decis în §4) |
-| Dixon-Coles + CLV (T2 sports) | la T2 | fitare de model, verosimilitate, calibrare probabilistică |
+| ★ HMM de regim de la zero (numpy, EM) — piesă-fanion, scrisă de mână | la upgrade 3.2 | EM, MLE, modele generative (decis în §4) |
+| ★ Dixon-Coles + CLV (T2 sports) — piesă-fanion, scrisă de mână | la T2 | fitare de model, verosimilitate, calibrare probabilistică |
 | Purged CV + meta-labeling | la nevoie în WP-T | leakage temporal, overfitting, evaluare |
 | Memorie v2 (#6): extracție de fapte + consolidare/dedup | la #6 | RAG, memorie de agent, deduplicare semantică |
 | RAG pe documente (`!index`) | înainte de ian. 2027 | chunking, retrieval, evaluare de retrieval |
@@ -2034,6 +2093,8 @@ stăpânească retroactiv; (b) subsistemele viitoare cu valoare de interviu, car
 | Eval harness minim (taskuri fixe + criterii automate) | la G1-minim | eval-driven development, regression testing pentru agenți |
 
 **Reguli:** plumbing-ul (endpoint-uri, scheduler, config, UI) NU intră pe pistă — zero valoare
-de interviu. Nu se reconstruiește nimic deja funcțional doar de dragul exercițiului —
-înțelegerea se dovedește prin „Extinde", nu prin rescriere. O sesiune de „Apără" picată se
-reprogramează după re-citire, nu se treacă cu vederea.
+de interviu, deci nici fișă. Nu se reconstruiește nimic deja funcțional doar de dragul
+exercițiului — înțelegerea se dovedește prin „Extinde", nu prin rescriere. O sesiune de
+„Apără" picată se reprogramează după re-citirea fișei, nu se treacă cu vederea. Un WP cu
+valoare de interviu NU se marchează ✅ fără fișa lui în `docs/fise-interviu/`. Fișele nu
+conțin date personale (repo-ul poate deveni public).

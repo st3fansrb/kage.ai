@@ -103,7 +103,11 @@
   "_comment_worktrees": "WP-SD: misiunile care țintesc repo-ul Kage însuși (nu alt proiect) rulează izolat aici, nu pe checkout-ul viu — vezi _mission_ensure_worktree. Implicit ~/.kage-worktrees dacă lipsește.",
   "kage_worktrees_dir": "~/.kage-worktrees",
 
-  "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) cu rotație. Trigger manual: POST /admin/backup.",
+  "_comment_postgres": "WP-PG: stare partajată + telemetrie (usage, runs/run_events, missions/mission_wps, job_runs, scheduled_tasks, status) pe PostgreSQL 16 nativ (brew install postgresql@16; pornit de start_all.sh). postgres_dsn gol = strat dezactivat (degradare grațioasă: telemetria se pierde, misiunile/taskurile programate raportează DB indisponibil). Chat history + ChromaDB rămân în cache_db/. postgres_startup_retry_seconds = cât așteaptă orchestratorul PG-ul la boot (launchd nu garantează ordinea).",
+  "postgres_dsn": "dbname=kage",
+  "postgres_startup_retry_seconds": 30,
+
+  "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) + dump-ul Postgres (kage.pgdump) cu rotație. Trigger manual: POST /admin/backup.",
   "backup_dir": "~/Documents/MyVault/backups/kage",
   "backup_keep": 7,
 

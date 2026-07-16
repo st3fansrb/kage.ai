@@ -21,15 +21,18 @@ post-G2" din KAGE-HANDOFF §4 NU se aplică (aia e despre integrarea programatic
 
 ## Cod
 
-### [x] CX1 — T1-exec: daemonul freqtrade dry-run (Bucla 1 execuție) — 15.07.2026
+### [x] CX1 — T1-exec: daemonul freqtrade dry-run (Bucla 1 execuție) — 15.07.2026 (merged, PR #36)
 
 Livrat în worktree-ul `codex/t1exec`: daemon paper-only, heartbeat/equity ledger, strategie
 exemplu cu `bias_allows`, scripturi start/stop, documentație și smoke test.
 
-### [x] CX2 — WP-V Slice 2: pasul vizual plătit + analiza adâncă T5 — 15.07.2026
+### [x] CX2 — WP-V Slice 2: pasul vizual plătit + analiza adâncă T5 — 15.07.2026 (merged 16.07, PR #37)
 
-Livrat în worktree-ul `codex/wpv2`: keyframes base64 prin LiteLLM T3/Haiku, deep analysis
-T5/Sonnet, ambele gated de plafonul EUR, plus teste injectabile.
+Livrat în worktree-ul `codex/wpv2`: keyframes PNG base64 prin **OpenRouter** (Qwen3-VL;
+NU LiteLLM/Haiku — alternativa aleasă de Codex, acceptată la review) + deep analysis pe
+Sonnet tot prin OpenRouter, ambele fail-closed pe plafonul EUR (#7) cu costul estimat
+înregistrat în `trading.db`, plus auto-trigger vizual pe semnale din transcript și teste
+injectabile.
 
 ## Ferestre scurte (read-only, fără worktree)
 
