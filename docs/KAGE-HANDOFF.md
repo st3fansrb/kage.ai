@@ -1486,7 +1486,7 @@ notifică pe Telegram). Notă: „schema proiectată de Stefan, ghidat" din pasu
 codul nou** (merge → restart anunțat): `postgresql@16` instalat + pornit, baza `kage`
 creată; sursele vechi (SQLite/JSON) rămân pe disc ca arhive, nu se șterg.
 
-### WP-ETL — Pipeline de analytics peste telemetrie (+ point-in-time lineage) · efort: un weekend · după WP-PG · Codex proposal: T3 (acceptat, integrat, §4)
+### WP-ETL — Pipeline de analytics peste telemetrie (+ point-in-time lineage) · efort: un weekend · după WP-PG · Codex proposal: T3 (acceptat, integrat, §4) · ✅ IMPLEMENTAT (17.07.2026)
 
 **Scop:** Kage generează date (cost per run, decizii de rutare, cache hit rate, `job_runs`,
 paper trades) dar nu are raportare; WP10 ar ajunge să facă query-uri ad-hoc. Pipeline-ul
@@ -1517,6 +1517,24 @@ aici, nu ca WP separat — e SQL peste schema deja proiectată la WP-PG, nu rigo
 același rezultat, demonstrat cu test) · fiecare rând din mart are `dataset_snapshot_id` ·
 testele de data-quality (future timestamp, duplicate, gap) trec · endpoint-ul întoarce seria
 zilnică · pytest verde.
+
+**Livrat (17.07.2026):** `etl.py` — pipeline raw → staging → mart, tot SQL peste PG (fără
+pandas), procesat **per zi** cu delete-and-rewrite pe partiția zilei (idempotent).
+Staging cu lineage T3 (`stg_runs`/`stg_trades`/`stg_equity`: `event_time`/`available_time`/
+`ingested_time`/`source`); mart-uri `mart_daily_usage` (cost/tier/model/hit-rate/erori),
+`mart_mission_stats`, `mart_trading_daily` — fiecare rând cu `dataset_snapshot_id` din
+`etl_snapshots` (provenance per rulare). Ingest multi-sursă: `runs`/`missions`/`mission_wps`
+(PG) + `trading.db` (SQLite, degradare grațioasă dacă lipsește). Data-quality la staging:
+future timestamps respinse + numărate, duplicate absorbite de PK (`ON CONFLICT`), rânduri
+fără `available_time` excluse din mart, `find_gaps` pentru zile lipsă. Cablat: schema la
+startup (`etl.ensure_schema`), job nightly 01:30 (`_etl_nightly_job`, ieri + azi),
+`GET /analytics/daily` (WP10), `POST /admin/etl` (backfill/day), CLI `python -m etl`.
+Teste: `tests/test_etl.py` (12, pe fixture-ul PG de test) — **528 verzi** (singurul fail =
+`test_push_to_bare_remote`, pre-existent). Fișă de interviu: `docs/fise-interviu/wp-etl-analytics.md`.
+Branch: `feat/wp-etl-analytics-impl` (numele `feat/wp-etl-analytics` era deja rezervat de un
+worktree gol; conținutul e identic ca intenție). **Backfill-ul de PRODUCȚIE pe baza `kage`
+reală = de rulat la primul restart anunțat** (`POST /admin/etl {"action":"backfill"}` sau
+`python -m etl backfill`) — creează tabelele ETL și populează mart-urile din tot istoricul.
 
 ### WP-AF — Airflow pentru job-urile batch · efort: un weekend · după WP-ETL
 

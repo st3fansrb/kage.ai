@@ -38,6 +38,7 @@ import video_intel as _vi
 from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
 import mission_runner as _mr
 import pg_store
+import etl
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -1256,6 +1257,7 @@ async def startup_postgres():
     try:
         await asyncio.to_thread(pg_store.ensure_schema)
         await asyncio.to_thread(_migrate_state_to_pg)
+        await asyncio.to_thread(etl.ensure_schema)
         logger.info("[pg] Postgres conectat, schema ok")
     except Exception as e:
         logger.error(f"[pg] schema/migrare eșuată: {e}")
@@ -1282,6 +1284,10 @@ async def startup_scheduler():
             except Exception as e:
                 logger.warning(f"Task {task.get('id')} skip: {e}")
         _scheduler.add_job(_vault_git_commit_job, "cron", hour=3, minute=0, id="__vault_git_commit__")
+        # WP-ETL: agregarea nightly a telemetriei (raw → staging → mart). La 01:30, după
+        # ce ziua s-a închis; devine primul DAG real la WP-AF.
+        if pg_store.configured():
+            _scheduler.add_job(_etl_nightly_job, "cron", hour=1, minute=30, id="__etl_nightly__")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
         _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
         # Job hunter (WP-J): scan automat 2×/zi dacă e activat + configurat corect.
@@ -2092,6 +2098,22 @@ async def api_usage(limit: int = 50, offset: int = 0):
         return JSONResponse({"error": "usage unavailable"}, status_code=503)
 
 
+@app.get("/analytics/daily")
+@app.get("/v1/analytics/daily")
+async def analytics_daily(days: int = 30):
+    """WP-ETL: seria zilnică din mart-uri (usage/cost/hit-rate, misiuni, trading).
+    Consumat de dashboard-ul WP10. Gol dacă PG e indisponibil sau pipeline-ul n-a rulat."""
+    days = max(1, min(int(days), 365))
+    if not pg_store.configured():
+        return {"days": [], "count": 0}
+    try:
+        series = await asyncio.to_thread(etl.daily_report, days)
+        return {"days": series, "count": len(series)}
+    except Exception as e:
+        logger.error(f"Analytics fetch failed: {e}")
+        return JSONResponse({"error": "analytics unavailable"}, status_code=503)
+
+
 @app.post("/schedule")
 async def schedule_endpoint(request: Request):
     body = await request.json()
@@ -2260,6 +2282,26 @@ async def admin_backup():
         path = await _backup_cache_db()
         return JSONResponse({"status": "ok", "archive": path})
     except Exception as e:
+        return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+
+@app.post("/admin/etl")
+async def admin_etl(request: Request):
+    """WP-ETL: rulează pipeline-ul manual. action=backfill (tot istoricul) sau
+    action=day cu `day=YYYY-MM-DD`. Protejat de auth_middleware."""
+    if not pg_store.configured():
+        return JSONResponse({"error": "postgres indisponibil"}, status_code=503)
+    body = await request.json()
+    action = body.get("action", "backfill")
+    try:
+        if action == "backfill":
+            return JSONResponse(await asyncio.to_thread(etl.backfill))
+        if action == "day":
+            day = body.get("day") or datetime.date.today().isoformat()
+            return JSONResponse(await asyncio.to_thread(etl.run_day, day, "manual"))
+        return JSONResponse({"error": "action necunoscut (backfill | day)"}, status_code=400)
+    except Exception as e:
+        logger.error(f"[etl] rulare manuală eșuată: {e}")
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
 
@@ -4296,6 +4338,25 @@ async def _cache_store_async(query: str, response_text: str, tier: int, embeddin
         logger.debug(f"Cache stored tier={tier} len={len(response_text)}")
     except Exception as e:
         logger.debug(f"Cache store failed: {e}")
+
+
+async def _etl_nightly_job() -> None:
+    """WP-ETL: agregă telemetria pe zi. Rulează pentru ieri ȘI azi (parțial) — ieri e
+    ziua tocmai închisă, azi prinde ce s-a produs după ultima rulare. Idempotent, deci
+    re-procesarea zilei de azi la următoarea rulare nu strică nimic."""
+    if not pg_store.configured():
+        return
+    today = datetime.date.today()
+    yesterday = today - datetime.timedelta(days=1)
+    try:
+        for d in (yesterday.isoformat(), today.isoformat()):
+            summary = await asyncio.to_thread(etl.run_day, d, "nightly")
+            logger.info(f"[etl] {d}: {summary['rows_out']} rânduri mart, "
+                        f"{summary['rejected']} respinse")
+    except Exception as e:
+        logger.error(f"[etl] agregarea nightly a eșuat: {e}")
+        _notify("⚠️ ETL eșuat", f"Agregarea nightly a telemetriei a picat: {e}",
+                priority="high")
 
 
 async def _cache_vacuum() -> None:
