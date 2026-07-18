@@ -312,8 +312,10 @@ def test_push_to_bare_remote(gitrepo, monkeypatch, tmp_path):
     md.write_text("# Mission: X\n\n## WP1\n- a\n### Acceptare\n- `true`\n", encoding="utf-8")
     info = orchestrator._mission_mark_and_commit(str(md), 0, "WP1")
     assert info["pushed"] is True
-    # branch-ul a ajuns pe remote
-    refs = subprocess.run(["git", "branch"], cwd=str(bare), capture_output=True, text=True).stdout
+    # branch-ul a ajuns pe remote (--git-dir explicit: robust la git config-ul
+    # `safe.bareRepository=explicit`, care altfel refuză `git branch` cu cwd în bare)
+    refs = subprocess.run(["git", "--git-dir", str(bare), "branch"],
+                          capture_output=True, text=True).stdout
     assert "mission/pushtest" in refs
 
 
