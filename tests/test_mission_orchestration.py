@@ -41,15 +41,14 @@ def _result_ev(sid="sdk-s", text="gata"):
 
 
 @pytest.fixture
-def mdb(monkeypatch, tmp_path):
-    """DB in-memory cu toate tabelele WP8/WP9/WP11 + no-op-uri pe caffeinate/commit."""
+def mdb(pg, monkeypatch, tmp_path):
+    """runs/missions → PG de test (via `pg`); messages + agent_sessions → SQLite
+    in-memory. Plus no-op-uri pe caffeinate/commit."""
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     conn.execute("""CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT DEFAULT 'default', role TEXT, content TEXT,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)""")
-    orchestrator._ensure_runs_table(conn)
     orchestrator._ensure_agent_sessions_table(conn)
-    orchestrator._ensure_missions_table(conn)
     conn.commit()
     monkeypatch.setattr(orchestrator, "_db_conn", conn)
     monkeypatch.setattr(orchestrator, "_active_mission_id", None)
@@ -61,7 +60,7 @@ def mdb(monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "_mission_caffeinate_stop", lambda: None)
     commits = []
     monkeypatch.setattr(orchestrator, "_mission_mark_and_commit",
-                        lambda path, idx, title: commits.append((idx, title)))
+                        lambda path, idx, title, git_cwd=None: commits.append((idx, title)))
     # WP12: nu atinge git-ul real în teste (branch-ul misiunii).
     monkeypatch.setattr(orchestrator, "_mission_git_ensure_branch", lambda slug: None)
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
@@ -273,8 +272,9 @@ async def test_loop_passes_router_model_and_logs_cost(mdb, tmp_path, monkeypatch
     # agentul primește modelul ales de router
     assert orch._agent_runner.calls[0][1]["model"] == "claude-haiku-4-5"
     # model + cost real logate pe run-ul de misiune (înainte erau None)
-    row = orch._db_conn.execute(
-        "SELECT model, cost_usd FROM runs WHERE kind='mission' ORDER BY created_at DESC LIMIT 1").fetchone()
+    import pg_store
+    row = pg_store.fetchone(
+        "SELECT model, cost_usd FROM runs WHERE kind='mission' ORDER BY created_at DESC LIMIT 1")
     assert row[0] == "claude-haiku-4-5"
     assert abs(row[1] - 0.02) < 1e-9           # 2 WP × 0.01 (cost din _result_ev)
 

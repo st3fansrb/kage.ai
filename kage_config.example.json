@@ -29,6 +29,9 @@
   "mission_default_model": "",
   "mission_draft_model": "",
 
+  "_comment_intent_router": "WP-NL: pragul de încredere sub care un mesaj FĂRĂ prefix `!` cade pe chatul normal (fail-safe) în loc să fie tratat ca intenție acționabilă (mission_new, agent_run, status etc.). Prim draft, calibrat manual — se ajustează pe setul etichetat din tests/test_intent_router.py.",
+  "intent_confidence_floor": 0.65,
+
   "_comment_remote": "WP12: telecomandă. mission_git_branch = misiunile rulează pe un branch `mission/<slug>` (review din GitHub mobile). mission_git_push = push automat după fiecare WP (cere remote cu auth — SSH sau credential helper); gol/false ⇒ commit local, fără push. mission_git_remote = numele remote-ului (default origin). heartbeat_url = URL de ping periodic la un dead-man's-switch extern (healthchecks.io etc.) care te alertează când Kage TACE; gol ⇒ dezactivat. heartbeat_interval_min = cadența pingului. startup_online_message = mesaj `🟢 Kage online` pe Telegram la pornire.",
   "remote": {
     "mission_git_branch": true,
@@ -94,10 +97,17 @@
   "memory_dedup_threshold": 0.95,
   "memory_relevance_threshold": 0.70,
 
-  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis.",
+  "_comment_confinement": "Workspace confinement — limitează cwd-ul agenților !run/!sysrun la aceste foldere. Listă goală/absent = dezactivat. Directorul orchestratorului e mereu permis. WP-SD: dacă lista e ACTIVĂ, risk_hook.py extinde-o automat cu kage_worktrees_dir (worktree-urile de misiune sunt checkout-uri ale aceluiași repo Kage) — nu trebuie adăugat manual.",
   "allowed_task_roots": [],
 
-  "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) cu rotație. Trigger manual: POST /admin/backup.",
+  "_comment_worktrees": "WP-SD: misiunile care țintesc repo-ul Kage însuși (nu alt proiect) rulează izolat aici, nu pe checkout-ul viu — vezi _mission_ensure_worktree. Implicit ~/.kage-worktrees dacă lipsește.",
+  "kage_worktrees_dir": "~/.kage-worktrees",
+
+  "_comment_postgres": "WP-PG: stare partajată + telemetrie (usage, runs/run_events, missions/mission_wps, job_runs, scheduled_tasks, status) pe PostgreSQL 16 nativ (brew install postgresql@16; pornit de start_all.sh). postgres_dsn gol = strat dezactivat (degradare grațioasă: telemetria se pierde, misiunile/taskurile programate raportează DB indisponibil). Chat history + ChromaDB rămân în cache_db/. postgres_startup_retry_seconds = cât așteaptă orchestratorul PG-ul la boot (launchd nu garantează ordinea).",
+  "postgres_dsn": "dbname=kage",
+  "postgres_startup_retry_seconds": 30,
+
+  "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) + dump-ul Postgres (kage.pgdump) cu rotație. Trigger manual: POST /admin/backup.",
   "backup_dir": "~/Documents/MyVault/backups/kage",
   "backup_keep": 7,
 
@@ -176,13 +186,20 @@
     "language": "auto"
   },
 
-  "_comment_video_intel": "WP-V: analiza sceptică a clipurilor trimise pe Telegram. Trimiți un link (YouTube/TikTok/Instagram/X/…) → Kage extrage conținutul (subtitrările existente ÎNTÂI = instant+gratis; fără ele → doar audio → Whisper local WP6) → clasifică (trading/tech/carte/lecție/decizie) → analiză sceptică pe T2 local (cost 0) → card de verdict cu butoane (💾 vault, 🔬 → ipoteză quant lab la trading, 🖼 vizual, 🔎 adânc, 🗑). Fluxul implicit = ZERO apeluri cloud. Necesită `yt-dlp` (brew/pip) + ffmpeg; Whisper (WP6) e precondiție pentru clipurile fără subtitrări. `max_duration_s` = plafon peste care nu se mai transcrie (un podcast de 3h nu blochează). Pasul vizual plătit (OCR pe keyframes) trece prin plafonul #7 — se cablează în slice 2.",
+  "_comment_video_intel": "WP-V: fluxul normal (subtitrări/Whisper/T2) costă 0. 🖼 trimite PNG-uri base64 prin OpenRouter la visual_model (Qwen3-VL), iar 🔎 reanalizează prin OpenRouter pe deep_model (Sonnet). Ambele verifică fail-closed plafonul EUR (#7) şi înregistrează costul estimat în trading.db; cu api_budget.enabled=false sunt refuzate. Gemini nu este folosit; LiteLLM nu e implicat în pasul vizual.",
   "video_intel": {
     "enabled": true,
     "ytdlp_bin": "yt-dlp",
     "max_duration_s": 1800,
     "analysis_timeout_s": 300,
-    "visual_auto_max_s": 300
+    "_comment_openrouter": "Folosește video_intel.openrouter_api_key dacă vrei o cheie separată; altfel se reutilizează trading.openrouter_api_key. Nu necesită LiteLLM local.",
+    "openrouter_api_key": "",
+    "openrouter_base_url": "https://openrouter.ai/api/v1",
+    "visual_model": "qwen/qwen3-vl-30b-a3b-instruct",
+    "deep_model": "anthropic/claude-sonnet-4-6",
+    "visual_max_frames": 20,
+    "visual_est_usd_per_frame": 0.002,
+    "deep_est_usd": 0.03
   },
 
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup. Tier 4 (was Gemini CLI) e retras (WP-RMG, 13.07.2026) — nu mai e configurabil aici, rămâne doar etichetă moartă în cod pentru rânduri istorice din DB.",

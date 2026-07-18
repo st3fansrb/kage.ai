@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 
 import httpx
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 _PREVIEW_MAX_CHARS = 800
 _POLL_TIMEOUT = 30  # secunde, long-polling Telegram
+_VIDEO_DEDUPE_TTL_SECONDS = 15 * 60
 
 
 class TelegramGateway:
@@ -44,6 +46,11 @@ class TelegramGateway:
         self._client: Optional[httpx.AsyncClient] = None
         # WP12: după ✏️ pe cardul de schiță, următorul mesaj liber = instrucțiuni de revizie.
         self._pending_revise = False
+        # Retry-urile Telegram sau dubla apăsare pe un buton nu trebuie să consume de două ori
+        # transcriere, keyframes sau apeluri OpenRouter. Starea e deliberat în memorie: la
+        # restart nu blocăm o intenție legitimă, iar endpoint-urile rămân sursa de adevăr.
+        self._video_inflight: set[str] = set()
+        self._video_recent: dict[str, float] = {}
 
     # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -142,6 +149,21 @@ class TelegramGateway:
         markup = {"inline_keyboard": [row]} if row else None
         await self.send(card.get("text", "📹 (card gol)"), reply_markup=markup)
 
+    async def send_deploy_card(self, branch: str, detail: str) -> None:
+        """WP-SD: cardul de confirmare pentru `!deploy` — pull + restart e DOAR pe
+        acest buton, niciodată automat din comandă."""
+        text = (
+            f"🔄 <b>Deploy</b>\n\nBranch <code>{_escape(branch)}</code> — {_escape(detail)}.\n"
+            "Repornesc serviciile acum?"
+        )
+        keyboard = {
+            "inline_keyboard": [[
+                {"text": "🔄 Pull + restart", "callback_data": "deploy:confirm:0"},
+                {"text": "🚫 Anulează", "callback_data": "deploy:cancel:0"},
+            ]]
+        }
+        await self.send(text, reply_markup=keyboard)
+
     async def send_job_card(self, job: dict) -> None:
         """Trimite un card de job (WP-J) cu butoane inline 🔖/✍️/🗑.
         `job` are cheile: hash, title, company, location, url, score."""
@@ -229,7 +251,10 @@ class TelegramGateway:
                 "Comenzi disponibile:\n"
                 "• /status — starea sistemului\n"
                 "• /help — acest mesaj\n\n"
-                "Prefixe Kage:\n"
+                "✍️ <b>Scrie liber, fără prefix</b> — Kage recunoaște singur ce vrei: "
+                "„pornește o misiune care...”, „cât am cheltuit azi?”, „caută joburi noi”, "
+                "„pune misiunea pe pauză” etc.\n\n"
+                "Prefixe Kage (bypass determinist, dacă vrei control exact):\n"
                 "• <code>!fast</code> — răspuns rapid (local)\n"
                 "• <code>!best</code> — model cel mai bun\n"
                 "• <code>!run &lt;task&gt;</code> — agent background\n"
@@ -261,9 +286,37 @@ class TelegramGateway:
         # Rutare la orchestrator
         await self._forward_to_orchestrator(text)
 
+    def _claim_video_operation(self, key: str) -> str:
+        """Rezervă o operație video și întoarce ``new``, ``inflight`` sau ``recent``."""
+        now = time.monotonic()
+        expired = [op for op, until in self._video_recent.items() if until <= now]
+        for op in expired:
+            self._video_recent.pop(op, None)
+        if key in self._video_inflight:
+            return "inflight"
+        if key in self._video_recent:
+            return "recent"
+        self._video_inflight.add(key)
+        return "new"
+
+    def _release_video_operation(self, key: str, *, succeeded: bool) -> None:
+        self._video_inflight.discard(key)
+        if succeeded:
+            self._video_recent[key] = time.monotonic() + _VIDEO_DEDUPE_TTL_SECONDS
+
     async def _handle_video(self, url: str) -> None:
         """WP-V: trimite URL-ul la /video/analyze și afișează cardul de verdict cu butoane."""
+        key = f"analyze:{_vi.canonical_video_url(url)}"
+        state = self._claim_video_operation(key)
+        if state == "inflight":
+            await self.send("⏳ Analiza acestui clip este deja în curs.")
+            return
+        if state == "recent":
+            await self.send("ℹ️ Clipul a fost deja analizat recent; nu pornesc o analiză duplicată.")
+            return
+
         await self.send("📹 Analizez clipul… (subtitrări/transcript local)")
+        succeeded = False
         try:
             headers = {}
             if self._api_token:
@@ -275,6 +328,7 @@ class TelegramGateway:
                 )
             body = resp.json() if resp.status_code == 200 else {}
             if resp.status_code == 200 and body.get("ok"):
+                succeeded = True
                 await self.send_video_card(body["id"], body["card"])
             else:
                 detail = body.get("error") if body else f"HTTP {resp.status_code}"
@@ -282,6 +336,8 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] video analyze failed: {e}")
             await self.send("⚠️ Eroare internă la analiza clipului.")
+        finally:
+            self._release_video_operation(key, succeeded=succeeded)
 
     async def _handle_voice(self, file_id: str) -> None:
         """WP6: descarcă voice memo-ul, îl transcrie local (endpoint orchestrator)
@@ -341,6 +397,13 @@ class TelegramGateway:
         # Confirmă primirea (elimină loading din Telegram)
         await self._tg_post("answerCallbackQuery", {"callback_query_id": callback_id})
 
+        # Un buton poate fi apăsat numai în chatul configurat. Fără acest guard,
+        # callback_data dintr-un mesaj al botului ajungea la endpoint-uri interne
+        # de risc, deploy, misiuni sau video, deși `chat_id` fusese deja extras.
+        if chat_id != self._chat_id:
+            logger.warning("[TelegramGateway] callback respins din chat neautorizat: %s", chat_id)
+            return
+
         if data.startswith("risk:"):
             await self._handle_risk_callback(data)
         elif data.startswith("video:"):
@@ -351,6 +414,8 @@ class TelegramGateway:
             await self._handle_mission_draft_callback(data)
         elif data.startswith("mission:"):
             await self._handle_mission_callback(data)
+        elif data.startswith("deploy:"):
+            await self._handle_deploy_callback(data)
 
     async def _handle_risk_callback(self, data: str) -> None:
         parts = data.split(":", 2)
@@ -439,6 +504,35 @@ class TelegramGateway:
             logger.error(f"[TelegramGateway] mission draft callback failed: {e}")
             await self.send("⚠️ Eroare internă la procesarea schiței.")
 
+    async def _handle_deploy_callback(self, data: str) -> None:
+        """WP-SD: butoanele cardului de deploy — deploy:confirm|cancel:0. `confirm` e
+        singurul loc din tot fluxul care declanșează pull + restart real."""
+        parts = data.split(":", 2)
+        if len(parts) != 3:
+            return
+        _, action, _unused = parts
+        if action == "cancel":
+            await self.send("🚫 Deploy anulat.")
+            return
+        try:
+            headers = {}
+            if self._api_token:
+                headers["Authorization"] = f"Bearer {self._api_token}"
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(f"{self._orchestrator_url}/deploy/confirm", headers=headers)
+            body = resp.json() if resp.status_code == 200 else {}
+            if resp.status_code == 200 and body.get("ok"):
+                await self.send(
+                    f"🔄 {_escape(str(body.get('detail', 'Pull făcut.')))}\n"
+                    "Repornesc serviciile — revin online în câteva secunde."
+                )
+            else:
+                detail = body.get("detail") if body else f"HTTP {resp.status_code}"
+                await self.send(f"⚠️ Deploy eșuat: {_escape(str(detail))}")
+        except Exception as e:
+            logger.error(f"[TelegramGateway] deploy callback failed: {e}")
+            await self.send("⚠️ Eroare internă la deploy.")
+
     async def _handle_video_callback(self, data: str) -> None:
         """WP-V: butoanele cardului de verdict — video:<action>:<vid> → /video/<action>/<vid>.
         `visual` re-analizează cu note vizuale (răspunde cu un card nou); restul dau confirmare."""
@@ -448,6 +542,13 @@ class TelegramGateway:
         _, action, vid = parts
         if action not in ("save", "hypothesis", "visual", "deep", "ignore"):
             return
+        key = f"callback:{action}:{vid}"
+        state = self._claim_video_operation(key)
+        if state != "new":
+            await self.send("⏳ Acțiunea video este deja în curs sau tocmai a fost efectuată.")
+            return
+
+        succeeded = False
         try:
             headers = {}
             if self._api_token:
@@ -459,6 +560,7 @@ class TelegramGateway:
                 )
             body = resp.json() if resp.status_code in (200, 404) else {}
             if body.get("ok"):
+                succeeded = True
                 if action == "visual" and body.get("card"):
                     await self.send(f"🖼 {body.get('frames', 0)} cadre analizate.")
                     await self.send_video_card(body["id"], body["card"])
@@ -475,6 +577,8 @@ class TelegramGateway:
         except Exception as e:
             logger.error(f"[TelegramGateway] video callback failed: {e}")
             await self.send("⚠️ Eroare internă la procesarea butonului.")
+        finally:
+            self._release_video_operation(key, succeeded=succeeded)
 
     async def _handle_job_callback(self, data: str) -> None:
         """Butoane job (WP-J): job:save|apply|ignore:<hash> → endpoint /jobs/*."""

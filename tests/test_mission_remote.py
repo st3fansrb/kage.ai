@@ -12,6 +12,7 @@ import sqlite3
 import pytest
 
 import orchestrator
+import pg_store
 import telegram_gateway
 
 
@@ -38,12 +39,8 @@ _DRAFT_MD_REVISED = """# Mission: Adaugă un endpoint de health (revizuit)
 
 
 @pytest.fixture
-def mdb(monkeypatch, tmp_path):
-    """DB in-memory cu tabelele de misiune + LLM/launch mock-uite."""
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    orchestrator._ensure_missions_table(conn)
-    conn.commit()
-    monkeypatch.setattr(orchestrator, "_db_conn", conn)
+def mdb(pg, monkeypatch, tmp_path):
+    """missions/mission_wps → PG de test (WP-PG); LLM/launch mock-uite."""
     monkeypatch.setattr(orchestrator, "_active_mission_id", None)
     monkeypatch.setattr(orchestrator, "_tg_gateway", None)
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
@@ -57,7 +54,6 @@ def mdb(monkeypatch, tmp_path):
         return _DRAFT_MD_REVISED if "Revizuiește" in prompt else _DRAFT_MD
     monkeypatch.setattr(orchestrator, "_agent_complete", _fake_complete)
     yield orchestrator
-    conn.close()
 
 
 # ── Helpers puri ──────────────────────────────────────────────────────────────
@@ -324,26 +320,22 @@ def test_push_to_bare_remote(gitrepo, monkeypatch, tmp_path):
 # ══ Slice 2: watchdog (job_runs + recuperare) ═════════════════════════════════
 
 @pytest.fixture
-def jrdb(monkeypatch):
-    conn = sqlite3.connect(":memory:", check_same_thread=False)
-    orchestrator._ensure_job_runs_table(conn)
-    conn.commit()
-    monkeypatch.setattr(orchestrator, "_db_conn", conn)
+def jrdb(pg, monkeypatch):
+    """job_runs → PG de test (WP-PG)."""
     monkeypatch.setattr(orchestrator, "_tg_gateway", None)
     yield orchestrator
-    conn.close()
 
 
 def test_job_run_begin_end(jrdb):
     orch = jrdb
     rid = orch._job_run_begin("__x__")
     assert rid is not None
-    row = orch._db_conn.execute(
-        "SELECT finished_at, status FROM job_runs WHERE id=?", (rid,)).fetchone()
+    row = pg_store.fetchone(
+        "SELECT finished_at, status FROM job_runs WHERE id=%s", (rid,))
     assert row[0] is None   # încă deschis
     orch._job_run_end(rid, "done")
-    row = orch._db_conn.execute(
-        "SELECT finished_at, status FROM job_runs WHERE id=?", (rid,)).fetchone()
+    row = pg_store.fetchone(
+        "SELECT finished_at, status FROM job_runs WHERE id=%s", (rid,))
     assert row[0] is not None and row[1] == "done"
 
 
@@ -355,8 +347,8 @@ async def test_tracked_job_records_finish(jrdb):
         ran.append(1)
     await orch._tracked_job("__t__", _work())
     assert ran == [1]
-    row = orch._db_conn.execute(
-        "SELECT status, finished_at FROM job_runs WHERE job_id='__t__'").fetchone()
+    row = pg_store.fetchone(
+        "SELECT status, finished_at FROM job_runs WHERE job_id='__t__'")
     assert row[0] == "done" and row[1] is not None
 
 
@@ -367,17 +359,16 @@ async def test_tracked_job_records_failure(jrdb):
         raise ValueError("x")
     with pytest.raises(ValueError):
         await orch._tracked_job("__t__", _boom())
-    row = orch._db_conn.execute(
-        "SELECT status FROM job_runs WHERE job_id='__t__'").fetchone()
+    row = pg_store.fetchone(
+        "SELECT status FROM job_runs WHERE job_id='__t__'")
     assert row[0] == "failed"
 
 
 async def test_recover_interrupted_retriggers(jrdb, monkeypatch):
     orch = jrdb
     # simulează un scan întrerupt: rând deschis (finished_at NULL)
-    orch._db_conn.execute(
+    pg_store.execute(
         "INSERT INTO job_runs (job_id, started_at) VALUES ('__job_scan__', '2026-07-09T19:00:00')")
-    orch._db_conn.commit()
     fired = []
 
     async def _fake_scan():
@@ -394,8 +385,8 @@ async def test_recover_interrupted_retriggers(jrdb, monkeypatch):
     await asyncio.sleep(0)
 
     # rândul întrerupt e marcat, jobul re-declanșat, alertă trimisă
-    row = orch._db_conn.execute(
-        "SELECT status, finished_at FROM job_runs WHERE started_at='2026-07-09T19:00:00'").fetchone()
+    row = pg_store.fetchone(
+        "SELECT status, finished_at FROM job_runs WHERE started_at='2026-07-09T19:00:00'")
     assert row[0] == "interrupted" and row[1] is not None
     assert fired == [1]
     assert notes and "întrerupt" in notes[0]
