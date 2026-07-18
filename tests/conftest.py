@@ -22,10 +22,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import orchestrator  # noqa: E402
 import pg_store  # noqa: E402
+from psycopg.conninfo import conninfo_to_dict, make_conninfo  # noqa: E402
 
 _PG_ADMIN_DSN = os.environ.get("KAGE_TEST_PG_ADMIN_DSN", "dbname=postgres")
 _TEST_DB_NAME = f"kage_test_{uuid.uuid4().hex[:8]}"
-_TEST_DSN = f"dbname={_TEST_DB_NAME}"
+# DSN-ul de test moștenește host/user/parolă/port din DSN-ul admin, schimbând DOAR baza.
+# Un `dbname=...` gol se conectează pe user-ul OS local prin socket — merge local (trust),
+# dar pică în CI unde Postgres cere postgres/postgres@localhost (255 erori la primul CI).
+_TEST_DSN = make_conninfo(**{**conninfo_to_dict(_PG_ADMIN_DSN), "dbname": _TEST_DB_NAME})
 
 
 @pytest.fixture(autouse=True)
