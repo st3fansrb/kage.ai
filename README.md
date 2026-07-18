@@ -83,6 +83,27 @@ See [kage_config.example.json](kage_config.example.json) for all options.
 
 ---
 
+## KageBench (on demand)
+
+KageBench is the minimal regression harness for agent missions (Codex proposal: G1). It
+runs 10 fixed Kage/trading tasks in a dedicated clean worktree, records success,
+partial success, cost, latency, turns, tool calls and approval requests, then checks the
+automatic acceptance criterion for each task. It is deliberately not part of every commit:
+run it before a large WP and compare with the last report.
+
+```bash
+python -m kagebench \
+  --worktree /absolute/path/to/clean-worktree \
+  --output reports/kagebench \
+  --previous reports/kagebench/kagebench-previous.json
+```
+
+The command writes JSON (machine-readable) and Markdown (review-readable). A loss of
+success or higher cost than the previous report is flagged as a regression signal, never
+as an automatic deployment blocker.
+
+---
+
 ## Chat prefixes
 
 | Prefix | Effect |

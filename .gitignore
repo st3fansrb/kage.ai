@@ -25,6 +25,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+reports/kagebench/
 
 .DS_Store
 *.plist

@@ -1,0 +1,84 @@
+{
+  "tasks": [
+    {
+      "id": "KB01",
+      "title": "Fix the non-stream API fixture",
+      "fixture": "fixtures/api_contract.json",
+      "instruction": "Fix-the-red-test. `kagebench/fixtures/api_contract.json` is an isolated, deliberately broken copy, never production code. Edit it so it describes exactly one non-stream OpenAI-compatible response: request.stream is false; response.choices is 1; response.role is assistant; and response.content_required is true. Run the acceptance command after editing.",
+      "allowed_tools": ["Read", "Edit", "Bash"],
+      "acceptance_command": "{python} -c \"import json; d=json.load(open('kagebench/fixtures/api_contract.json')); assert set(d) == set(('request', 'response')), d; assert d.get('request') == dict(stream=False), d; assert d.get('response') == dict(choices=1, role='assistant', content_required=True), d\""
+    },
+    {
+      "id": "KB02",
+      "title": "Fix the high-risk push policy fixture",
+      "fixture": "fixtures/risk_policy.json",
+      "instruction": "Fix-the-red-test. `kagebench/fixtures/risk_policy.json` is an isolated, deliberately broken policy fixture. Edit it so the scenario is tool Bash with command `git push origin main`, its risk_level is high, and requires_approval is true. Do not change policy.yaml or production code; run the acceptance command.",
+      "allowed_tools": ["Read", "Edit", "Bash"],
+      "acceptance_command": "{python} -c \"import json; d=json.load(open('kagebench/fixtures/risk_policy.json')); assert set(d) == set(('scenario', 'risk_level', 'requires_approval')), d; assert d.get('scenario') == dict(tool='Bash', command='git push origin main'), d; assert d.get('risk_level') == 'high', d; assert d.get('requires_approval') is True, d\""
+    },
+    {
+      "id": "KB03",
+      "title": "Fix the workspace-confinement fixture",
+      "fixture": "fixtures/confinement.json",
+      "instruction": "Fix-the-red-test. `kagebench/fixtures/confinement.json` is an isolated, deliberately broken fixture. Edit it so candidate_cwd is `/tmp/outside-allowed-root`, expected_decision is `blocked`, and reason is `outside_allowed_task_roots`. Do not edit risk_hook.py or orchestrator.py; run the acceptance command.",
+      "allowed_tools": ["Read", "Edit", "Bash"],
+      "acceptance_command": "{python} -c \"import json; d=json.load(open('kagebench/fixtures/confinement.json')); assert set(d) == set(('candidate_cwd', 'expected_decision', 'reason')), d; assert d.get('candidate_cwd') == '/tmp/outside-allowed-root', d; assert d.get('expected_decision') == 'blocked', d; assert d.get('reason') == 'outside_allowed_task_roots', d\""
+    },
+    {
+      "id": "KB04",
+      "title": "Extract the default cloud-call cap",
+      "fixture": "fixtures/run_ledger.json",
+      "instruction": "Extract-the-right-answer. Read `kage_config.example.json` and find the default value of `max_cloud_calls_per_day`. Using Bash is allowed only to create `kagebench_answers/KB04.txt`; write the decimal value alone, with optional trailing newline. Do not modify source or fixtures. Run the acceptance command.",
+      "allowed_tools": ["Read", "Bash"],
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB04.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '20', p.read_text(encoding='utf-8')\""
+    },
+    {
+      "id": "KB05",
+      "title": "Extract the default confinement state",
+      "fixture": "fixtures/mission.json",
+      "instruction": "Extract-the-right-answer. Read the `allowed_task_roots` comment and value in `kage_config.example.json`. Write exactly `disabled` to `kagebench_answers/KB05.txt` if the documented default has confinement off; otherwise write `enabled`. Use Bash only for that output file and run the acceptance command.",
+      "allowed_tools": ["Read", "Bash"],
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB05.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == 'disabled', p.read_text(encoding='utf-8')\""
+    },
+    {
+      "id": "KB06",
+      "title": "Extract the API-budget default",
+      "fixture": "fixtures/api_budget.json",
+      "instruction": "Extract-the-right-answer. Read `kage_config.example.json` and find `api_budget.enabled`. Write its JSON boolean value in lowercase, and nothing else, to `kagebench_answers/KB06.txt`. Use Bash only to create that output file; do not alter configuration. Run the acceptance command.",
+      "allowed_tools": ["Read", "Bash"],
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB06.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == 'false', p.read_text(encoding='utf-8')\""
+    },
+    {
+      "id": "KB07",
+      "title": "Fix the statistical-validation fixture",
+      "fixture": "fixtures/trading_validation.json",
+      "instruction": "Fix-the-red-test (WP-T). `kagebench/fixtures/trading_validation.json` is an isolated, deliberately broken fixture. Read `trading/validation.py` if needed, then edit the fixture to encode dsr_threshold 0.95, permutation_threshold 0.05, min_trades 20, and signal_rule `dsr_gte_and_permutation_lte`. Do not change trading production code. Run the acceptance command.",
+      "allowed_tools": ["Read", "Edit", "Bash"],
+      "acceptance_command": "{python} -c \"import json; d=json.load(open('kagebench/fixtures/trading_validation.json')); assert set(d) == set(('dsr_threshold', 'permutation_threshold', 'min_trades', 'signal_rule')), d; assert d.get('dsr_threshold') == 0.95, d; assert d.get('permutation_threshold') == 0.05, d; assert d.get('min_trades') == 20, d; assert d.get('signal_rule') == 'dsr_gte_and_permutation_lte', d\""
+    },
+    {
+      "id": "KB08",
+      "title": "Fix the paper-only hypothesis fixture",
+      "fixture": "fixtures/hypothesis.json",
+      "instruction": "Fix-the-red-test (WP-T). `kagebench/fixtures/hypothesis.json` is an isolated, deliberately broken fixture. Read the paper-only invariant in `trading/safety.py` or `docs/QUANT_LAB_DESIGN.md`, then edit the fixture so mode is `paper_only`, live_orders is false, and automatic_promotion is false. Do not edit trading code. Run the acceptance command.",
+      "allowed_tools": ["Read", "Edit", "Bash"],
+      "acceptance_command": "{python} -c \"import json; d=json.load(open('kagebench/fixtures/hypothesis.json')); assert set(d) == set(('mode', 'live_orders', 'automatic_promotion')), d; assert d.get('mode') == 'paper_only', d; assert d.get('live_orders') is False, d; assert d.get('automatic_promotion') is False, d\""
+    },
+    {
+      "id": "KB09",
+      "title": "Extract the nightly proposal limit",
+      "fixture": "fixtures/trading_pipeline.json",
+      "instruction": "Extract-the-right-answer (WP-T). Read the `trading.actor.max_proposals` setting in `kage_config.example.json`. Write its decimal value alone to `kagebench_answers/KB09.txt`. Use Bash only for that output file and run the acceptance command.",
+      "allowed_tools": ["Read", "Bash"],
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB09.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '3', p.read_text(encoding='utf-8')\""
+    },
+    {
+      "id": "KB10",
+      "title": "Extract the kill-switch schedule",
+      "fixture": "fixtures/video_intel.json",
+      "instruction": "Extract-the-right-answer (WP-T). Read `trading.killswitch_cron` in `kage_config.example.json`. Write the exact five-field cron expression alone to `kagebench_answers/KB10.txt`. Use Bash only for that output file and run the acceptance command.",
+      "allowed_tools": ["Read", "Bash"],
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB10.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '*/5 * * * *', p.read_text(encoding='utf-8')\""
+    }
+  ]
+}
