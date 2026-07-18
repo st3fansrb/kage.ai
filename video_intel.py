@@ -35,6 +35,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable, Optional, Sequence
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ KNOWN_VIDEO_HOSTS = (
     "facebook.com", "fb.watch",
 )
 _URL_RE = re.compile(r"https?://[^\s<>()]+", re.IGNORECASE)
+_TRACKING_QUERY_PARAMS = {"fbclid", "gclid", "mc_cid", "mc_eid"}
 
 
 def find_video_url(text: str) -> Optional[str]:
@@ -70,6 +72,39 @@ def find_video_url(text: str) -> Optional[str]:
             if host_bare == known or host_bare.endswith("." + known):
                 return raw.rstrip(".,)")
     return None
+
+
+def canonical_video_url(url: str) -> str:
+    """Normalizează un URL video într-o cheie stabilă pentru deduplicare.
+
+    Parametrii de tracking și fragmentul nu schimbă clipul. Parametrii semantici
+    (de exemplu ``v`` pentru YouTube) rămân în cheie. Funcția nu validează ori
+    face I/O; gateway-ul o poate folosi înainte de orice apel costisitor.
+    """
+    try:
+        parts = urlsplit(url)
+        scheme = parts.scheme.lower()
+        host = (parts.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        port = parts.port
+    except ValueError:
+        # URL-ul va fi raportat ulterior de extractor; nu lăsăm deduplicarea să
+        # transforme o intrare neobișnuită într-o eroare de gateway.
+        return url
+
+    if not scheme or not host:
+        return url
+    if port and not ((scheme == "https" and port == 443) or (scheme == "http" and port == 80)):
+        host = f"{host}:{port}"
+
+    query = [
+        (key, value)
+        for key, value in parse_qsl(parts.query, keep_blank_values=True)
+        if not key.lower().startswith("utm_") and key.lower() not in _TRACKING_QUERY_PARAMS
+    ]
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((scheme, host, path, urlencode(sorted(query)), ""))
 
 
 # ── Rezultate ────────────────────────────────────────────────────────────────────
