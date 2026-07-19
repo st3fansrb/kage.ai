@@ -95,6 +95,10 @@ fi
 # Scheduler-ul batch (standalone: scheduler + webserver + triggerer, LocalExecutor,
 # metadata în Postgres). Pornit DOAR dacă .airflow-venv există ȘI airflow_batches=true —
 # altfel cele 4 batch-uri rămân în APScheduler. Non-fatal: un Airflow căzut nu oprește restul.
+# ATENȚIE (19.07.2026): Airflow standalone NATIV pe macOS Apple Silicon intră în crash-loop
+# (workerii gunicorn/scheduler primesc SIGSEGV — fork() + runtime Objective-C), chiar cu
+# OBJC_DISABLE_INITIALIZE_FORK_SAFETY. Pentru operare stabilă rulează Airflow în Colima/Linux
+# (fallback-ul din specul WP-AF). Cât timp airflow_batches=false, blocul ăsta nu se atinge.
 _AIRFLOW_ON=$("$DIR/.venv/bin/python" -c "import json;print(json.load(open('$DIR/kage_config.json')).get('airflow_batches',False))" 2>/dev/null || echo False)
 if [[ -x "$DIR/.airflow-venv/bin/airflow" && "$_AIRFLOW_ON" == "True" ]]; then
   if port_up 8080; then
@@ -108,7 +112,13 @@ if [[ -x "$DIR/.airflow-venv/bin/airflow" && "$_AIRFLOW_ON" == "True" ]]; then
     export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://$(whoami)@127.0.0.1:5432/airflow"
     export KAGE_CONFIG_PATH="$DIR/kage_config.json"
     export KAGE_BASE_URL="http://127.0.0.1:4001"
-    nohup "$DIR/.airflow-venv/bin/airflow" standalone >> "$LOGS/airflow.log" 2>&1 &
+    # standalone își pornește sub-procesele (scheduler/webserver/triggerer) apelând `airflow`
+    # din PATH — venv-ul izolat trebuie prepend-uit, altfel: FileNotFoundError: 'airflow'.
+    export PATH="$DIR/.airflow-venv/bin:$PATH"
+    # Atenuări macOS pentru fork()-safety (necesare, dar NU suficiente pe Apple Silicon nativ).
+    export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
+    export NO_PROXY="*" no_proxy="*"
+    nohup airflow standalone >> "$LOGS/airflow.log" 2>&1 &
     sleep 3
     port_up 8080 \
       && echo "  ✓ Airflow pornit (UI :8080, parola în airflow/simple_auth_manager_passwords.json.generated sau standalone_admin_password.txt)" \

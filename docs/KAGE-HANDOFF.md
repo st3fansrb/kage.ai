@@ -1583,6 +1583,20 @@ viu (SUCCESS). Teste: `tests/test_airflow_batches.py` (5) — **545 verzi**. Fi�
 'apache-airflow[postgres]==2.10.5'` + `createdb airflow` + `airflow db migrate` +
 `airflow_batches: true` în config (documentat în `kage_config.example.json`).
 
+**STARE DE ACTIVARE (19.07.2026) — cod livrat, activare BLOCAT de mediu:** Airflow instalat
+(`.airflow-venv`), schema pe Postgres, DAG-urile validate end-to-end (`airflow tasks test` →
+`/admin/etl` pe orchestratorul viu = SUCCESS), footprint 579MB/4 procese (sub ținta 1GB), iar
+gating-ul e verificat LIVE în ambele sensuri (flag on → cele 4 batch-uri dispar din APScheduler;
+flag off → revin). DAR: `airflow standalone` NATIV pe macOS Apple Silicon intră în **crash-loop
+de SIGSEGV** pe workerii gunicorn/scheduler/triggerer (fork() + runtime Objective-C), inclusiv
+cu `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` + `no_proxy=*` — task-urile rămân „queued", nu se
+execută. Decizie: **`airflow_batches` lăsat pe FALSE în producție** (batch-urile rulează în
+APScheduler ca înainte — zero gol de acoperire, exact scopul flag-ului). **Follow-up pentru
+activare stabilă = fallback-ul Colima/Linux din specul de mai sus** (containerul Linux ocolește
+problema de fork macOS); de făcut ca WP mic separat înainte de a pune `airflow_batches: true`.
+Fix-ul de PATH + env-urile macOS în `start_all.sh` sunt deja aplicate (blocul nu se atinge cât
+timp flag-ul e false).
+
 ### WP-KF — Kafka ca transport de evenimente · AMÂNAT (13.07.2026) · doar după WP-ETL + WP-AF
 
 **Decizie (§4):** amânat deliberat. Justificarea tehnică onestă de azi (scriitori concurenți
