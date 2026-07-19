@@ -107,6 +107,9 @@
   "postgres_dsn": "dbname=kage",
   "postgres_startup_retry_seconds": 30,
 
+  "_comment_airflow": "WP-AF: Airflow (standalone, LocalExecutor, metadata în Postgres) deține cele patru batch-uri NON-safety-critical: agregarea nightly ETL, backupul, scanul de joburi, calibrarea săptămânală de trading (DAG-uri în airflow/dags/, apelează endpoint-urile existente). airflow_batches=true → aceste cron-uri NU se mai înregistrează în APScheduler (altfel rulează de două ori); killswitch-ul de trading + heartbeat-ul RĂMÂN în proces. Default false = fără Airflow, orchestratorul le rulează ca înainte. Setup: python3.12 -m venv .airflow-venv && pip install 'apache-airflow[postgres]==2.10.5' --constraint <constraints-3.12>; createdb airflow; pornit de start_all.sh (UI :8080).",
+  "airflow_batches": false,
+
   "_comment_backup": "Backup zilnic (05:00) al cache_db/ (SQLite + ChromaDB) + dump-ul Postgres (kage.pgdump) cu rotație. Trigger manual: POST /admin/backup.",
   "backup_dir": "~/Documents/MyVault/backups/kage",
   "backup_keep": 7,

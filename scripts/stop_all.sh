@@ -20,6 +20,12 @@ echo "=== Opresc AI Orchestration System v2 ==="
 
 kill_port "Orchestrator" 4001
 kill_port "LiteLLM"      4000
+# WP-AF: Airflow standalone = mai multe procese (webserver :8080 + scheduler + triggerer).
+kill_port "Airflow UI"   8080
+if pgrep -f "$DIR/.airflow-venv/bin/airflow" >/dev/null 2>&1; then
+  pkill -f "$DIR/.airflow-venv/bin/airflow" 2>/dev/null || true
+  echo "  ✓ Airflow (scheduler/triggerer) oprit"
+fi
 # Ollama nu e oprit intenționat — rulează și pentru alte use-case-uri
 # Widget nu e oprit — rămâne în menubar și arată 🔴 (sistem offline)
 

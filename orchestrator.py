@@ -314,6 +314,13 @@ TRADING_CONTEXT_CRON      = str(_trading_cfg.get("daily_context_cron", "0 6 * * 
 TRADING_NIGHTLY_CRON      = str(_trading_cfg.get("nightly_cron", "0 3 * * *"))
 TRADING_CALIBRATION_CRON  = str(_trading_cfg.get("calibration_cron", "0 4 * * 1"))
 
+# WP-AF: când Airflow deține batch-urile, cele patru cron-uri migrate (agregare ETL,
+# backup, scan joburi, calibrare trading) NU se mai înregistrează în APScheduler — altfel
+# ar rula de două ori. Killswitch-ul de trading + heartbeat-ul RĂMÂN în proces (fail-closed,
+# nu au ce căuta într-un scheduler extern). Default False: fără Airflow, orchestratorul le
+# rulează ca înainte (fără gol de acoperire).
+AIRFLOW_BATCHES        = bool(_cfg.get("airflow_batches", False))
+
 # WP6: transcriere voce 100% LOCALĂ (whisper.cpp) pentru voice memos pe Telegram.
 # `bin`   = binarul whisper.cpp (brew: `whisper-cli`); rezolvat prin PATH dacă nu e cale absolută.
 # `model` = calea către modelul GGML (ex. large-v3-turbo, ~1,6GB — descărcat separat).
@@ -1096,6 +1103,10 @@ async def _job_scan_scheduled() -> None:
 # `_recover_interrupted_jobs` o înfășoară el în `_tracked_job`, deci NU pune aici wrapper-ul
 # tracked, altfel s-ar urmări de două ori).
 def _recoverable_jobs() -> dict:
+    # WP-AF: când Airflow deține scanul de joburi, recuperarea la restart e treaba lui
+    # (retries + backfill) — orchestratorul nu-l re-declanșează, altfel ar rula de două ori.
+    if AIRFLOW_BATCHES:
+        return {}
     return {"__job_scan__": _job_scan_all}
 
 
@@ -1285,13 +1296,16 @@ async def startup_scheduler():
                 logger.warning(f"Task {task.get('id')} skip: {e}")
         _scheduler.add_job(_vault_git_commit_job, "cron", hour=3, minute=0, id="__vault_git_commit__")
         # WP-ETL: agregarea nightly a telemetriei (raw → staging → mart). La 01:30, după
-        # ce ziua s-a închis; devine primul DAG real la WP-AF.
-        if pg_store.configured():
+        # ce ziua s-a închis. WP-AF: mutat pe DAG-ul `kage_etl_daily` — în APScheduler doar
+        # dacă Airflow NU deține batch-urile.
+        if pg_store.configured() and not AIRFLOW_BATCHES:
             _scheduler.add_job(_etl_nightly_job, "cron", hour=1, minute=30, id="__etl_nightly__")
         _scheduler.add_job(_cache_vacuum, "cron", hour=4, minute=0, id="__cache_vacuum__")
-        _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
-        # Job hunter (WP-J): scan automat 2×/zi dacă e activat + configurat corect.
-        if JOBS_ENABLED and JOBS_PROFILES:
+        # WP-AF: backup mutat pe DAG-ul `kage_backup_daily` când Airflow deține batch-urile.
+        if not AIRFLOW_BATCHES:
+            _scheduler.add_job(_backup_cache_db, "cron", hour=5, minute=0, id="__backup_cache_db__")
+        # Job hunter (WP-J): scan automat 2×/zi. WP-AF: pe DAG-ul `kage_job_scan` când Airflow e activ.
+        if JOBS_ENABLED and JOBS_PROFILES and not AIRFLOW_BATCHES:
             try:
                 _scheduler.add_job(
                     _job_scan_scheduled, "cron", id="__job_scan__", **_parse_cron(JOBS_SCAN_CRON)
@@ -1310,12 +1324,17 @@ async def startup_scheduler():
                 logger.warning(f"[Briefing] cron invalid ({BRIEFING_CRON!r}): {e}")
         # WP-T: bucle de trading (paper-only) — doar dacă `trading.enabled`.
         if TRADING_ENABLED:
-            for cron, fn, jid, label in (
+            _trading_jobs = [
                 (TRADING_KILLSWITCH_CRON, _trading_killswitch_job, "__trading_killswitch__", "kill-switch"),
                 (TRADING_CONTEXT_CRON, _trading_daily_context_job, "__trading_context__", "context zilnic"),
                 (TRADING_NIGHTLY_CRON, _trading_nightly_job, "__trading_nightly__", "research nocturn"),
-                (TRADING_CALIBRATION_CRON, _trading_calibration_job, "__trading_calibration__", "calibrare"),
-            ):
+            ]
+            # WP-AF: calibrarea săptămânală → DAG-ul `kage_trading_calibration` când Airflow e
+            # activ. Killswitch/context/nightly RĂMÂN în proces (killswitch e safety-critical).
+            if not AIRFLOW_BATCHES:
+                _trading_jobs.append(
+                    (TRADING_CALIBRATION_CRON, _trading_calibration_job, "__trading_calibration__", "calibrare"))
+            for cron, fn, jid, label in _trading_jobs:
                 try:
                     _scheduler.add_job(fn, "cron", id=jid, **_parse_cron(cron))
                     logger.info(f"[Trading] {label} programat: {cron}")

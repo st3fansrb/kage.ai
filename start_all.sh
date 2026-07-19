@@ -91,6 +91,31 @@ else
   port_up 4001 && echo "  ✓ Orchestrator pornit" || echo "  ✗ Orchestrator — eroare, vezi $LOGS/orchestrator.log"
 fi
 
+# ── Airflow (WP-AF) :8080 ─────────────────────────────────────────────────────
+# Scheduler-ul batch (standalone: scheduler + webserver + triggerer, LocalExecutor,
+# metadata în Postgres). Pornit DOAR dacă .airflow-venv există ȘI airflow_batches=true —
+# altfel cele 4 batch-uri rămân în APScheduler. Non-fatal: un Airflow căzut nu oprește restul.
+_AIRFLOW_ON=$("$DIR/.venv/bin/python" -c "import json;print(json.load(open('$DIR/kage_config.json')).get('airflow_batches',False))" 2>/dev/null || echo False)
+if [[ -x "$DIR/.airflow-venv/bin/airflow" && "$_AIRFLOW_ON" == "True" ]]; then
+  if port_up 8080; then
+    echo "  ✓ Airflow        :8080"
+  else
+    echo "  → Pornesc Airflow (standalone)..."
+    export AIRFLOW_HOME="$DIR/airflow"
+    export AIRFLOW__CORE__LOAD_EXAMPLES=False
+    export AIRFLOW__CORE__EXECUTOR=LocalExecutor
+    export AIRFLOW__CORE__DAGS_FOLDER="$DIR/airflow/dags"
+    export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="postgresql+psycopg2://$(whoami)@127.0.0.1:5432/airflow"
+    export KAGE_CONFIG_PATH="$DIR/kage_config.json"
+    export KAGE_BASE_URL="http://127.0.0.1:4001"
+    nohup "$DIR/.airflow-venv/bin/airflow" standalone >> "$LOGS/airflow.log" 2>&1 &
+    sleep 3
+    port_up 8080 \
+      && echo "  ✓ Airflow pornit (UI :8080, parola în airflow/simple_auth_manager_passwords.json.generated sau standalone_admin_password.txt)" \
+      || echo "  → Airflow pornește (schedulerul poate dura până urcă UI-ul) — vezi $LOGS/airflow.log"
+  fi
+fi
+
 # ── Mission Control (Next.js) :3001 ───────────────────────────────────────────
 # UI-ul nou (WP10). Non-fatal: dacă lipsește .env.local sau node, sare fără să oprească restul.
 if [[ "$*" != *"--no-ui"* ]]; then
