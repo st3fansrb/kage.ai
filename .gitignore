@@ -36,3 +36,10 @@ reports/kagebench/
 # WP-T: freqtrade venv separat + date locale (backtest results, candle cache)
 .trading-venv/
 trading/ft_userdata/
+
+# WP-AF: Airflow — venv izolat + AIRFLOW_HOME (runtime: cfg, logs, db, parola standalone).
+# DAG-urile (airflow/dags/) rămân versionate; restul e artefact local.
+.airflow-venv/
+/airflow/**
+!/airflow/dags/
+!/airflow/dags/**

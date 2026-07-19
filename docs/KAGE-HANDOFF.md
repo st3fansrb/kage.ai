@@ -1536,7 +1536,7 @@ worktree gol; conținutul e identic ca intenție). **Backfill-ul de PRODUCȚIE p
 reală = de rulat la primul restart anunțat** (`POST /admin/etl {"action":"backfill"}` sau
 `python -m etl backfill`) — creează tabelele ETL și populează mart-urile din tot istoricul.
 
-### WP-AF — Airflow pentru job-urile batch · efort: un weekend · după WP-ETL
+### WP-AF — Airflow pentru job-urile batch · efort: un weekend · după WP-ETL · ✅ IMPLEMENTAT (19.07.2026)
 
 **Scop:** cron-urile batch trăiesc azi ÎN procesul orchestratorului (APScheduler): mor odată
 cu el — exact cazul confirmat 09.07 (scanul de 19:00 pierdut tăcut), peticit cu watchdog în
@@ -1564,6 +1564,24 @@ să nu alerteze fals pentru joburile mutate în Airflow.
 **Acceptare:** cele 4 batch-uri rulează din Airflow (istoric în UI) · eșec simulat → retry +
 alertă Telegram · killswitch-ul neatins în APScheduler · cron-urile migrate șterse din
 orchestrator · pytest verde.
+
+**Livrat (19.07.2026):** Airflow **2.10.5 standalone** (LocalExecutor, metadata în
+Postgres-ul WP-PG — baza `airflow`, NU SQLite) în venv izolat `.airflow-venv`. DAG-uri în
+`airflow/dags/kage_batch.py` (`kage_etl_daily` 01:30, `kage_backup_daily` 05:00,
+`kage_job_scan` 07/19, `kage_trading_calibration` luni 04:00) — fiecare apelează endpoint-ul
+existent (`/admin/etl`, `/admin/backup`, `/jobs/scan`, `/admin/trading/calibration`), NU
+reimplementează. `kage_common.py` = helper stdlib: apel autentificat cu token din config
+(nu în DB-ul Airflow) + `on_failure_callback` → Telegram direct. Retries=2, `catchup=False`.
+**Anti-dublă-programare:** flag `airflow_batches` (default False) — pe True cele 4 cron-uri
+NU se mai înregistrează în APScheduler, iar `_recoverable_jobs` nu mai recuperează scanul;
+killswitch/context/nightly trading + heartbeat + vault-git + cache-vacuum RĂMÂN în proces.
+Cablat în `start_all.sh` (standalone :8080, gated pe flag + `.airflow-venv`) + `stop_all.sh`
+(:8080 + pkill scheduler/triggerer) + `.gitignore` (runtime Airflow, DAG-urile versionate).
+Validat end-to-end: `airflow tasks test kage_etl_daily` a apelat `/admin/etl` pe orchestratorul
+viu (SUCCESS). Teste: `tests/test_airflow_batches.py` (5) — **545 verzi**. Fișă de interviu:
+`docs/fise-interviu/wp-af-airflow.md`. Setup manual (pas Stefan): venv + `pip install
+'apache-airflow[postgres]==2.10.5'` + `createdb airflow` + `airflow db migrate` +
+`airflow_batches: true` în config (documentat în `kage_config.example.json`).
 
 ### WP-KF — Kafka ca transport de evenimente · AMÂNAT (13.07.2026) · doar după WP-ETL + WP-AF
 
