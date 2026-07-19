@@ -376,6 +376,12 @@ Raționament:
 
 #### Restanțe din faze „terminate" (nu le pierde — fiecare e alocată unui WP de mai sus)
 
+- **WP-AF-Colima (activarea stabilă a Airflow) — restanță WP-AF (19.07.2026):** codul WP-AF
+  e livrat și gating-ul validat live, dar `airflow standalone` NATIV pe macOS Apple Silicon
+  intră în crash-loop SIGSEGV (fork + Objective-C), deci `airflow_batches` e lăsat pe **false**
+  (batch-urile rulează în APScheduler, zero gol de acoperire). Follow-up = rularea Airflow în
+  **Colima/Linux** (fallback-ul din specul WP-AF, care ocolește problema macOS), apoi
+  `airflow_batches: true`. WP mic, în afara lanțului; nu blochează nimic (batch-urile merg deja).
 - `_briefing_missions()` întoarce încă `None` (promis „după WP11") → cablare la tabelele
   `missions`/`mission_wps` în **WP12**.
 - ~~Daemonul freqtrade dry-run (Bucla 1 execuție) + apelul `bias_allows` în `SampleStrategy`~~
