@@ -869,7 +869,8 @@ async def _run_scheduled_task(task: dict) -> None:
         tier, _, confidence, _ = await decide_tier(msg)
 
     obs_context = _get_obsidian_context(msg)
-    system_prompt = _build_system_prompt(tier, obs_context)
+    project_context = _get_project_context(msg)
+    system_prompt = _build_system_prompt(tier, obs_context, project_ctx=project_context)
     result_text = ""
     model_name = ""
     start_ts = datetime.datetime.now()
@@ -2635,7 +2636,8 @@ async def _chat_dispatch(request: Request, body: dict):
     if memory_ctx:
         _run_event(run_id, "memory", {"chars": len(memory_ctx)})
     obs_context = _get_obsidian_context(last_user)
-    system_prompt = _build_system_prompt(tier, obs_context, memory_ctx)
+    project_context = _get_project_context(last_user)
+    system_prompt = _build_system_prompt(tier, obs_context, memory_ctx, project_context)
     messages_out = _inject_system_prompt(messages, system_prompt)
     _save_match = re.search(r"!save\s+(\S+)", last_user, re.IGNORECASE)
     save_path: Optional[str] = _save_match.group(1) if _save_match else (
@@ -2645,8 +2647,8 @@ async def _chat_dispatch(request: Request, body: dict):
 
     logger.info(
         f"Tier {tier} | forced={forced} | conf={confidence:.2f} | method={routing_method} | "
-        f"obsidian={'yes' if obs_context else 'no'} | save={save_path!r} | "
-        f"preview={last_user[:60]!r}"
+        f"obsidian={'yes' if obs_context else 'no'} | project={'yes' if project_context else 'no'} | "
+        f"save={save_path!r} | preview={last_user[:60]!r}"
     )
 
     _model_label = str(TIER_MODELS[tier]) if tier <= 2 else (TIER_MODELS[tier][1] or "?")
@@ -6415,6 +6417,85 @@ def _get_obsidian_context(message: str) -> Optional[str]:
     return "\n\n---\n\n".join(parts) if parts else None
 
 
+# ── Project context (roadmap) ──────────────────────────────────────────────────
+# Separat de vault-ul personal de mai sus: citește starea REALĂ a proiectului din
+# docs/KAGE-HANDOFF.md, nu din notițele Obsidian. Fișierul are >2000 linii — nu intră
+# întreg în context; extrage doar secțiunile relevante (ultima reordonare + WP-ul
+# menționat explicit, dacă există).
+PROJECT_HANDOFF_PATH = PROJECT_ROOT / "docs" / "KAGE-HANDOFF.md"
+PROJECT_CONTEXT_MAX_CHARS = 6000
+
+_HEADING_RE = re.compile(r"^(#{2,4})\s+(.*)$", re.MULTILINE)
+_WP_MENTION_RE = re.compile(r"\bWP[-\s]?[A-Za-z0-9]{1,6}\b", re.IGNORECASE)
+_WP_ID_RE = re.compile(r"WP[-\s]?([A-Za-z0-9]+)", re.IGNORECASE)
+_PROJECT_TRIGGER_RE = re.compile(
+    r"\b(roadmap|planul|ce urmeaz\w*|starea? (a )?proiect\w*|unde suntem|"
+    r"stadiul proiect\w*|next steps|pachet\w* de lucru|handoff)\b",
+    re.IGNORECASE,
+)
+
+
+def _wp_id(text: str) -> Optional[str]:
+    """Extrage identificatorul canonic dintr-un token/titlu WP (ex. 'WP-G2' -> 'g2',
+    'WP13' -> '13'). Folosit pentru potrivire exactă, nu prefix — 'WP1' nu trebuie
+    să potrivească accidental 'WP10'/'WP1b'."""
+    m = _WP_ID_RE.search(text)
+    return m.group(1).lower() if m else None
+
+
+def _handoff_sections(text: str) -> list[tuple[int, str, str]]:
+    """Împarte documentul pe headinguri ##/###/####. O secțiune se termină la
+    următorul heading de nivel <= al ei (deci include sub-headinguri imbricate)."""
+    headings = [(m.start(), len(m.group(1)), m.group(2).strip()) for m in _HEADING_RE.finditer(text)]
+    sections: list[tuple[int, str, str]] = []
+    for i, (start, level, title) in enumerate(headings):
+        end = len(text)
+        for other_start, other_level, _ in headings[i + 1:]:
+            if other_level <= level:
+                end = other_start
+                break
+        sections.append((level, title, text[start:end].strip()))
+    return sections
+
+
+def _get_project_context(message: str) -> Optional[str]:
+    """Context de proiect din docs/KAGE-HANDOFF.md. Se declanșează pe mențiuni de WP
+    (ex. 'WP13', 'WP-G2') sau pe întrebări despre starea/planul proiectului (roadmap,
+    'ce urmează', 'unde suntem'). Injectează DOAR ultima secțiune de reordonare
+    (starea curentă autoritativă) + secțiunea WP menționată explicit, dacă există —
+    nu fișierul întreg."""
+    mentioned_ids = {i for i in (_wp_id(t) for t in _WP_MENTION_RE.findall(message)) if i}
+    if not mentioned_ids and not _PROJECT_TRIGGER_RE.search(message):
+        return None
+
+    try:
+        text = PROJECT_HANDOFF_PATH.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    sections = _handoff_sections(text)
+    parts: list[str] = []
+    used: set[int] = set()
+
+    reorder_idx = [i for i, s in enumerate(sections) if s[1].lower().startswith("reordonare")]
+    if reorder_idx:
+        idx = reorder_idx[-1]
+        parts.append(sections[idx][2])
+        used.add(idx)
+
+    if mentioned_ids:
+        for i, (level, title, content) in enumerate(sections):
+            if i in used or not title.upper().startswith("WP"):
+                continue
+            if _wp_id(title) in mentioned_ids:
+                parts.append(content)
+                used.add(i)
+
+    if not parts:
+        return None
+    return "\n\n---\n\n".join(parts)[:PROJECT_CONTEXT_MAX_CHARS]
+
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 # Persona externalizată în config (WP5): _PERSONA_BASE / _PERSONA_TIER3_EXTRA
 # se încarcă în secțiunea Config, cu default generic dacă lipsesc din kage_config.json.
@@ -6469,7 +6550,12 @@ async def _compact_messages(messages_out: list, max_messages: int) -> list:
     return result
 
 
-def _build_system_prompt(tier: int, obs_context: Optional[str], memory_ctx: Optional[str] = None) -> str:
+def _build_system_prompt(
+    tier: int,
+    obs_context: Optional[str],
+    memory_ctx: Optional[str] = None,
+    project_ctx: Optional[str] = None,
+) -> str:
     if tier == 1:
         base = _PERSONA_BASE + "\nFii concis — acesta e un task simplu."
     elif tier == 2:
@@ -6479,6 +6565,11 @@ def _build_system_prompt(tier: int, obs_context: Optional[str], memory_ctx: Opti
 
     if obs_context:
         base += f"\n\n## Context personal (vault)\n{obs_context}"
+    if project_ctx:
+        base += (
+            "\n\n## Context proiect (din docs/KAGE-HANDOFF.md, extras relevant)\n"
+            f"{project_ctx}"
+        )
     if memory_ctx:
         base += f"\n\n## Memorie relevantă\n{memory_ctx}"
 
