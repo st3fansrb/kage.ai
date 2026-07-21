@@ -3550,7 +3550,15 @@ async def _agent_complete(prompt: str, *, model: str, system: Optional[str] = No
 async def _mission_draft_text(direction: str, prior_md: Optional[str] = None,
                               revise: Optional[str] = None) -> str:
     """Redactează (sau revizuiește) textul `mission.md` cu MISSION_DRAFT_MODEL. Validează că
-    parsează și are ≥1 pachet de lucru, altfel ridică. Întoarce markdown-ul curat."""
+    parsează și are ≥1 pachet de lucru, altfel ridică. Întoarce markdown-ul curat.
+
+    _agent_complete rulează FĂRĂ tools (allowed_tools=[]) — modelul de draft nu poate citi
+    niciun fișier. Dacă direcția/revizia menționează un WP din roadmap (ex. „execută WP13"),
+    fără grounding modelul ar inventa scopul din nimic. _get_project_context extrage DOAR
+    secțiunea relevantă din docs/KAGE-HANDOFF.md și o injectăm direct în prompt."""
+    scan_text = f"{direction} {revise}" if revise else direction
+    project_ctx = _get_project_context(scan_text)
+
     if revise and prior_md:
         prompt = (
             f"Direcția inițială: «{direction}».\n\nPlanul curent:\n{prior_md}\n\n"
@@ -3560,6 +3568,13 @@ async def _mission_draft_text(direction: str, prior_md: Optional[str] = None,
     else:
         prompt = (f"Direcția lui Stefan: «{direction}».\n\n"
                   "Produ documentul `mission.md` complet.")
+    if project_ctx:
+        prompt += (
+            "\n\nContext din planul existent al proiectului (docs/KAGE-HANDOFF.md) — "
+            "folosește-l ca sursă de adevăr pentru scope, pași și criterii de acceptare; "
+            "NU inventa alt scop decât cel descris aici dacă direcția se referă la un WP:\n"
+            f"{project_ctx}"
+        )
     raw = await _agent_complete(prompt, model=MISSION_DRAFT_MODEL, system=_MISSION_DRAFT_SYS)
     md = _extract_mission_md(raw)
     mission = _mr.parse_mission(md)
