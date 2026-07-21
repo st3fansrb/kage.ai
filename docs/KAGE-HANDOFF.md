@@ -407,6 +407,30 @@ Raționament:
 - ~~#7 e doar parțial: colectarea `cost_usd` + afișarea EUR există; **plafonul-gate
   lipsește**.~~ ✅ (12.07.2026) plafonul-gate livrat (`api_budget.py`, vezi specul #7 în §Restul).
 
+#### Fixuri ad-hoc (raportate de Stefan, în afara lanțului de WP-uri) — 21.07.2026
+
+Trei bug-uri de utilizare zilnică pe Telegram, găsite prin folosire, nu prin plan — livrate
+într-o sesiune, fiecare pe branch propriu, PR spre `dev`, CI verde (`#51`/`#52`/`#53`):
+
+- ✅ **Formatare Telegram** — `_forward_to_orchestrator` trimitea conținutul (Markdown din
+  LLM + badge-uri interne) prin `_escape()` simplu, cu `parse_mode=HTML` → `**bold**` apărea
+  literal. `_markdown_to_telegram_html()` (`telegram_gateway.py`) convertește bold/cod
+  inline/blocuri de cod/linkuri; deliberat NU italice cu `_`/`*` simplu (ar mutila
+  identificatori snake_case gen `_memory_retrieve`).
+- ✅ **Context de proiect lipsă din chat** — `_get_obsidian_context` citea doar vault-ul
+  personal, `_memory_retrieve` doar conversații distilate; niciuna nu atingea starea reală a
+  roadmap-ului. `_get_project_context()` (`orchestrator.py`) injectează, pe mențiune de WP sau
+  întrebare de tip „unde suntem"/„ce urmează", DOAR ultima secțiune de reordonare din §5 +
+  WP-ul menționat explicit (potrivire pe id exact, nu prefix — vezi `_wp_id`).
+- ✅ **Mission draft nu putea „executa din plan"** — `_mission_draft_text` rulează
+  `_agent_complete` FĂRĂ tools (`allowed_tools=[]`); un „execută WP13" inventa scopul din
+  nimic. Acum refolosește `_get_project_context` ca să injecteze secțiunea WP direct în
+  prompt, fără să dea tools modelului.
+
+Limitare cunoscută: dacă `_classify_intent` (WP-NL) extrage un `arg` scurt care omite
+token-ul WP din mesajul Telegram original, grounding-ul de mai sus nu se declanșează —
+fallback sigur: `!mission new WP13 ...` explicit. Nefixat aici, în afara scopului sesiunii.
+
 Prompt de pornire recomandat (copy-paste, înlocuiește N):
 > Citește CLAUDE.md și KAGE-HANDOFF.md (§0–§4 integral + secțiunea pachetului: §5 pentru
 > WP1–WP10, §6 pentru WP-G1/WP-G2), apoi implementează pachetul WP*N* exact cum e
