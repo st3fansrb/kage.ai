@@ -162,6 +162,48 @@ async def test_semantic_classify_below_floor_defaults_t3(monkeypatch):
     assert (tier, conf) == (3, 0.6)
 
 
+# ── _semantic_classify — prag mai strict pentru tiere scumpe (regresie reală) ─────
+# Găsit prin folosire: un singur vecin T6 la sim .63 (peste .6 general, semnal slab)
+# ruta opus pentru o întrebare banală de „ce urmează". HIGH_TIER_MIN_CONFIDENCE (.65)
+# cere un semnal mai convingător doar pentru tiere >= HIGH_TIER_MIN_TIER (5).
+
+async def test_semantic_classify_weak_high_tier_signal_falls_back_to_t3(monkeypatch):
+    dist = [0.37]  # similaritate .63 — peste pragul general .6, sub cel strict .65
+    metas = [{"tier": 6}]
+    monkeypatch.setattr(orchestrator, "_routing_collection", _FakeCol(dist, metas))
+    monkeypatch.setattr(orchestrator, "_get_embedding", _const_emb)
+    tier, conf = await orchestrator._semantic_classify("care sunt următorii pași din plan")
+    assert (tier, conf) == (3, 0.6)
+
+
+async def test_semantic_classify_weak_high_tier_signal_loses_to_valid_cheap_tier(monkeypatch):
+    dist = [0.37, 0.38]  # T6 la .63 (filtrat), T3 la .62 (peste pragul general .6)
+    metas = [{"tier": 6}, {"tier": 3}]
+    monkeypatch.setattr(orchestrator, "_routing_collection", _FakeCol(dist, metas))
+    monkeypatch.setattr(orchestrator, "_get_embedding", _const_emb)
+    tier, conf = await orchestrator._semantic_classify("orice")
+    assert (tier, conf) == (3, 0.62)
+
+
+async def test_semantic_classify_strong_high_tier_signal_still_wins(monkeypatch):
+    dist = [0.15]  # similaritate .85 — clar peste pragul strict .65
+    metas = [{"tier": 6}]
+    monkeypatch.setattr(orchestrator, "_routing_collection", _FakeCol(dist, metas))
+    monkeypatch.setattr(orchestrator, "_get_embedding", _const_emb)
+    tier, conf = await orchestrator._semantic_classify("orice")
+    assert (tier, conf) == (6, 0.85)
+
+
+async def test_semantic_classify_cheap_tier_floor_unchanged_at_point_six(monkeypatch):
+    # Pragul general .6 rămâne neschimbat pentru tiere < HIGH_TIER_MIN_TIER.
+    dist = [0.39]  # similaritate .61 — peste .6, ar fi picat sub un prag de .65
+    metas = [{"tier": 2}]
+    monkeypatch.setattr(orchestrator, "_routing_collection", _FakeCol(dist, metas))
+    monkeypatch.setattr(orchestrator, "_get_embedding", _const_emb)
+    tier, conf = await orchestrator._semantic_classify("orice")
+    assert (tier, conf) == (2, 0.61)
+
+
 # ── Feedback loop + vacuum (integrare cu ChromaDB ephemeral) ───────────────────
 
 _VOCAB = ["scrie", "eseu", "arhitectura", "sistem", "complex",

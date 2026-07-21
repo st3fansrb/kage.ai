@@ -404,6 +404,15 @@ def _build_tier_short(cfg: dict) -> dict:
 TIER_MODELS = _build_tier_models(_cfg)
 TIER_SHORT  = _build_tier_short(_cfg)
 
+# Prag de încredere mai strict pentru tierele scumpe (Sonnet/Opus) în rutarea semantică.
+# Găsit prin folosire reală: un singur vecin T6 la similaritate .63 (peste pragul general
+# .6, dar un match slab) a rutat opus pentru o întrebare banală de „ce urmează" — feedback
+# loop-ul (WP3) învață din suprascrieri trecute (!opus/!best), deci un semnal slab poate
+# câștiga fără să fie de fapt convingător. Pragul mai strict nu blochează rutarea corectă —
+# doar cere un semnal mai puternic înainte de cel mai scump tier; fallback rămâne tier 3.
+HIGH_TIER_MIN_TIER = int(_cfg.get("high_tier_min_tier", 5))
+HIGH_TIER_MIN_CONFIDENCE = float(_cfg.get("high_tier_min_confidence", 0.65))
+
 _TIER_CONFIDENCE = {1: 0.9, 2: 0.75, 3: 0.8, 4: 0.8, 5: 0.85, 6: 0.9}
 
 # Router feedback loop: cap learned examples per tier so tier_routing can't grow unbounded.
@@ -2779,7 +2788,10 @@ async def _classify(message: str) -> tuple[int, float, str]:
 async def _semantic_classify(message: str) -> tuple[int, float]:
     """Classify via k-NN (k=5) over TIER_EXAMPLES + learned feedback, weighted by similarity.
 
-    Tier = argmax of per-tier summed similarity among neighbors above the 0.6 floor.
+    Tier = argmax of per-tier summed similarity among neighbors above the floor. Floor e
+    0.6 general, dar HIGH_TIER_MIN_CONFIDENCE (implicit 0.65) pentru vecinii de tier
+    >= HIGH_TIER_MIN_TIER (implicit 5) — un semnal slab nu mai are voie să declanșeze
+    singur cel mai scump tier; cade pe fallback (tier 3) sau pe alt candidat mai ieftin.
     Confidence = strength of the best matching neighbor of the winning tier.
     """
     if _routing_collection is None or _routing_collection.count() == 0:
@@ -2798,9 +2810,10 @@ async def _semantic_classify(message: str) -> tuple[int, float]:
     best_sim: dict[int, float] = {}    # tier -> strongest neighbor similarity
     for distance, meta in zip(results["distances"][0], results["metadatas"][0]):
         similarity = 1.0 - distance
-        if similarity < 0.6:
-            continue
         t = int(meta.get("tier", 3))
+        floor = HIGH_TIER_MIN_CONFIDENCE if t >= HIGH_TIER_MIN_TIER else 0.6
+        if similarity < floor:
+            continue
         votes[t] = votes.get(t, 0.0) + similarity
         best_sim[t] = max(best_sim.get(t, 0.0), similarity)
     if not votes:
