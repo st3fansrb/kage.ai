@@ -1013,7 +1013,7 @@ manual cu acest fișier (plan cu WP-uri → sesiune per WP → verificare criter
 orchestrator mid-mission → la restart reia din WP-ul corect · limită simulată → resume
 programat la ora parsată din mesaj · `!stop` oprește misiunea · pytest verde.
 
-### WP12 — Telecomandă: construirea lui Kage prin Telegram, de la distanță · efort: o seară–un weekend · după WP11 + #7
+### WP12 — Telecomandă: construirea lui Kage prin Telegram, de la distanță · efort: o seară–un weekend · după WP11 + #7 · ✅ IMPLEMENTAT (11.07.2026)
 
 **Scop (09.07.2026, Stefan):** fluxul de lucru principal devine „Stefan la birou, laptopul
 acasă" — misiunile se creează, aprobă, urmăresc și revizuiesc integral de pe telefon
@@ -1161,7 +1161,7 @@ fel** — CLI-ul Gemini a fost eliminat complet din Kage (WP-RMG).
 Codex CLI eșuează · cele 3 puncte de cuplare din WP13 (review plan, reviewer diff,
 anti-rabbit-hole) funcționează neschimbate · pytest verde.
 
-### WP-RMG — Retragere completă Gemini CLI (Tier 4 + backend agent) · efort: o seară · executat 13.07.2026
+### WP-RMG — Retragere completă Gemini CLI (Tier 4 + backend agent) · efort: o seară · ✅ executat 13.07.2026
 
 **Scop (13.07.2026, Stefan):** Gemini CLI e stricat ireversibil pentru profilul de cont
 folosit (Google a deprecat „Gemini Code Assist for individuals" — `IneligibleTierError`,
@@ -1319,7 +1319,7 @@ despre un framework tech (nu trading) → card pe șablonul tech, salvabil ca no
 injectate NU schimbă comportamentul analizei (test) · site nesuportat/eșec yt-dlp → mesaj
 grațios · pytest verde.
 
-### WP-NL — Gateway conversațional: fără prefixe, intent router · efort: o seară–un weekend · după #7
+### WP-NL — Gateway conversațional: fără prefixe, intent router · efort: o seară–un weekend · după #7 · ✅ IMPLEMENTAT (14.07.2026)
 
 **Scop (13.07.2026, Stefan):** prefixele `!` sunt prea complicate pentru driver-ul zilnic —
 Stefan scrie ce vrea în limbaj natural, iar un model decide din context ce trebuie făcut.
@@ -1355,7 +1355,7 @@ calibrează pe un set de fraze etichetate ținut în tests/.
 latență peste prag măsurat · toate prefixele `!` merg neschimbate · set de N fraze
 etichetate în tests/ trece cu acuratețe minimă convenită · pytest verde.
 
-### WP-SD — Self-development: Kage lucrează la Kage, de pe Telegram · efort: un weekend · după WP-NL (independent tehnic de el)
+### WP-SD — Self-development: Kage lucrează la Kage, de pe Telegram · efort: un weekend · după WP-NL (independent tehnic de el) · ✅ IMPLEMENTAT (15.07.2026)
 
 **Scop (13.07.2026, Stefan):** restanța reală a promisiunii WP12 — „construirea lui Kage
 prin Telegram" are plumbing-ul (draft → branch → push → compare link), dar munca efectivă
@@ -1424,7 +1424,7 @@ tăierea lui, Stefan aprobă cu buton, `mission.md` + git reflectă schimbarea �
 steering mid-misiune schimbă verificabil comportamentul următorului WP · limita N oprește
 replanning-ul (test) · WP-urile deja ✅ rămân neatinse la orice amendament · pytest verde.
 
-### R0 — Python/API quality: contracts, idempotency, pagination, rate limits · efort: un weekend · după WP-SD · Codex proposal: R0 (acceptat, §4)
+### R0 — Python/API quality: contracts, idempotency, pagination, rate limits · efort: un weekend · după WP-SD · Codex proposal: R0 (acceptat, §4) · ✅ IMPLEMENTAT (14.07.2026)
 
 **Scop (14.07.2026):** JD-ul Revolut cere explicit „well-designed, scalable APIs" — Kage are
 azi endpoint-uri FastAPI funcționale, dar fără contracte versionate, fără protecție la
@@ -1816,7 +1816,7 @@ provider-scraper · un provider oprit nu blochează restul (test) · pariul virt
 înregistrează la cota acționabilă reală · raport CLV rulat pe backtest-ul football-data ·
 nicio cale de cod nu poate plasa un pariu real · pytest verde.
 
-### G1-minim — KageBench redus: eval harness pentru misiuni · efort: o seară–un weekend · după WP-G2 · Codex proposal: G1 (acceptat, formă minimă, §4)
+### G1-minim — KageBench redus: eval harness pentru misiuni · efort: o seară–un weekend · după WP-G2 · Codex proposal: G1 (acceptat, formă minimă, §4) · ✅ IMPLEMENTAT (18.07.2026) — livrat în afara ordinii planificate (înainte de WP-G2), oportunist via Codex
 
 **Scop (14.07.2026):** propunerea Codex completă (G1 — benchmark generalizat, replay pe 3
 executori, regresie automată) e un proiect de săptămâni fără cerere directă din JD. Forma

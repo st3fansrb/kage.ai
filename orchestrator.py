@@ -6473,12 +6473,61 @@ def _handoff_sections(text: str) -> list[tuple[int, str, str]]:
     return sections
 
 
+_SECTION_5_RE = re.compile(r"^## 5\.", re.MULTILINE)
+_SECTION_7_RE = re.compile(r"^## 7\.", re.MULTILINE)
+_STATUS_HEADING_RE = re.compile(r"^### (.+)$", re.MULTILINE)
+_STATUS_EXCLUDE_PREFIXES = ("reordonare", "restul")
+
+
+def _handoff_wp_status_summary(text: str) -> Optional[str]:
+    """Scanează headingurile ### din §5 (pachete de lucru) + §6 (governance) — nu
+    proza de reordonare, care rămâne înghețată la data la care a fost scrisă. Fiecare
+    WP/R0/G1-minim își capătă ✅ pe HEADINGUL propriu, separat, când se termină; blocul
+    de reordonare NU se actualizează retroactiv. Rezultatul e un rezumat live gata/
+    rămas/amânat, ca întrebările de tip „ce urmează" să nu se bazeze doar pe o
+    fotografie veche."""
+    start_match = _SECTION_5_RE.search(text)
+    if not start_match:
+        return None
+    end_match = _SECTION_7_RE.search(text, start_match.end())
+    scoped = text[start_match.start():end_match.start() if end_match else len(text)]
+
+    done: list[str] = []
+    pending: list[str] = []
+    deferred: list[str] = []
+
+    for m in _STATUS_HEADING_RE.finditer(scoped):
+        title = m.group(1).strip()
+        lowered = title.lower()
+        if lowered.startswith(_STATUS_EXCLUDE_PREFIXES):
+            continue
+        short = re.split(r"[—(]", title, maxsplit=1)[0].strip()
+        if not short:
+            continue
+        if "✅" in title:
+            done.append(short)
+        elif "amânat" in lowered or "amanat" in lowered:
+            deferred.append(short)
+        else:
+            pending.append(short)
+
+    if not done and not pending and not deferred:
+        return None
+
+    lines = ["Stare live (scanată acum din headingurile §5/§6, NU din proza de reordonare — aceea poate fi veche):"]
+    lines.append(f"- Gata: {', '.join(done) if done else '—'}")
+    lines.append(f"- Rămase: {', '.join(pending) if pending else '—'}")
+    if deferred:
+        lines.append(f"- Amânate: {', '.join(deferred)}")
+    return "\n".join(lines)
+
+
 def _get_project_context(message: str) -> Optional[str]:
     """Context de proiect din docs/KAGE-HANDOFF.md. Se declanșează pe mențiuni de WP
     (ex. 'WP13', 'WP-G2') sau pe întrebări despre starea/planul proiectului (roadmap,
-    'ce urmează', 'unde suntem'). Injectează DOAR ultima secțiune de reordonare
-    (starea curentă autoritativă) + secțiunea WP menționată explicit, dacă există —
-    nu fișierul întreg."""
+    'ce urmează', 'unde suntem'). Injectează un rezumat live gata/rămas (scanat din
+    headinguri, nu din proză) + ultima secțiune de reordonare + secțiunea WP menționată
+    explicit, dacă există — nu fișierul întreg."""
     mentioned_ids = {i for i in (_wp_id(t) for t in _WP_MENTION_RE.findall(message)) if i}
     if not mentioned_ids and not _PROJECT_TRIGGER_RE.search(message):
         return None
@@ -6491,6 +6540,10 @@ def _get_project_context(message: str) -> Optional[str]:
     sections = _handoff_sections(text)
     parts: list[str] = []
     used: set[int] = set()
+
+    status_summary = _handoff_wp_status_summary(text)
+    if status_summary:
+        parts.append(status_summary)
 
     reorder_idx = [i for i, s in enumerate(sections) if s[1].lower().startswith("reordonare")]
     if reorder_idx:
