@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Optional
 
@@ -649,11 +650,11 @@ class TelegramGateway:
                 preview = content[:_PREVIEW_MAX_CHARS].rstrip() + "…"
                 kage_link = f"{self._orchestrator_url}/chat"
                 await self.send(
-                    f"{_escape(preview)}\n\n"
+                    f"{_markdown_to_telegram_html(preview)}\n\n"
                     f'<a href="{kage_link}">📖 Răspuns complet în Kage UI</a>'
                 )
             else:
-                await self.send(_escape(content))
+                await self.send(_markdown_to_telegram_html(content))
 
         except Exception as e:
             logger.error(f"[TelegramGateway] forward failed: {e}")
@@ -706,3 +707,44 @@ def init_gateway(cfg: dict) -> Optional[TelegramGateway]:
 def _escape(text: str) -> str:
     """Escaped HTML minimal pentru Telegram parse_mode=HTML."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_MD_CODE_BLOCK_RE = re.compile(r"```[a-zA-Z0-9_+-]*\n?(.*?)```", re.DOTALL)
+_MD_INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
+_MD_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_MD_LINK_RE = re.compile(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)")
+
+
+def _markdown_to_telegram_html(text: str) -> str:
+    """Convertește un subset restrâns de Markdown (cel emis efectiv de LLM/badge-uri interne)
+    în HTML-ul acceptat de Telegram (parse_mode=HTML): blocuri de cod, cod inline, **bold**,
+    [text](url). Escapează întâi tot textul, apoi inserează tag-urile — deliberat NU convertește
+    italice cu `_`/`*` simplu, fiindcă ar mutila identificatori snake_case din codul discutat
+    des în acest chat (ex. `_memory_retrieve` -> ar deveni <i>memory</i>retrieve)."""
+    escaped = _escape(text)
+
+    blocks: list[str] = []
+
+    def _stash_block(m: "re.Match[str]") -> str:
+        blocks.append(m.group(1).strip("\n"))
+        return f"\x00BLOCK{len(blocks) - 1}\x00"
+
+    escaped = _MD_CODE_BLOCK_RE.sub(_stash_block, escaped)
+
+    inline: list[str] = []
+
+    def _stash_inline(m: "re.Match[str]") -> str:
+        inline.append(m.group(1))
+        return f"\x00CODE{len(inline) - 1}\x00"
+
+    escaped = _MD_INLINE_CODE_RE.sub(_stash_inline, escaped)
+
+    escaped = _MD_LINK_RE.sub(r'<a href="\2">\1</a>', escaped)
+    escaped = _MD_BOLD_RE.sub(r"<b>\1</b>", escaped)
+
+    for i, code in enumerate(inline):
+        escaped = escaped.replace(f"\x00CODE{i}\x00", f"<code>{code}</code>")
+    for i, block in enumerate(blocks):
+        escaped = escaped.replace(f"\x00BLOCK{i}\x00", f"<pre>{block}</pre>")
+
+    return escaped
