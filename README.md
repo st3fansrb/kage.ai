@@ -1,154 +1,187 @@
 # Kage
 
-**Personal AI orchestration layer** — routes every request to the right model automatically, caches semantically, and gates risky operations before they run.
+**A self-hosted Python platform that orchestrates, governs and evaluates AI workflows.**
 
-> Fast tasks → local Qwen · Complex tasks → Claude/Gemini · Dangerous operations → approval required
+Kage routes every request to the right model, keeps its own state and telemetry in PostgreSQL,
+turns that telemetry into analytics through a raw → staging → mart pipeline, schedules its batch
+work with Airflow, and refuses to let an autonomous agent do anything irreversible without an
+explicit approval.
 
----
-
-## What it does
-
-Most AI tools force a choice: fast-but-dumb local models, or slow-but-capable cloud ones. Kage eliminates the tradeoff by routing automatically:
-
-| Tier | Model | When |
-|------|-------|------|
-| T1 | Qwen 3 8B (local) | Quick questions, summaries |
-| T2 | Qwen 3.6 35B (local) | Code, reasoning |
-| T3 | Claude Haiku | Moderate tasks, context-aware |
-| T4 | Gemini | Multimodal, large context |
-| T5 | Claude Sonnet | Complex analysis, writing |
-| T6 | Claude Opus | Critical decisions, best quality |
-
-**Additional features:**
-- **Semantic cache** — identical or near-identical questions hit ChromaDB instead of an LLM (configurable threshold, 24h TTL)
-- **Daily budget** — hard limit on cloud calls per day, with warnings at 80%
-- **Risk gate** — every Claude Code tool call (Bash, file ops) evaluated on 3 axes; risky operations require explicit approval in the UI
-- **Push notifications** — approvals and alerts sent via [ntfy.sh](https://ntfy.sh)
-- **Scheduled tasks** — `!schedule "0 9 * * 1" <task>` runs recurring agent tasks via cron
-- **Real-time UI** — streaming responses, tier badge, live stats dashboard, pending approvals panel
+`Python 3.12` · `FastAPI` · `PostgreSQL 16` · `Airflow` · `ChromaDB` · **576 tests** · CI on every push to `dev`
 
 ---
 
-## Requirements
+## Why it exists
 
-- Python 3.10+
-- [Ollama](https://ollama.ai) — for local AI tiers
-- [Claude CLI](https://docs.anthropic.com/claude-code) — `npm install -g @anthropic-ai/claude-code` — for agent tasks
-- Gemini CLI — optional
+Most personal AI tooling is a thin wrapper around one model. That breaks down the moment you
+want an agent to actually *do* things: you need to know what it did, what it cost, whether it
+followed the rules, and how to stop it. Kage is built around those four questions.
+
+The design bias throughout: **make behaviour inspectable and measurable rather than asserted.**
+An agent that claims it followed the rules is not evidence. A run ledger, a regression benchmark
+and a fail-closed approval gate are.
 
 ---
 
-## Quick Start
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph clients["Interfaces"]
+        MC["Mission Control<br/>Next.js :3001"]
+        TG["Telegram gateway<br/>notifications + inline approvals"]
+    end
+
+    subgraph core["Orchestrator — FastAPI :4001"]
+        API["/v1 API<br/>chat · missions · usage · analytics"]
+        ROUTE["6-tier semantic router<br/>+ semantic cache"]
+        GATE["Risk gate<br/>policy · confinement · budget"]
+        RUN["Agent & mission runner<br/>Claude Agent SDK"]
+    end
+
+    subgraph models["Model layer"]
+        LL["LiteLLM :4000"]
+        OL["Ollama :11434<br/>Qwen 8B / 35B"]
+        CL["Anthropic · Google"]
+    end
+
+    subgraph data["Data platform"]
+        PG[("PostgreSQL 16<br/>state · telemetry")]
+        ETL["ETL raw → staging → mart<br/>point-in-time lineage"]
+        AF["Airflow DAGs<br/>retries · backfill"]
+        CH[("ChromaDB<br/>cache · memory")]
+    end
+
+    clients --> API
+    API --> ROUTE --> LL
+    API --> RUN --> GATE
+    LL --> OL & CL
+    ROUTE --> CH
+    core --> PG --> ETL --> PG
+    AF --> API
+```
+
+---
+
+## What's inside
+
+### Data platform
+
+- **PostgreSQL 16** holds shared state and telemetry across processes — 7 tables (`usage`,
+  `runs`/`run_events`, `missions`/`mission_wps`, `job_runs`, `scheduled_tasks`, `status`),
+  hand-written SQL over `psycopg`, no ORM. Chat history and single-process tables stay in SQLite,
+  deliberately: migrating them would not remove any pain.
+- **Idempotent cutover.** The migration off lock files and SQLite verifies row counts *inside the
+  same transaction* and raises on mismatch, so a partial migration rolls back to nothing. Sources
+  are never deleted — they remain archives.
+- **ETL pipeline** (`etl.py`) — raw → staging → mart, entirely in SQL. Staging rows carry
+  point-in-time lineage (`event_time`, `available_time`, `ingested_time`, `source`); mart rows
+  carry the `dataset_snapshot_id` of the run that produced them. Processing unit is a **day**, so
+  idempotency is local and provable: re-running a day yields exactly the same rows.
+- **Airflow** (`airflow/dags/`) owns the non-safety-critical batches — nightly ETL aggregation,
+  backup, job scan, weekly trading calibration — for retries, backfill and history. Fail-closed
+  near-real-time jobs (trading killswitch, heartbeat) stay in-process on purpose.
+
+### Routing and cost
+
+- **6-tier router** — local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above.
+  Tier selection is semantic (embeddings) with a classifier and heuristic fallback.
+- **Semantic cache** over ChromaDB, so near-identical questions never reach a model.
+- **Daily budget** with a hard cap on cloud calls and an inline warning before it bites.
+
+### Governance
+
+- **Risk gate** (`risk_hook.py`) — a PreToolUse hook scoring every tool call on reversibility,
+  explicit intent and content. High-risk calls block until approved via inline Telegram buttons.
+- **Workspace confinement** — task working directories are canonicalised (`resolve()`, so `..`
+  and symlinks don't help) and checked against an allow-list before any subprocess starts.
+- **Kill switch** — `!stop` halts every agent and pauses the scheduler.
+
+### Evaluation
+
+- **KageBench** (`kagebench.py`) — a regression gate that runs fixed tasks in a clean worktree and
+  records success, cost, latency, turns, tool calls and approval requests, then diffs against the
+  previous report. Deliberately not part of every commit: run it before a large change.
+
+---
+
+## Testing and CI
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/kage.git
-cd kage
+source .venv/bin/activate && pytest
+```
+
+**576 tests** across routing, budget, confinement, memory, backup/restore, ETL, PostgreSQL store,
+Airflow batches, missions and end-to-end HTTP. [GitHub Actions](.github/workflows/ci.yml) runs the
+suite against a real `postgres:16` service on every push and PR to `dev`.
+
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/st3fansrb/kage.ai.git
+cd kage.ai
 bash scripts/setup.sh
 ```
 
-Edit `kage_config.json`, then:
+Edit `kage_config.json` (created from the example by `setup.sh`), then:
 
 ```bash
 bash start_all.sh
 ```
 
-Kage opens at **http://localhost:4001/chat**
+Mission Control opens at **`http://localhost:3001`**. Pull the local models once:
 
-Pull the local models (first time only):
 ```bash
 ollama pull qwen3:8b
 ollama pull qwen3.6:35b
 ollama pull nomic-embed-text
 ```
 
-Full setup instructions: [INSTALL.md](docs/INSTALL.md)
+Requirements: Python 3.12, [Ollama](https://ollama.ai), PostgreSQL 16,
+[Claude CLI](https://docs.anthropic.com/claude-code) for agent tasks. Full instructions:
+[docs/INSTALL.md](docs/INSTALL.md) · restoring from backup: [docs/RESTORE.md](docs/RESTORE.md)
 
 ---
 
-## Configuration
+## API surface
 
-`scripts/setup.sh` creates `kage_config.json` from the example. Key fields:
+Versioned under `/v1`, token-authenticated:
 
-```json
-{
-  "ntfy_topic": "kage-yourname-abc123",
-  "api_token":  "<openssl rand -hex 20>",
-  "vault_path": "~/Documents/MyVault",
-  "max_cloud_calls_per_day": 20,
-  "autonomous_mode": false
-}
-```
-
-See [kage_config.example.json](kage_config.example.json) for all options.
-
----
-
-## KageBench (on demand)
-
-KageBench is the minimal regression harness for agent missions (Codex proposal: G1). It
-runs 10 fixed Kage/trading tasks in a dedicated clean worktree, records success,
-partial success, cost, latency, turns, tool calls and approval requests, then checks the
-automatic acceptance criterion for each task. It is deliberately not part of every commit:
-run it before a large WP and compare with the last report.
-
-```bash
-python -m kagebench \
-  --worktree /absolute/path/to/clean-worktree \
-  --output reports/kagebench \
-  --previous reports/kagebench/kagebench-previous.json
-```
-
-The command writes JSON (machine-readable) and Markdown (review-readable). A loss of
-success or higher cost than the previous report is flagged as a regression signal, never
-as an automatic deployment blocker.
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | OpenAI-compatible, streaming and non-streaming |
+| `GET /v1/missions` · `POST /v1/missions` | List and create autonomous missions |
+| `GET /v1/usage` | Paginated usage and cost telemetry |
+| `GET /v1/analytics/daily` | Mart-level daily aggregates |
+| `GET /health` · `GET /api/stats` | Liveness and live counters |
+| `POST /admin/backup` · `POST /admin/etl` | Operational triggers (backup, ETL backfill) |
 
 ---
 
 ## Chat prefixes
 
+Messages without a prefix go through an intent router; prefixes remain the deterministic bypass.
+
 | Prefix | Effect |
-|--------|--------|
-| `!fast` | Force Tier 1 (qwen8b) |
-| `!best` | Force Tier 5 (Claude Sonnet) |
-| `!plan` | At least Tier 2 |
-| `!run claude <task>` | Background Claude agent |
-| `!run gemini <task>` | Background Gemini agent |
-| `!save [path]` | Save response to vault |
-| `!nocache` | Skip semantic cache |
-| `!status` | System snapshot (no LLM) |
-| `!help` | All prefixes |
+|---|---|
+| `!fast` · `!best` · `!opus` | Force Tier 1 (local) / Tier 5 (Sonnet) / Tier 6 (Opus) |
+| `!plan` · `!retry` · `!nocache` | Minimum Tier 2 · escalate one tier · skip the cache |
+| `!run` · `!sysrun` | Autonomous agent task, with or without orchestrator context |
+| `!mission new` · `!mission start <slug>` | Draft a mission plan for approval · run it autonomously |
+| `!save [path]` · `!schedule "CRON" msg` | Save the answer to the vault · add a scheduled task |
+| `!scan [profile]` · `!briefing` | Job-hunter scan · daily digest |
+| `!status` · `!stop` · `!resume` · `!help` | Snapshot · kill switch · resume scheduler · this list |
 
 ---
 
-## Architecture
+## Documentation
 
-```
-kage.html  (UI — chat + dashboard + approvals)
-    │
-    │  SSE + fetch
-    ▼
-orchestrator.py  (FastAPI :4001)
-    │
-    │  OpenAI-compatible
-    ▼
-litellm  (:4000)
-    │
-    ├── Ollama (:11434)   ← local models
-    ├── Anthropic API     ← Claude
-    └── Google AI         ← Gemini
-```
-
----
-
-## Risk Gate
-
-`risk_hook.py` is a [Claude Code PreToolUse hook](https://docs.anthropic.com/claude-code/hooks) that intercepts every tool call and evaluates it on three axes:
-
-1. **Reversibility** — can this be undone?
-2. **Explicit intent** — did the user ask for this?
-3. **Content** — does it touch sensitive files or paths?
-
-High-risk calls are blocked until you approve them in the Kage UI or via the ntfy notification. Configure thresholds in `risk_settings.json`.
+- [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md) — what Kage is and does (Romanian)
+- [docs/ROADMAP.md](docs/ROADMAP.md) — phase history and scope decisions
+- [docs/KAGE-EVALUARE.md](docs/KAGE-EVALUARE.md) — full technical self-assessment
+- [docs/KAGE-HANDOFF.md](docs/KAGE-HANDOFF.md) — current execution plan and acceptance criteria
 
 ---
 
@@ -156,4 +189,5 @@ High-risk calls are blocked until you approve them in the Kage UI or via the ntf
 
 [AGPL-3.0](LICENSE) — free for personal and open source use.
 
-For commercial use (hosted service, closed-source product) without AGPL obligations: contact stefan.andrei.sirbu@gmail.com
+For commercial use (hosted service, closed-source product) without AGPL obligations:
+contact `stefan.andrei.sirbu@gmail.com`
