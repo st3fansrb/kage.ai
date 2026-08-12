@@ -250,7 +250,7 @@ credibil.
 | Eveniment | Când | Notă |
 |---|---|---|
 | **The Bucharest Hackathon** (ed. 3) | 2026, București | AI + dev tools; local, cost de participare ~zero |
-| **European AI Hackathon** | 6–29 oct. 2026 | format lung (3 săptămâni), SME/startup/cercetare |
+| ~~**European AI Hackathon**~~ | 6–29 oct. 2026 | ❌ **fit slab + înscrieri închise 06.08.2026** — vezi §6.2.1 |
 | **AI & Big Data Expo Europe** | 16–20 oct. 2026 | hibrid; AI, cloud, data infrastructure |
 | **Ruya AI — Self-Improving Agents** | 2026 | temă: agenți care se auto-îmbunătățesc |
 | **HackEurope** | ed. viitoare | Dublin / Paris / Stockholm, 1000 studenți |
@@ -262,8 +262,35 @@ are ceva ce majoritatea submisiilor la o astfel de temă nu au: un gate de risc 
 Un demo de auto-îmbunătățire *guvernată* e mai interesant decât încă unul de auto-îmbunătățire
 nelimitată.
 
-Al doilea ca fit: **European AI Hackathon** — formatul de 3 săptămâni se potrivește cu ritmul
-„seri și weekenduri" din handoff, spre deosebire de un sprint de 30h.
+#### 6.2.1 European AI Hackathon — corecție (verificat 12.08.2026)
+
+**Prima versiune a acestui document îl dădea drept „al doilea ca fit". Greșit.** Descrierea
+inițială venea dintr-un snippet de căutare; verificarea ulterioară arată alt tip de eveniment.
+
+Nu e un hackathon de construit un produs, ci un **„Open Hackathon" NVIDIA/OpenACC** — format
+HPC în care **vii cu codul tău existent și cu datele tale** și lucrezi cu mentori (ingineri
+NVIDIA) ca să-l accelerezi pe un cluster GPU: bottleneck-uri de data loading, paralelizarea
+antrenării, optimizarea pipeline-urilor de AI. Echipele sunt **selectate pe bază de propunere**
+(locuri limitate), primesc mentor dedicat + acces la cluster, și raportează zilnic progresul
+(SCRUM) în plen.
+
+- **Organizatori:** ASC (Austria), LRZ, HLRS Stuttgart, Cyfronet AGH, OpenACC, NVIDIA — pentru
+  AI Factory Austria AI:AT, HammerHAI, Gaia AI Factory.
+- **Format:** Day 0 + Day 1 virtual; Days 2–4 hibrid (online sau on-site, inclusiv Stuttgart),
+  întinse între 6 și 29 oct. 2026.
+- **Înscrieri:** închise pe **6 august 2026**; sursele menționează că aplicațiile târzii *pot* fi
+  acceptate în limita capacității.
+
+**De ce fit-ul e slab pentru Kage:** evenimentul presupune un workload de antrenare/HPC care se
+paralelizează pe un cluster GPU. Kage e un strat de orchestrare care rutează către API-uri și
+către Ollama pe Metal — nu antrenează nimic, nu are ce distribui pe mai multe noduri. Mentorii
+optimizează *codul tău* pe *hardware-ul lor*; Kage nu aduce nimic de optimizat acolo.
+
+**Ce merită urmărit în schimb, de la aceiași organizatori:** **European Agentic AI Bootcamp** —
+ediția din 20–22 iulie 2026 (online, nivel intermediar, 250+ participanți) a acoperit exact zona
+lui Kage: **Agent Skills, Model Context Protocol (MCP), LangGraph, NVIDIA NIM și NeMo Agent
+Toolkit**, cu laburi pe construit clienți/servere MCP pe HTTP. A trecut, dar e semnalul că seria
+are un track agentic — de urmărit o ediție viitoare pe openhackathons.org / calendarul HLRS.
 
 ### 6.3 Protocoale ca semnal de piață ✅⚠️
 
@@ -324,4 +351,6 @@ nu oportunist.
 - Evaluare: [Terminal-Bench (ICLR 2026)](https://openreview.net/pdf/417ac3236de7dbf3fc3414c51754dd239271663e.pdf) · [SWE-bench vs Terminal-Bench](https://www.digitalapplied.com/blog/swe-bench-terminal-bench-benchmark-guide-2026)
 - Competiție: [OpenClaw pe GitHub](https://github.com/openclaw/openclaw) · [awesome-openclaw](https://github.com/SamurAIGPT/awesome-openclaw) · [asistenți personali open-source 2026](https://www.vellum.ai/blog/best-open-source-personal-ai-assistants)
 - Agenți/SDK: [Claude Agent SDK 2026](https://www.totalum.app/blog/claude-agent-sdk-totalum-2026) · [subagenți](https://www.totalum.app/blog/claude-code-subagents-totalum) · [A2A la un an](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year)
-- Oportunități: [Anthropic Economic Futures](https://www.anthropic.com/economic-futures/program) · [Anthropic Fellows](https://alignment.anthropic.com/2025/anthropic-fellows-program-2026/) · [Claude Corps](https://www.anthropic.com/news/claude-corps) · [Ruya AI Self-Improving Agents](https://ruyaai-hackathon-2026.devpost.com/) · [The Bucharest Hackathon](https://thebucharesthackathon.com/) · [European AI Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP00003yKxcX2AS/se000475) · [HackEurope](https://hackeurope.devpost.com/)
+- Oportunități: [Anthropic Economic Futures](https://www.anthropic.com/economic-futures/program) · [Anthropic Fellows](https://alignment.anthropic.com/2025/anthropic-fellows-program-2026/) · [Claude Corps](https://www.anthropic.com/news/claude-corps) · [Ruya AI Self-Improving Agents](https://ruyaai-hackathon-2026.devpost.com/) · [The Bucharest Hackathon](https://thebucharesthackathon.com/) · [HackEurope](https://hackeurope.devpost.com/)
+- European AI Hackathon (§6.2.1): [HLRS](https://www.hlrs.de/training/2026/hack-ai) · [ASC Indico](https://events.asc.ac.at/event/307/) · [AI:AT](https://ai-at.eu/en/training/european-ai-hackathon/) · [hpc-portal.eu](https://hpc-portal.eu/training/short-courses/european-ai-hackathon) · [Open Hackathons](https://www.openhackathons.org/s/siteevent/a0CUP00003yKxcX2AS/se000475) — format „bring your own code" descris în [TACC Open Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP00003Q8rLW2AZ/se000461)
+- European Agentic AI Bootcamp: [HLRS](https://www.hlrs.de/training/2026/bc-agai-nv) · [agendă ASC](https://events.asc.ac.at/event/306/page/791-agenda-content) · [retrospectivă AI:AT](https://ai-at.eu/en/news/european-agentic-ai-bootcamp-europes-ai-factories-bring-together-over-250-participants-for-hands-on-ai-agent-development/)
