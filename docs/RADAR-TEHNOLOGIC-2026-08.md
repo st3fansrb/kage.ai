@@ -247,14 +247,39 @@ credibil.
 
 ### 6.2 Hackathoane ⚠️
 
-| Eveniment | Când | Notă |
+**Tabel reconstruit pe date verificate (14.08.2026).** Versiunea inițială avea trei evenimente
+listate ca „viitoare" pe baza anului din titlu; toate trei trecuseră. Coloana „status" e acum
+obligatorie.
+
+| Eveniment | Când | Status |
 |---|---|---|
-| **The Bucharest Hackathon** (ed. 3) | 2026, București | AI + dev tools; local, cost de participare ~zero |
-| ~~**European AI Hackathon**~~ | 6–29 oct. 2026 | ❌ **fit slab + înscrieri închise 06.08.2026** — vezi §6.2.1 |
-| **TechEx Amsterdam** (AI & Big Data Expo Europe) | build online 16–19 oct., on-site 19–20 oct. | hibrid, finala la RAI Amsterdam; TechEx + lablab.ai |
-| ~~**Ruya AI — Self-Improving Agents**~~ | 14 feb. 2026 | ❌ **a trecut** — a fost o zi, în persoană |
-| **HackEurope** | ed. viitoare | Dublin / Paris / Stockholm, 1000 studenți |
-| **CISPA European Cybersecurity & AI** | regional → finală (DE) | pentru studenți |
+| **TechEx Amsterdam** (AI & Big Data Expo Europe) | build online **16–19 oct. 2026**, on-site **19–20 oct.** | ✅ **deschis** — RAI Amsterdam, TechEx + lablab.ai, înscriere pe Eventbrite; de confirmat dacă se poate doar online |
+| ~~**The Bucharest Hackathon** (ed. 3)~~ | **25–26 apr. 2026** | ❌ a trecut — 24h, Teatrul Odeon, AI & Web3, premii >50.000 € |
+| ~~**Innovation Labs 2026**~~ | hackathon **21–22 mar. 2026** | ❌ a trecut — vezi mai jos, **cel mai bun fit local pentru ed. 2027** |
+| ~~**European AI Hackathon**~~ | 6–29 oct. 2026 | ❌ fit slab + înscrieri închise 06.08.2026 — §6.2.1 |
+| ~~**Ruya AI — Self-Improving Agents**~~ | 14 feb. 2026 | ❌ a trecut — o zi, în persoană |
+| ~~**CISPA European Cybersecurity & AI**~~ (sezonul 2026) | regionale nov. 2025 – iun. 2026, finala **2–3 iul. 2026** (Saarbrücken) | ❌ sezon încheiat — **structura de urmărit**, vezi mai jos |
+| ~~**EUDIS Hackathon București**~~ | mar. 2026 | ❌ a trecut |
+| **DevHacks România** | date 2026 negăsite | ⚠️ neverificat |
+
+**Concluzia structurală:** calendarul de hackathoane din România e **un calendar de primăvară**
+(Innovation Labs în martie, Bucharest Hackathon în aprilie, EUDIS în martie). August e zona
+moartă, iar înscrierile locale se redeschid în ian.–feb. Pentru toamna 2026 rămân realist doar
+evenimentele **online** (Devpost / lablab.ai) plus TechEx Amsterdam.
+
+**Modelul „online întâi, deplasare doar dacă calific"** — exact ce caută Stefan — există la
+**CISPA**: regionale în Paris, Viena, Stockholm, München, Barcelona, Varșovia, apoi top 3 din
+fiecare merg la finala de 24h din Saarbrücken. Sezonul 2026 s-a încheiat; primul regional al
+sezonului precedent a fost pe 22–23 nov. 2025, deci **un sezon nou ar începe plauzibil în nov.
+2026** (inferență din tipar, nu anunț confirmat — de verificat pe cispa.de). România n-a fost
+gazdă, dar Viena/Varșovia/München sunt zboruri scurte și ieftine.
+
+**Cel mai bun fit local, pentru primăvara 2027: Innovation Labs.** Nu pentru hackathonul în sine
+(30h), ci pentru ce urmează după: e etapa de selecție pentru un **program de preaccelerare de 10
+săptămâni**. Ritmul ăla se potrivește cu „seri și weekenduri" mult mai bine decât un sprint, iar
+organizatorii asigură cazare pentru echipele din afara Bucureștiului. Ediția 2026 a fost primul
+hackathon național unic, cu centre din Cluj, Iași, Timișoara, Brașov, Sibiu etc. Înscrierile se
+închid pe la mijlocul lui martie — de pus memento în februarie.
 
 > **Corecție (14.08.2026): ambele recomandări din prima versiune erau greșite.** Ruya AI îl
 > dădusem drept „cel mai bun fit" fără să-i verific data — a avut loc pe **14 februarie 2026**,
@@ -369,6 +394,8 @@ nu oportunist.
 - Evaluare: [Terminal-Bench (ICLR 2026)](https://openreview.net/pdf/417ac3236de7dbf3fc3414c51754dd239271663e.pdf) · [SWE-bench vs Terminal-Bench](https://www.digitalapplied.com/blog/swe-bench-terminal-bench-benchmark-guide-2026)
 - Competiție: [OpenClaw pe GitHub](https://github.com/openclaw/openclaw) · [awesome-openclaw](https://github.com/SamurAIGPT/awesome-openclaw) · [asistenți personali open-source 2026](https://www.vellum.ai/blog/best-open-source-personal-ai-assistants)
 - Agenți/SDK: [Claude Agent SDK 2026](https://www.totalum.app/blog/claude-agent-sdk-totalum-2026) · [subagenți](https://www.totalum.app/blog/claude-code-subagents-totalum) · [A2A la un an](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year)
-- Oportunități: [Anthropic Economic Futures](https://www.anthropic.com/economic-futures/program) · [Anthropic Fellows](https://alignment.anthropic.com/2025/anthropic-fellows-program-2026/) · [Claude Corps](https://www.anthropic.com/news/claude-corps) · [Ruya AI Self-Improving Agents](https://ruyaai-hackathon-2026.devpost.com/) · [The Bucharest Hackathon](https://thebucharesthackathon.com/) · [HackEurope](https://hackeurope.devpost.com/)
+- Oportunități: [Anthropic Economic Futures](https://www.anthropic.com/economic-futures/program) · [Anthropic Fellows](https://alignment.anthropic.com/2025/anthropic-fellows-program-2026/) · [Claude Corps](https://www.anthropic.com/news/claude-corps)
+- Hackathoane (§6.2): [TechEx Amsterdam](https://lablab.ai/ai-hackathons/techex-amsterdam-hackathon) · [Eventbrite 19–20 oct.](https://www.eventbrite.com/e/techex-amsterdam-hackathon-tickets-1995457812032) · [CISPA Championship](https://cispa.de/en/cispa-hackathon-championship) · [Innovation Labs 2026 (Forbes.ro)](https://www.forbes.ro/innovation-labs-deschide-inscrierile-pentru-editia-2026-si-organizeaza-cel-mai-mare-hackathon-national-490845) · [Bucharest Hackathon 25–26 apr.](https://vision.upet.ro/the-bucharest-hackathon-2026-25-26-aprilie-bucuresti-ai-web3/) · [DevHacks](https://devhacks.devtalks.ro/)
+- Agregatoare de urmărit: [lablab.ai](https://lablab.ai/ai-hackathons) · [Devpost AI](https://devpost.com/c/artificial-intelligence) · [hackathon.com București](https://www.hackathon.com/city/romania/bucuresti/2026) · [devjob.ro/events](https://devjob.ro/events)
 - European AI Hackathon (§6.2.1): [HLRS](https://www.hlrs.de/training/2026/hack-ai) · [ASC Indico](https://events.asc.ac.at/event/307/) · [AI:AT](https://ai-at.eu/en/training/european-ai-hackathon/) · [hpc-portal.eu](https://hpc-portal.eu/training/short-courses/european-ai-hackathon) · [Open Hackathons](https://www.openhackathons.org/s/siteevent/a0CUP00003yKxcX2AS/se000475) — format „bring your own code" descris în [TACC Open Hackathon](https://www.openhackathons.org/s/siteevent/a0CUP00003Q8rLW2AZ/se000461)
 - European Agentic AI Bootcamp: [HLRS](https://www.hlrs.de/training/2026/bc-agai-nv) · [agendă ASC](https://events.asc.ac.at/event/306/page/791-agenda-content) · [retrospectivă AI:AT](https://ai-at.eu/en/news/european-agentic-ai-bootcamp-europes-ai-factories-bring-together-over-250-participants-for-hands-on-ai-agent-development/)
