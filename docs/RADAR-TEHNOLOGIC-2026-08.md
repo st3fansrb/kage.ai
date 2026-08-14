@@ -251,16 +251,34 @@ credibil.
 |---|---|---|
 | **The Bucharest Hackathon** (ed. 3) | 2026, București | AI + dev tools; local, cost de participare ~zero |
 | ~~**European AI Hackathon**~~ | 6–29 oct. 2026 | ❌ **fit slab + înscrieri închise 06.08.2026** — vezi §6.2.1 |
-| **AI & Big Data Expo Europe** | 16–20 oct. 2026 | hibrid; AI, cloud, data infrastructure |
-| **Ruya AI — Self-Improving Agents** | 2026 | temă: agenți care se auto-îmbunătățesc |
+| **TechEx Amsterdam** (AI & Big Data Expo Europe) | build online 16–19 oct., on-site 19–20 oct. | hibrid, finala la RAI Amsterdam; TechEx + lablab.ai |
+| ~~**Ruya AI — Self-Improving Agents**~~ | 14 feb. 2026 | ❌ **a trecut** — a fost o zi, în persoană |
 | **HackEurope** | ed. viitoare | Dublin / Paris / Stockholm, 1000 studenți |
 | **CISPA European Cybersecurity & AI** | regional → finală (DE) | pentru studenți |
 
-**Cel mai bun fit, obiectiv: Ruya AI — Self-Improving Agents.** WP-SD („Kage lucrează la Kage"
-de pe Telegram) e literal un agent care se auto-modifică, e **deja implementat** (15.07.2026), și
-are ceva ce majoritatea submisiilor la o astfel de temă nu au: un gate de risc care îl oprește.
-Un demo de auto-îmbunătățire *guvernată* e mai interesant decât încă unul de auto-îmbunătățire
-nelimitată.
+> **Corecție (14.08.2026): ambele recomandări din prima versiune erau greșite.** Ruya AI îl
+> dădusem drept „cel mai bun fit" fără să-i verific data — a avut loc pe **14 februarie 2026**,
+> o singură zi, în persoană. European AI Hackathon era alt format decât credeam (§6.2.1). Lecția
+> de proces: **niciun eveniment nu intră în listă fără dată exactă și status de înscrieri
+> verificate**, nu doar anul din titlu.
+
+**Ce e efectiv deschis (verificat 14.08.2026):** **TechEx Amsterdam Hackathon**, oficialul de la
+AI & Big Data Expo Europe — build **online 16–19 oct.**, prezentare **on-site 19–20 oct.** la RAI
+Amsterdam, organizat de TechEx Events + lablab.ai, înscriere pe Eventbrite, locurile on-site
+limitate, participanții acceptați primesc acces gratuit la expo. Rezerva: finala e fizic în
+Amsterdam — de confirmat dacă se poate participa doar online.
+
+**De verificat direct pe Devpost** (blocat de proxy la scanul ăsta, deci fără date confirmate):
+un grup de hackathoane pe agenți care sunt de obicei complet online și pe câteva săptămâni —
+The Great Agent Hackathon (agenți pentru enterprise), AWS AI Agent Global Hackathon, Google Cloud
+Rapid Agent Hackathon, Airia AI Agents, All Things Agentic. Formatul ăsta e cel care se
+potrivește cu „seri și weekenduri". Agregatoare utile: [lablab.ai](https://lablab.ai/ai-hackathons)
+și [devpost.com/c/artificial-intelligence](https://devpost.com/c/artificial-intelligence).
+
+**Unghiul lui Stefan, indiferent de eveniment:** WP-SD („Kage lucrează la Kage" de pe Telegram) e
+un agent care se auto-modifică, **deja implementat** (15.07.2026), și are ceva ce majoritatea
+submisiilor pe teme agentice n-au: un gate de risc care îl oprește. Un demo de auto-îmbunătățire
+*guvernată* e mai interesant decât încă unul de auto-îmbunătățire nelimitată.
 
 #### 6.2.1 European AI Hackathon — corecție (verificat 12.08.2026)
 
