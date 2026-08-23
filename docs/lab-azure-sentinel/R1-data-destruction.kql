@@ -1,0 +1,17 @@
+// R1 — Destructive command blocked by the Kage risk gate
+//
+// MITRE ATT&CK: Impact (TA0040) / T1485 Data Destruction
+// Related control: risk_hook.py NEVER_CMD_PATTERNS + HIGH_CMD_PATTERNS
+//
+// Fires when the PreToolUse hook denied a command that would have destroyed data:
+// deletion inside the home directory, deletion of source files, file truncation.
+//
+// NOTE: `reason` values are emitted in Romanian by risk_hook.py. The filter matches
+// the data as stored — translating these strings breaks the rule.
+//
+// Observed baseline (480 events / 20 days): 5 matches.
+KageRisk_CL
+| where decision == "deny"
+| where reason contains "rm în home" or reason contains "ștergere fișiere sursă"
+     or reason contains "truncate fișier" or reason contains "ștergere foldere"
+| project TimeGenerated, ts, tool, risk_level, reason

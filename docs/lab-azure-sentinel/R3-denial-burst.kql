@@ -1,0 +1,25 @@
+// R3 — Burst of risk gate denials within one hour
+//
+// MITRE ATT&CK: Execution (TA0002) / T1059 Command and Scripting Interpreter
+//
+// A single denial is routine. Three or more within an hour, from the same tool, is a
+// pattern: an agent repeatedly attempting forbidden actions rather than adapting.
+//
+// TUNING — this is the important line:
+//   `/dev/null` accounts for 24 of the 34 denials in the observed baseline and is
+//   almost always benign (output redirection, not destruction). Without the exclusion
+//   the rule fires on 6 windows, of which 5 are noise. With it, 1 window survives —
+//   and that window is a real cluster: rm in home, git force push, and deletion of
+//   source files, all within one hour on 2026-06-02.
+//   Precision matters more than recall for a rule a human has to triage.
+//
+// TIME SEMANTICS — grouping uses `ts`, the true event time recorded by the hook.
+// `TimeGenerated` is ingestion time for backfilled records (Azure Monitor overwrites
+// TimeGenerated for events older than a few days), so it cannot be used for windowing.
+// It is still projected, because Sentinel requires a recent TimeGenerated to emit an alert.
+KageRisk_CL
+| where decision == "deny"
+| where reason !contains "/dev/null"
+| summarize refuzuri = count(), motive = make_set(reason), TimeGenerated = max(TimeGenerated)
+        by fereastra = bin(ts, 1h), tool
+| where refuzuri >= 3

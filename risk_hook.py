@@ -309,6 +309,43 @@ def evaluate_risk(
     return "Safe", "Operație sigură"
 
 
+AUDIT_JSONL = Path(__file__).parent / ".logs" / "risk_audit.jsonl"
+
+
+def _audit_event(
+    tool_name: str,
+    tool_input: dict,
+    risk_level: str,
+    reason: str,
+    decision: str,
+) -> None:
+    """Sink structurat, o linie JSON per decizie — sursa pentru SIEM (Log Analytics).
+
+    Separat intenționat de jurnalul Markdown din vault: acela e pentru citit de om,
+    ăsta pentru interogat de mașină. `ts` e UTC, fiindcă orice SIEM presupune UTC și
+    altfel corelarea pe ferestre de timp iese greșit.
+
+    Fail-silent, ca și jurnalul Markdown: un hook de securitate nu are voie să pice
+    din cauza logging-ului. Dacă scrierea eșuează, decizia de risc merge mai departe.
+    """
+    try:
+        AUDIT_JSONL.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "ts": datetime.datetime.now(datetime.timezone.utc)
+                  .isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "tool": tool_name,
+            "risk_level": risk_level,
+            "decision": decision,
+            "reason": reason,
+            "input_preview": json.dumps(tool_input, ensure_ascii=False)[:200],
+            "source": "hook",
+        }
+        with open(AUDIT_JSONL, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 def log_decision(
     tool_name: str,
     tool_input: dict,
@@ -316,6 +353,9 @@ def log_decision(
     reason: str,
     decision: str,
 ) -> None:
+    # Sink-ul structurat rulează primul și independent: dacă vault-ul lipsește sau
+    # scrierea Markdown crapă, telemetria pentru SIEM tot se scrie.
+    _audit_event(tool_name, tool_input, risk_level, reason, decision)
     try:
         today = datetime.date.today().isoformat()
         log_path = VAULT / "logs" / f"{today}.md"

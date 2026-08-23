@@ -43,3 +43,6 @@ trading/ft_userdata/
 /airflow/**
 !/airflow/dags/
 !/airflow/dags/**
+
+# Lab Azure — credențiale locale, nu se comit
+azure_lab.env
