@@ -1,12 +1,12 @@
-// R2 — Unvetted package installation blocked by the Kage risk gate
+// R2: Unvetted package installation blocked by the Kage risk gate
 //
 // MITRE ATT&CK: Initial Access (TA0001) / T1195 Supply Chain Compromise
 // Related control: risk_hook.py NEVER_CMD_PATTERNS (brew install, curl|bash, eval $(curl))
-// Maps to: OWASP GenAI/LLM Top 10 — LLM04:2026 Supply Chain
+// Maps to: OWASP GenAI/LLM Top 10, LLM04:2026 Supply Chain
 //
 // This is the detection counterpart to a preventive control: the gate already blocks
 // these commands, so every match is a blocked attempt, not a successful compromise.
-// The value is visibility — knowing an agent tried to pull unvetted code.
+// The value is visibility: knowing an agent tried to pull unvetted code.
 //
 // Observed baseline (480 events / 20 days): 2 matches, both `brew install`.
 KageRisk_CL
