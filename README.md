@@ -1,15 +1,79 @@
+<div align="center">
+
 # Kage
 
 **A self-hosted Python platform that orchestrates, governs and evaluates AI workflows.**
 
-Kage routes every request to the right model, keeps its own state and telemetry in PostgreSQL,
-turns that telemetry into analytics through a raw → staging → mart pipeline, schedules its batch
-work with Airflow, and refuses to let an autonomous agent do anything irreversible without an
-explicit approval.
+Routes every request to the right model · keeps state and telemetry in PostgreSQL · turns it into
+analytics through a raw → staging → mart pipeline · and refuses to let an autonomous agent do
+anything irreversible without an explicit approval.
 
-`Python 3.12` · `FastAPI` · `PostgreSQL 16` · `Airflow` · `ChromaDB` · **576 tests** · CI on every push to `dev`
+<br/>
 
-**Security:** [OWASP GenAI / LLM Top 10 (2026) mapping](docs/SECURITY-LLM-TOP10.md) · [Detection lab — Sentinel + MITRE ATT&CK](docs/lab-azure-sentinel/)
+[![CI](https://img.shields.io/github/actions/workflow/status/st3fansrb/kage.ai/ci.yml?branch=dev&style=for-the-badge&label=CI&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
+![Tests](https://img.shields.io/badge/tests-576%20passing-3FB950?style=for-the-badge&logo=pytest&logoColor=white)
+![License](https://img.shields.io/badge/license-AGPL--3.0-0969DA?style=for-the-badge)
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
+![Airflow](https://img.shields.io/badge/Airflow-017CEE?style=for-the-badge&logo=apacheairflow&logoColor=white)
+![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6F61?style=for-the-badge)
+![Ollama](https://img.shields.io/badge/Ollama-local%20models-000000?style=for-the-badge&logo=ollama&logoColor=white)
+
+<br/>
+
+### 🔐 Security documentation
+
+[![OWASP LLM Top 10](https://img.shields.io/badge/OWASP%20GenAI%20LLM%20Top%2010-2026%20mapping-8A2BE2?style=for-the-badge)](docs/SECURITY-LLM-TOP10.md)
+[![Sentinel lab](https://img.shields.io/badge/Detection%20lab-Sentinel%20%2B%20MITRE%20ATT%26CK-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](docs/lab-azure-sentinel/)
+
+</div>
+
+---
+
+## At a glance
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+### 🧭 Six-tier routing
+
+Local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above. Tier selection is
+semantic, with a classifier and heuristic fallback — plus a ChromaDB cache so near-identical
+questions never reach a model at all.
+
+</td>
+<td width="50%" valign="top">
+
+### 🛡️ Fail-closed governance
+
+Every tool call is scored on reversibility, explicit intent and content before it runs.
+High-risk calls block until approved from Telegram. Workspace confinement, spend caps and a
+kill switch bound the rest.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🗄️ A real data platform
+
+PostgreSQL 16 for cross-process state and telemetry, an ETL pipeline with point-in-time lineage,
+and Airflow owning the batch work — retries, backfill and history included.
+
+</td>
+<td width="50%" valign="top">
+
+### 📊 Measured, not asserted
+
+576 tests on every push against a real `postgres:16`. KageBench replays fixed tasks in a clean
+worktree and diffs success, cost, latency and approvals against the previous report.
+
+</td>
+</tr>
+</table>
 
 ---
 
