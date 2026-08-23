@@ -46,3 +46,17 @@ trading/ft_userdata/
 
 # Lab Azure — credențiale locale, nu se comit
 azure_lab.env
+
+# Planificare personală și pregătire de interviu — locale, nu se publică
+docs/REVOLUT-INTERNSHIP-ALIGNMENT.md
+docs/CODEX-PROPUNERI.md
+docs/CODEX-TASKS.md
+docs/KAGE-HANDOFF.md
+docs/KAGE-EVALUARE.md
+docs/fise-interviu/
+
+# Artefacte locale care nu se publică
+.claude/
+**/__pycache__/
+docs/OWASP-GenAI-LLM-Top-10-2026-v1.0.pdf
+safe_export_*.zip
