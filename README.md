@@ -150,6 +150,8 @@ litellm  (:4000)
 
 High-risk calls are blocked until you approve them in the Kage UI or via the ntfy notification. Configure thresholds in `risk_settings.json`.
 
+For how the risk gate and the rest of Kage's controls map onto the **OWASP GenAI / LLM Top 10 (2026)** — including an explicit account of what is *not* covered — see [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md).
+
 ---
 
 ## License
