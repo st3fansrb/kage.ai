@@ -127,9 +127,9 @@
     "prefilter_top_n": 5,
     "profiles": [
       {
-        "id": "stefan",
-        "label": "👔 Stefan",
-        "workspace": "~/career-ops/stefan",
+        "id": "candidate",
+        "label": "👔 Candidate",
+        "workspace": "~/career-ops/candidate",
         "search_terms": ["software engineer", "machine learning", "test automation", "internship software"],
         "sites": ["linkedin", "indeed"],
         "location": "Timișoara, Romania",
@@ -139,12 +139,12 @@
         "country_indeed": "romania",
         "exclude_keywords": ["senior", "lead", "principal", "staff", "manager", "5+ years", "7+ years", "10+ years"],
         "include_keywords": [],
-        "criteria": "Student anul 2 Computer Science, direcție AI/ML, intern QA. Caută: internship/junior/working-student în AI/ML, software junior, QA/test automation, cybersecurity entry-level. Preferă Timișoara sau remote. Evită: senior, 5+ ani experiență, management."
+        "criteria": "Descrie aici profilul căutat în limbaj natural: nivel, domeniu, oraș, ce accepți și ce excluzi. Textul e trimis modelului care filtrează rezultatele."
       },
       {
-        "id": "tata",
-        "label": "👨‍💼 Tata",
-        "workspace": "~/career-ops/tata",
+        "id": "second",
+        "label": "👨‍💼 Second profile",
+        "workspace": "~/career-ops/second",
         "search_terms": ["project manager"],
         "sites": ["linkedin"],
         "location": "Romania",
@@ -152,12 +152,12 @@
         "hours_old": 72,
         "is_remote": false,
         "country_indeed": "romania",
-        "criteria": "Project manager senior, non-tehnic, 15+ ani experiență. Caută: PM, program manager, delivery manager. Preferă Romania. Evită: roluri pur tehnice/developer, entry-level."
+        "criteria": "Al doilea profil e opțional — job scanner-ul suportă mai multe profiluri independente, fiecare cu workspace-ul lui."
       },
       {
         "id": "contract-ai",
         "label": "🤝 Contract AI",
-        "workspace": "~/career-ops/stefan",
+        "workspace": "~/career-ops/candidate",
         "notify": "silent",
         "search_terms": ["AI training", "data annotation", "LLM evaluation"],
         "sites": ["linkedin", "indeed"],

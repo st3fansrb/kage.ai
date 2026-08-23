@@ -4,10 +4,9 @@
 > chiar dacă următorul nu se construiește niciodată". Cod de producție începe DOAR după ce
 > Stefan aprobă designul + răspunde la întrebările din §9 (design doc).
 >
-> **14.07.2026:** propunerile T1–T8 din `CODEX-PROPUNERI.md` (HypothesisSpec/DSL, holdout
-> blocat, validation v2 pentru serii dependente, cost models per piață) rămân `proposed` —
-> rigoare quant reală, dar nu cerută de JD-ul Revolut (vezi `KAGE-HANDOFF.md` §4). Singura
-> excepție e T3 (point-in-time lineage), acceptată și integrată în WP-ETL din handoff.
+> **14.07.2026:** propunerile T1–T8 (HypothesisSpec/DSL, holdout blocat, validation v2 pentru
+> serii dependente, cost models per piață) rămân `proposed` — rigoare quant reală, dar în afara
+> scopului curent. Singura excepție e T3 (point-in-time lineage), acceptată și integrată în WP-ETL.
 
 Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are **Acceptare**.
 
@@ -69,8 +68,8 @@ Legendă: `[ ]` de făcut · `[~]` parțial (fundația T1) · fiecare task are *
   interfață) — hmmlearn evitat acum (posibil nementenat + risc de dependințe).
   **Decizie 09.07.2026:** la upgrade, HMM-ul se scrie **de la zero** (numpy, EM, 2–3 stări
   gaussiene, ~120 linii) și îl implementează **Stefan în mod ghidat** (schelet + teste de la
-  model, corpul funcțiilor de la Stefan) — parte din strategia de CV; vezi decizia „mod de
-  execuție pe partea ML" din `KAGE-HANDOFF.md` §4.
+  model, corpul funcțiilor scris manual) — decizie deliberată: partea de ML se învață
+  implementând-o, nu delegând-o.
 - `[x]` **3.3 `daily_context.json` + limitator freqtrade.** ✅ `trading/daily_context.py` — scrie
   JSON + rând `daily_context` (ledger); `bias_allows(side)` = contractul pe care strategiile îl
   cheamă în `populate_entry_trend` (short_only ⇒ long nu deschide). Provider jos ⇒ nu suprascrie.

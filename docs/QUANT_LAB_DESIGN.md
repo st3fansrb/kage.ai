@@ -4,9 +4,8 @@
 > Sursă: `quant_lab_claude_code_prompt.md` (spec Stefan) + cercetare open-source (07.07.2026).
 > Înlocuiește abordarea naivă „N backtests + LLM mută strategia" cu metoda științifică.
 >
-> **14.07.2026:** completările propuse de Codex pentru `HypothesisSpec`, lineage, validation
-> temporală și cost models sunt în `CODEX-PROPUNERI.md` (T1–T8). Rămân `proposed`, în afara
-> lanțului activ — vezi verdictul de reconciliere din `KAGE-HANDOFF.md` §4.
+> **14.07.2026:** completările propuse pentru `HypothesisSpec`, lineage, validation temporală
+> și cost models (T1–T8) rămân `proposed`, în afara lanțului activ.
 
 ## 0. De ce reorientarea
 

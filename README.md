@@ -193,8 +193,6 @@ Messages without a prefix go through an intent router; prefixes remain the deter
 
 - [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md) — what Kage is and does (Romanian)
 - [docs/ROADMAP.md](docs/ROADMAP.md) — phase history and scope decisions
-- [docs/KAGE-EVALUARE.md](docs/KAGE-EVALUARE.md) — full technical self-assessment
-- [docs/KAGE-HANDOFF.md](docs/KAGE-HANDOFF.md) — current execution plan and acceptance criteria
 - [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md) — **OWASP GenAI / LLM Top 10 (2026)** mapping, with what is *not* covered
 - [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/) — **detection lab**: risk-gate telemetry in Microsoft Sentinel, 3 KQL rules mapped to MITRE ATT&CK
 

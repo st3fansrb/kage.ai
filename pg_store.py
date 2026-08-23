@@ -4,7 +4,7 @@ Ce trăiește aici: `usage`, `runs`/`run_events`, `missions`/`mission_wps`, `job
 `scheduled_tasks`, `status`. Chat history (`messages`) + ChromaDB RĂMÂN în `cache_db/`
 (SQLite) — migrarea lor nu stinge nicio durere (spec WP-PG pasul 2).
 
-Decizii de design (detaliat în docs/fise-interviu/wp-pg-postgres.md):
+Decizii de design:
 
 - **psycopg sync, o conexiune per proces + RLock** — consistent cu patternul sqlite3
   `check_same_thread=False` de dinainte; pool async doar dacă apar blocaje măsurate.

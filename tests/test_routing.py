@@ -7,8 +7,8 @@ import orchestrator
 # ── _heuristic_classify (pur) ─────────────────────────────────────────────────
 
 def test_heuristic_personal_keyword(monkeypatch):
-    monkeypatch.setattr(orchestrator, "PERSONAL_KEYWORDS", ["aumovio", "flutter"])
-    assert orchestrator._heuristic_classify("ce am lucrat la aumovio azi") == 2
+    monkeypatch.setattr(orchestrator, "PERSONAL_KEYWORDS", ["acme", "flutter"])
+    assert orchestrator._heuristic_classify("ce am lucrat la acme azi") == 2
 
 
 def test_heuristic_long_message_is_tier2(monkeypatch):

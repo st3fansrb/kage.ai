@@ -20,9 +20,9 @@ Ce este și ce face: `docs/DESPRE_KAGE.md`.
 
 ## Documente de citit ÎNAINTE de a implementa ceva
 
-1. **`docs/KAGE-HANDOFF.md`** — planul de execuție curent: pachete de lucru ordonate, criterii
+1. **`docs/KAGE-HANDOFF.md`** *(local, negitat)* — planul de execuție curent: pachete de lucru ordonate, criterii
    de acceptare, capcane cunoscute. **Obligatoriu** pentru orice item din lista de îmbunătățiri.
-2. `docs/KAGE-EVALUARE.md` — evaluarea tehnică completă (diagnostic D1–D15, gap agentic,
+2. `docs/KAGE-EVALUARE.md` *(local, negitat)* — evaluarea tehnică completă (diagnostic D1–D15, gap agentic,
    cercetare, priorități #1–#15). Handoff-ul o referă; nu re-deriva evaluarea.
 3. `docs/ROADMAP.md` — istoricul fazelor 1–19 + decizii de scope.
 
