@@ -68,6 +68,26 @@ R2 is the detection counterpart to a preventive control already documented under
 **LLM04:2026 Supply Chain** in [`../SECURITY-LLM-TOP10.md`](../SECURITY-LLM-TOP10.md) —
 the same risk, covered both before and after the fact.
 
+## Evidence
+
+**Ingestion — 481 events queryable in `KageRisk_CL`:**
+
+![Ingestion count](evidence/01-ingestion-count.png)
+
+**R3 — the one window that survives tuning:**
+
+![R3 detection result](evidence/02-r3-detection.png)
+
+One hour on 2026-06-02, four denials from the same tool: `rm` in the home directory, a
+`git push --force`, and deletion of source files. Read together they are a coherent destructive
+burst, and all four were blocked before execution. Without the `/dev/null` exclusion this window
+sits among five others that are pure noise.
+
+The three analytics rules were created in Sentinel with the ATT&CK mappings above and validated by
+running their queries against the table. **Incident generation was not verified** — the incident
+view had moved to the Defender XDR portal, whose onboarding requires directory-administrator
+rights this account does not hold. The detection logic is proven; the alert-to-incident hop is not.
+
 ## Three things this lab actually taught
 
 **1. Precision beats recall when a human triages the queue.** 24 of the 34 denials share
@@ -129,6 +149,5 @@ az resource show -g rg-kage-siem-lab -n dcr-kage-lab \
   incidents; a human reads them.
 - **Single data source.** One table, from one component. Real detection engineering
   correlates across identity, network, and endpoint telemetry.
-- **The environment is gone.** The resource group was deleted after the evidence was
-  captured, so the screenshots are the record. The KQL and the shipper are reproducible;
-  the workspace is not.
+- **Incidents were never observed.** The rules were validated by running their queries, not by
+  watching an incident appear in a queue — see *Evidence* above.

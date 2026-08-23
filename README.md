@@ -9,6 +9,8 @@ explicit approval.
 
 `Python 3.12` · `FastAPI` · `PostgreSQL 16` · `Airflow` · `ChromaDB` · **576 tests** · CI on every push to `dev`
 
+**Security:** [OWASP GenAI / LLM Top 10 (2026) mapping](docs/SECURITY-LLM-TOP10.md) · [Detection lab — Sentinel + MITRE ATT&CK](docs/lab-azure-sentinel/)
+
 ---
 
 ## Why it exists
@@ -97,6 +99,17 @@ flowchart TB
   and symlinks don't help) and checked against an allow-list before any subprocess starts.
 - **Kill switch** — `!stop` halts every agent and pauses the scheduler.
 
+These controls are documented against an external standard rather than asserted:
+
+**[OWASP GenAI / LLM Top 10 (2026) — architecture mapping](docs/SECURITY-LLM-TOP10.md)** maps each
+of the ten risks to a concrete control with line-level code references, and closes with eight
+limitations the architecture does *not* cover — including the places where it fails open.
+
+**[Detection lab — risk-gate telemetry in Microsoft Sentinel](docs/lab-azure-sentinel/)** takes 481
+real policy decisions from 20 days of use, ships them into Azure Log Analytics, and adds three KQL
+detection rules mapped to MITRE ATT&CK — with the tuning decision that separates a usable rule
+from one an analyst would mute.
+
 ### Evaluation
 
 - **KageBench** (`kagebench.py`) — a regression gate that runs fixed tasks in a clean worktree and
@@ -182,8 +195,8 @@ Messages without a prefix go through an intent router; prefixes remain the deter
 - [docs/ROADMAP.md](docs/ROADMAP.md) — phase history and scope decisions
 - [docs/KAGE-EVALUARE.md](docs/KAGE-EVALUARE.md) — full technical self-assessment
 - [docs/KAGE-HANDOFF.md](docs/KAGE-HANDOFF.md) — current execution plan and acceptance criteria
-
-For how the risk gate and the rest of Kage's controls map onto the **OWASP GenAI / LLM Top 10 (2026)** — including an explicit account of what is *not* covered — see [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md).
+- [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md) — **OWASP GenAI / LLM Top 10 (2026)** mapping, with what is *not* covered
+- [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/) — **detection lab**: risk-gate telemetry in Microsoft Sentinel, 3 KQL rules mapped to MITRE ATT&CK
 
 ---
 
