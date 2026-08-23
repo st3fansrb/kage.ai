@@ -183,6 +183,8 @@ Messages without a prefix go through an intent router; prefixes remain the deter
 - [docs/KAGE-EVALUARE.md](docs/KAGE-EVALUARE.md) — full technical self-assessment
 - [docs/KAGE-HANDOFF.md](docs/KAGE-HANDOFF.md) — current execution plan and acceptance criteria
 
+For how the risk gate and the rest of Kage's controls map onto the **OWASP GenAI / LLM Top 10 (2026)** — including an explicit account of what is *not* covered — see [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md).
+
 ---
 
 ## License
