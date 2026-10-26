@@ -22,4 +22,6 @@ router_settings:
   timeout: 120
 
 general_settings:
+  # Placeholder: scripts/setup.sh îl înlocuiește cu o cheie aleatoare, salvată și în
+  # kage_config.json (litellm_key). litellm_config.yaml generat nu se comite.
   master_key: KAGE_LITELLM_KEY

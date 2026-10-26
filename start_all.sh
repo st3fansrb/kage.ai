@@ -49,13 +49,15 @@ else
 fi
 
 # ── LiteLLM :4000 ─────────────────────────────────────────────────────────────
+# Doar pe loopback: proxy-ul nu are alt client decât orchestratorul de pe aceeași mașină,
+# iar pe 0.0.0.0 oricine din rețeaua locală putea folosi modelele cu master_key-ul.
 if port_up 4000; then
   echo "  ✓ LiteLLM        :4000"
 else
   echo "  → Pornesc LiteLLM..."
   nohup "$DIR/.venv/bin/litellm" \
     --config "$DIR/litellm_config.yaml" \
-    --port 4000 --host 0.0.0.0 \
+    --port 4000 --host 127.0.0.1 \
     >> "$LOGS/litellm.log" 2>&1 &
   sleep 3
   port_up 4000 && echo "  ✓ LiteLLM pornit" || echo "  ✗ LiteLLM — eroare, vezi $LOGS/litellm.log"

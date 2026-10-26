@@ -12,8 +12,8 @@ echo ""
 echo "=== Kage Setup ==="
 echo ""
 
-# Python 3.10+ (WP9: nucleul Kage rulează pe 3.12 — Claude Agent SDK cere ≥3.10).
-# Preferă python3.12; cade pe python3 doar dacă e deja ≥3.10.
+# Python 3.12+ (versiunea din docs/INSTALL.md și din CI).
+# Preferă python3.12; cade pe python3 doar dacă e deja ≥3.12.
 if command -v python3.12 &>/dev/null; then
     PYBIN=python3.12
 elif command -v python3 &>/dev/null; then
@@ -25,8 +25,8 @@ fi
 PY_VER=$("$PYBIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
 PY_MAJOR=$(echo "$PY_VER" | cut -d. -f1)
 PY_MINOR=$(echo "$PY_VER" | cut -d. -f2)
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-    fail "Python 3.10+ required for Kage core (found $PY_VER via $PYBIN). Install python@3.12."
+if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 12 ]; }; then
+    fail "Python 3.12+ required for Kage core (found $PY_VER via $PYBIN). Install python@3.12."
     exit 1
 fi
 ok "Python $PY_VER ($PYBIN)"
@@ -107,29 +107,50 @@ else
     ok "kage_config.json exists"
 fi
 
-# litellm_config.yaml (generated from kage_config.json models section)
+# litellm_config.yaml (generat din kage_config.json + litellm_config.example.yaml)
+# master_key-ul nu mai e o constantă din git: dacă kage_config.json n-are deja o cheie
+# proprie, generăm una aleatoare și o scriem și în kage_config.json (litellm_key), ca
+# orchestratorul să trimită aceeași cheie pe care o cere LiteLLM.
 if [ ! -f "$DIR/litellm_config.yaml" ]; then
     "$DIR/.venv/bin/python3" - "$DIR" <<'PYEOF'
-import sys, json
+import sys, json, secrets
 from pathlib import Path
 d   = Path(sys.argv[1])
-cfg = json.loads((d / "kage_config.json").read_text())
+cfg_path = d / "kage_config.json"
+cfg = json.loads(cfg_path.read_text())
 m   = cfg.get("models", {})
 p   = cfg.get("providers", {})
 t1  = m.get("tier1", {})
 t2  = m.get("tier2", {})
+
+# Cheile publice din exemple nu contează ca „proprii".
+PLACEHOLDERS = {"", "sk-orchestrator-local", "KAGE_LITELLM_KEY"}
+key = str(cfg.get("litellm_key") or p.get("litellm_key") or "")
+if key in PLACEHOLDERS:
+    key = "sk-kage-" + secrets.token_hex(24)
+    # orchestrator.py citește litellm_key de la rădăcină, pipeline-ul din providers.
+    cfg["litellm_key"] = key
+    cfg.setdefault("providers", {})["litellm_key"] = key
+    cfg_path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
+    print("  ✓ litellm_key aleator scris în kage_config.json")
+
 tmpl = (d / "litellm_config.example.yaml").read_text()
 tmpl = tmpl.replace("KAGE_TIER1_NAME",  t1.get("litellm_name", "tier-1-orchestrator"))
 tmpl = tmpl.replace("KAGE_TIER1_MODEL", t1.get("ollama_model",  "qwen3:8b"))
 tmpl = tmpl.replace("KAGE_TIER2_NAME",  t2.get("litellm_name", "tier-2-worker"))
 tmpl = tmpl.replace("KAGE_TIER2_MODEL", t2.get("ollama_model",  "qwen3.6:35b"))
 tmpl = tmpl.replace("KAGE_OLLAMA_URL",  p.get("ollama_url",     "http://localhost:11434"))
-tmpl = tmpl.replace("KAGE_LITELLM_KEY", p.get("litellm_key",   "sk-orchestrator-local"))
+tmpl = tmpl.replace("KAGE_LITELLM_KEY", key)
 (d / "litellm_config.yaml").write_text(tmpl)
 PYEOF
+    chmod 600 "$DIR/litellm_config.yaml" "$DIR/kage_config.json"
     ok "litellm_config.yaml generated"
 else
     ok "litellm_config.yaml exists"
+    if grep -q "sk-orchestrator-local" "$DIR/litellm_config.yaml"; then
+        warn "litellm_config.yaml folosește cheia publică sk-orchestrator-local."
+        warn "  Șterge-l și rulează din nou setup.sh ca să primești o cheie aleatoare."
+    fi
 fi
 
 # Ollama model discovery
