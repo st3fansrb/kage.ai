@@ -6,7 +6,7 @@ Kage is a personal AI orchestration system: smart routing between local (Ollama)
 
 | Requirement | Notes |
 |---|---|
-| Python 3.10+ | [python.org](https://python.org) |
+| Python 3.12 | `brew install python@3.12` — the version CI tests on; `scripts/setup.sh` prefers `python3.12` |
 | Ollama | [ollama.ai](https://ollama.ai) — for local AI tiers |
 | PostgreSQL 16 | `brew install postgresql@16` — shared state + telemetry (WP-PG); started by `start_all.sh`; create the DB once: `createdb kage` |
 | Claude CLI | `npm install -g @anthropic-ai/claude-code` — for agent tasks |
@@ -21,7 +21,7 @@ bash scripts/setup.sh
 ```
 
 `scripts/setup.sh` will:
-1. Check Python version and dependencies
+1. Check the Python version (3.12) and dependencies
 2. Create a `.venv` and install Python packages
 3. Create `kage_config.json` from the example template
 
