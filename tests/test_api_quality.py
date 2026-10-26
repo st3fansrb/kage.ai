@@ -105,3 +105,25 @@ def test_pending_has_explicit_contract(client, monkeypatch):
     response = client.get("/api/pending")
     assert response.status_code == 200
     assert response.json()[0]["id"] == "risk-1"
+
+
+def test_unhandled_exception_does_not_leak_detail(monkeypatch):
+    """#4: un 500 nu expune textul excepției (căi, DSN-uri, SQL) către client."""
+    notified = []
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "t0ken")
+    monkeypatch.setattr(orchestrator, "_notify", lambda *a, **kw: notified.append(a))
+
+    class _Boom(dict):
+        def items(self):
+            raise RuntimeError("postgresql://kage:parola@db/kage /Users/secret/path")
+
+    monkeypatch.setattr(orchestrator, "pending_risk_meta", _Boom())
+    monkeypatch.setattr(orchestrator, "risk_decisions", {})
+    client = TestClient(orchestrator.app, raise_server_exceptions=False)
+    response = client.get("/api/pending", headers={"Authorization": "Bearer t0ken"})
+
+    assert response.status_code == 500
+    assert response.json() == {"error": "internal server error"}
+    assert "parola" not in response.text
+    # detaliul rămâne pe canalul intern de alerte
+    assert notified and "parola" in notified[0][1]

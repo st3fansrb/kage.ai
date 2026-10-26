@@ -813,7 +813,9 @@ async def _unhandled_exception_handler(request: Request, exc: Exception):
         _notify("💥 Eroare internă", f"{request.url.path}: {exc}", priority="high")
     except Exception:
         pass
-    return JSONResponse({"error": "internal server error", "detail": str(exc)}, status_code=500)
+    # Textul excepției rămâne în log și pe canalul de alerte; clientul nu-l vede
+    # (poate conține căi, DSN-uri sau fragmente SQL).
+    return JSONResponse({"error": "internal server error"}, status_code=500)
 
 
 # ── Scheduler helpers (Faza 10) ───────────────────────────────────────────────
@@ -4532,7 +4534,12 @@ def _restore_cache_db(archive_path, dest=None) -> str:
 
     with tempfile.TemporaryDirectory() as staging:
         with tarfile.open(archive, "r:gz") as tar:
-            tar.extractall(staging)
+            # filtrul `data` refuză căi absolute, `../`, link-uri care ies din staging
+            # și fișiere speciale — arhiva poate veni dintr-o copie iCloud modificată.
+            try:
+                tar.extractall(staging, filter="data")
+            except tarfile.FilterError as e:
+                raise ValueError(f"arhivă nesigură: {archive.name}: {e}") from e
         extracted = Path(staging) / "cache_db"
         if not extracted.exists():
             raise ValueError(f"arhivă invalidă: lipsește cache_db/ în {archive.name}")
