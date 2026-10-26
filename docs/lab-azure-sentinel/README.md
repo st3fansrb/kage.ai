@@ -5,7 +5,7 @@ and writing detection rules over it that map to MITRE ATT&CK.
 
 Kage's `risk_hook.py` already decides, on every tool call an agent makes, whether to
 allow, require human approval, or deny. Those decisions were only ever written as prose
-into a Markdown journal — readable by a person, useless to a machine. This lab turns
+into a Markdown journal: readable by a person, useless to a machine. This lab turns
 them into queryable security telemetry.
 
 ## Pipeline
@@ -32,7 +32,7 @@ risk_hook.py  ──_audit_event()──▶  .logs/risk_audit.jsonl
 
 | Component | Name | Purpose |
 |---|---|---|
-| Resource group | `rg-kage-siem-lab` | blast radius — deleting it removes everything |
+| Resource group | `rg-kage-siem-lab` | blast radius: deleting it removes everything |
 | Log Analytics workspace | `law-kage-lab` | storage + query engine |
 | Data collection endpoint | `dce-kage-lab` | ingestion URL |
 | Data collection rule | `dcr-kage-lab` | routing + ingestion-time transform |
@@ -44,7 +44,7 @@ cannot carry scheduled analytics rules, which is the entire point of the exercis
 
 ## Data
 
-**481 events, 20 days of real use** — 480 recovered from the historical Markdown journal
+**481 events, 20 days of real use.** 480 were recovered from the historical Markdown journal
 via `scripts/backfill_risk_audit.py`, plus one live event confirming the new sink.
 
 | Risk level | Count | Decision |
@@ -60,21 +60,21 @@ via `scripts/backfill_risk_audit.py`, plus one live event confirming the new sin
 
 | Rule | ATT&CK | Matches in baseline |
 |---|---|---|
-| [R1 — Destructive command blocked](R1-data-destruction.kql) | Impact (TA0040) / T1485 Data Destruction | 5 |
-| [R2 — Unvetted package installation blocked](R2-supply-chain.kql) | Initial Access (TA0001) / T1195 Supply Chain Compromise | 2 |
-| [R3 — Burst of denials in one hour](R3-denial-burst.kql) | Execution (TA0002) / T1059 Command and Scripting Interpreter | 1 window |
+| [R1: Destructive command blocked](R1-data-destruction.kql) | Impact (TA0040) / T1485 Data Destruction | 5 |
+| [R2: Unvetted package installation blocked](R2-supply-chain.kql) | Initial Access (TA0001) / T1195 Supply Chain Compromise | 2 |
+| [R3: Burst of denials in one hour](R3-denial-burst.kql) | Execution (TA0002) / T1059 Command and Scripting Interpreter | 1 window |
 
 R2 is the detection counterpart to a preventive control already documented under
-**LLM04:2026 Supply Chain** in [`../SECURITY-LLM-TOP10.md`](../SECURITY-LLM-TOP10.md) —
+**LLM04:2026 Supply Chain** in [`../SECURITY-LLM-TOP10.md`](../SECURITY-LLM-TOP10.md):
 the same risk, covered both before and after the fact.
 
 ## Evidence
 
-**Ingestion — 481 events queryable in `KageRisk_CL`:**
+**Ingestion: 481 events queryable in `KageRisk_CL`:**
 
 ![Ingestion count](evidence/01-ingestion-count.png)
 
-**R3 — the one window that survives tuning:**
+**R3: the one window that survives tuning:**
 
 ![R3 detection result](evidence/02-r3-detection.png)
 
@@ -84,20 +84,20 @@ burst, and all four were blocked before execution. Without the `/dev/null` exclu
 sits among five others that are pure noise.
 
 The three analytics rules were created in Sentinel with the ATT&CK mappings above and validated by
-running their queries against the table. **Incident generation was not verified** — the incident
+running their queries against the table. **Incident generation was not verified.** The incident
 view had moved to the Defender XDR portal, whose onboarding requires directory-administrator
 rights this account does not hold. The detection logic is proven; the alert-to-incident hop is not.
 
 ## Three things this lab actually taught
 
 **1. Precision beats recall when a human triages the queue.** 24 of the 34 denials share
-one cause — a `/dev/null` redirect flagged as high risk — which is benign nearly every
+one cause, a `/dev/null` redirect flagged as high risk, which is benign nearly every
 time. The naive burst rule fires on 6 windows, 5 of them noise. Excluding that single
 pattern leaves 1 window, and it is a genuine cluster: `rm` in the home directory, a
 `git push --force`, and deletion of source files, all inside one hour on 2026-06-02.
 The exclusion is one line of KQL and it is the difference between a rule an analyst
 would keep and one they would mute. The underlying fix belongs in the risk matrix, not
-in the detection — the detection only made the problem visible.
+in the detection; the detection only made the problem visible.
 
 **2. Backfilled data loses its own timestamps.** Azure Monitor overwrites `TimeGenerated`
 with ingestion time for records older than a few days, so all 480 historical events
@@ -107,7 +107,7 @@ timestamp, three months of history would have collapsed into a single second.
 
 **3. Authentication and authorization fail differently.** The app registration
 authenticates successfully the moment it exists, and still gets `403` on ingestion until
-`Monitoring Metrics Publisher` is granted **on the DCR** — not on the workspace. A valid
+`Monitoring Metrics Publisher` is granted **on the DCR**, not on the workspace. A valid
 identity with no permission is the more common failure, and the one that looks like a
 code bug.
 
@@ -119,7 +119,7 @@ code bug.
 python scripts/backfill_risk_audit.py --dry-run
 python scripts/backfill_risk_audit.py
 
-# 2. configure credentials (never committed — see azure_lab.env.example)
+# 2. configure credentials (never committed, see azure_lab.env.example)
 cp azure_lab.env.example azure_lab.env   # fill in, then:
 set -a; source azure_lab.env; set +a
 
@@ -150,4 +150,4 @@ az resource show -g rg-kage-siem-lab -n dcr-kage-lab \
 - **Single data source.** One table, from one component. Real detection engineering
   correlates across identity, network, and endpoint telemetry.
 - **Incidents were never observed.** The rules were validated by running their queries, not by
-  watching an incident appear in a queue — see *Evidence* above.
+  watching an incident appear in a queue; see *Evidence* above.

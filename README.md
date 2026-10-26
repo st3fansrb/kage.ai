@@ -41,7 +41,7 @@ anything irreversible without an explicit approval.
 ### 🧭 Six-tier routing
 
 Local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above. Tier selection is
-semantic, with a classifier and heuristic fallback — plus a ChromaDB cache so near-identical
+semantic, with a classifier and heuristic fallback, plus a ChromaDB cache so near-identical
 questions never reach a model at all.
 
 </td>
@@ -61,7 +61,7 @@ kill switch bound the rest.
 ### 🗄️ A real data platform
 
 PostgreSQL 16 for cross-process state and telemetry, an ETL pipeline with point-in-time lineage,
-and Airflow owning the batch work — retries, backfill and history included.
+and Airflow owning the batch work, with retries, backfill and history included.
 
 </td>
 <td width="50%" valign="top">
@@ -98,7 +98,7 @@ flowchart TB
         TG["Telegram gateway<br/>notifications + inline approvals"]
     end
 
-    subgraph core["Orchestrator — FastAPI :4001"]
+    subgraph core["Orchestrator · FastAPI :4001"]
         API["/v1 API<br/>chat · missions · usage · analytics"]
         ROUTE["6-tier semantic router<br/>+ semantic cache"]
         GATE["Risk gate<br/>policy · confinement · budget"]
@@ -133,50 +133,50 @@ flowchart TB
 
 ### Data platform
 
-- **PostgreSQL 16** holds shared state and telemetry across processes — 7 tables (`usage`,
+- **PostgreSQL 16** holds shared state and telemetry across processes: 7 tables (`usage`,
   `runs`/`run_events`, `missions`/`mission_wps`, `job_runs`, `scheduled_tasks`, `status`),
   hand-written SQL over `psycopg`, no ORM. Chat history and single-process tables stay in SQLite,
   deliberately: migrating them would not remove any pain.
 - **Idempotent cutover.** The migration off lock files and SQLite verifies row counts *inside the
   same transaction* and raises on mismatch, so a partial migration rolls back to nothing. Sources
-  are never deleted — they remain archives.
-- **ETL pipeline** (`etl.py`) — raw → staging → mart, entirely in SQL. Staging rows carry
+  are never deleted; they remain archives.
+- **ETL pipeline** (`etl.py`): raw → staging → mart, entirely in SQL. Staging rows carry
   point-in-time lineage (`event_time`, `available_time`, `ingested_time`, `source`); mart rows
   carry the `dataset_snapshot_id` of the run that produced them. Processing unit is a **day**, so
   idempotency is local and provable: re-running a day yields exactly the same rows.
-- **Airflow** (`airflow/dags/`) owns the non-safety-critical batches — nightly ETL aggregation,
-  backup, job scan, weekly trading calibration — for retries, backfill and history. Fail-closed
+- **Airflow** (`airflow/dags/`) owns the non-safety-critical batches (nightly ETL aggregation,
+  backup, job scan, weekly trading calibration) for retries, backfill and history. Fail-closed
   near-real-time jobs (trading killswitch, heartbeat) stay in-process on purpose.
 
 ### Routing and cost
 
-- **6-tier router** — local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above.
+- **6-tier router**: local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above.
   Tier selection is semantic (embeddings) with a classifier and heuristic fallback.
 - **Semantic cache** over ChromaDB, so near-identical questions never reach a model.
 - **Daily budget** with a hard cap on cloud calls and an inline warning before it bites.
 
 ### Governance
 
-- **Risk gate** (`risk_hook.py`) — a PreToolUse hook scoring every tool call on reversibility,
+- **Risk gate** (`risk_hook.py`): a PreToolUse hook scoring every tool call on reversibility,
   explicit intent and content. High-risk calls block until approved via inline Telegram buttons.
-- **Workspace confinement** — task working directories are canonicalised (`resolve()`, so `..`
+- **Workspace confinement**: task working directories are canonicalised (`resolve()`, so `..`
   and symlinks don't help) and checked against an allow-list before any subprocess starts.
-- **Kill switch** — `!stop` halts every agent and pauses the scheduler.
+- **Kill switch**: `!stop` halts every agent and pauses the scheduler.
 
 These controls are documented against an external standard rather than asserted:
 
-**[OWASP GenAI / LLM Top 10 (2026) — architecture mapping](docs/SECURITY-LLM-TOP10.md)** maps each
+**[OWASP GenAI / LLM Top 10 (2026): architecture mapping](docs/SECURITY-LLM-TOP10.md)** maps each
 of the ten risks to a concrete control with line-level code references, and closes with eight
-limitations the architecture does *not* cover — including the places where it fails open.
+limitations the architecture does *not* cover, including the places where it fails open.
 
-**[Detection lab — risk-gate telemetry in Microsoft Sentinel](docs/lab-azure-sentinel/)** takes 481
+**[Detection lab: risk-gate telemetry in Microsoft Sentinel](docs/lab-azure-sentinel/)** takes 481
 real policy decisions from 20 days of use, ships them into Azure Log Analytics, and adds three KQL
-detection rules mapped to MITRE ATT&CK — with the tuning decision that separates a usable rule
+detection rules mapped to MITRE ATT&CK, with the tuning decision that separates a usable rule
 from one an analyst would mute.
 
 ### Evaluation
 
-- **KageBench** (`kagebench.py`) — a regression gate that runs fixed tasks in a clean worktree and
+- **KageBench** (`kagebench.py`): a regression gate that runs fixed tasks in a clean worktree and
   records success, cost, latency, turns, tool calls and approval requests, then diffs against the
   previous report. Deliberately not part of every commit: run it before a large change.
 
@@ -255,16 +255,16 @@ Messages without a prefix go through an intent router; prefixes remain the deter
 
 ## Documentation
 
-- [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md) — what Kage is and does (Romanian)
-- [docs/ROADMAP.md](docs/ROADMAP.md) — phase history and scope decisions
-- [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md) — **OWASP GenAI / LLM Top 10 (2026)** mapping, with what is *not* covered
-- [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/) — **detection lab**: risk-gate telemetry in Microsoft Sentinel, 3 KQL rules mapped to MITRE ATT&CK
+- [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md): what Kage is and does (Romanian)
+- [docs/ROADMAP.md](docs/ROADMAP.md): phase history and scope decisions
+- [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md): **OWASP GenAI / LLM Top 10 (2026)** mapping, with what is *not* covered
+- [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/): **detection lab**: risk-gate telemetry in Microsoft Sentinel, 3 KQL rules mapped to MITRE ATT&CK
 
 ---
 
 ## License
 
-[AGPL-3.0](LICENSE) — free for personal and open source use.
+[AGPL-3.0](LICENSE), free for personal and open source use.
 
 For commercial use (hosted service, closed-source product) without AGPL obligations:
 contact `stefan.andrei.sirbu@gmail.com`
