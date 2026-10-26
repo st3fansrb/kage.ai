@@ -22,7 +22,7 @@ def api_db(pg, monkeypatch, tmp_path):
     monkeypatch.setattr(orchestrator, "MISSIONS_DIR", tmp_path / "missions")
     monkeypatch.setattr(orchestrator, "_active_mission_id", None)
     monkeypatch.setattr(orchestrator, "_mission_launch", lambda _mid: None)
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
     orchestrator._rate_limit_buckets.clear()
     yield conn
     conn.close()
@@ -30,7 +30,7 @@ def api_db(pg, monkeypatch, tmp_path):
 
 @pytest.fixture
 def client(api_db):
-    return TestClient(orchestrator.app)
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 def _mission_file(tmp_path):

@@ -34,8 +34,8 @@ def ledger_db(pg, monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
-    return TestClient(orchestrator.app)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 # ── Helpers de bază ───────────────────────────────────────────────────────────

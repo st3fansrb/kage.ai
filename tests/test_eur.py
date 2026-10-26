@@ -23,9 +23,9 @@ def test_api_runs_exposes_cost_eur(pg, monkeypatch):
         "VALUES (%s, %s, %s, %s, %s)",
         ("run-1", "chat", "done", 1.0, "2026-07-06T10:00:00"),
     )
-    monkeypatch.setattr(orch, "_get_api_token", lambda: "")
+    monkeypatch.setattr(orch, "_get_api_token", lambda: "test-token")
 
-    client = TestClient(orch.app)
+    client = TestClient(orch.app, headers={"Authorization": "Bearer test-token"})
     resp = client.get("/api/runs")
     assert resp.status_code == 200
     data = resp.json()

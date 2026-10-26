@@ -272,10 +272,10 @@ def test_video_hypothesis_rejects_vague_schema(tmp_path):
 
 @pytest.fixture
 def _client(monkeypatch):
-    # Dezactivează auth-ul (mașina reală poate avea api_token în config).
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
+    # Token de test fix (auth-ul e fail-closed; mașina reală poate avea alt api_token)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
     from fastapi.testclient import TestClient
-    return TestClient(orchestrator.app)
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 def test_endpoint_analyze_ok(monkeypatch, _client):
