@@ -35,7 +35,7 @@ from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse, Red
 from pydantic import BaseModel, Field
 import telegram_gateway as _tg_module
 import video_intel as _vi
-from agent_runner import AgentRunner, SDK_AVAILABLE as _SDK_AVAILABLE
+from agent_runner import AgentRunner
 import mission_runner as _mr
 import pg_store
 import etl
@@ -1055,19 +1055,6 @@ async def _trading_calibration_job():
 
 
 # ── WP12: watchdog — heartbeat extern + recuperarea joburilor cron întrerupte ──
-def _ensure_job_runs_table(conn) -> None:
-    """Urmă a rulărilor de joburi PROGRAMATE (nu manuale): start + finish. Un rând cu
-    `finished_at IS NULL` la startup = job întrerupt de un restart (cazul din 09.07)."""
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS job_runs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job_id TEXT NOT NULL, started_at TEXT NOT NULL,
-            finished_at TEXT, status TEXT
-        )
-    """)
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_job_runs_open ON job_runs(job_id, finished_at)")
-
-
 def _job_run_begin(job_id: str) -> Optional[int]:
     if not pg_store.configured():
         return None
@@ -2316,8 +2303,10 @@ async def admin_backup():
 
 @app.post("/admin/etl")
 async def admin_etl(request: Request):
-    """WP-ETL: rulează pipeline-ul manual. action=backfill (tot istoricul) sau
-    action=day cu `day=YYYY-MM-DD`. Protejat de auth_middleware."""
+    """WP-ETL: rulează pipeline-ul manual. action=backfill (tot istoricul),
+    action=day cu `day=YYYY-MM-DD`, action=gaps (zilele sărite între prima și ultima
+    zi procesată) sau action=quality cu `day=YYYY-MM-DD` (data-quality pe staging).
+    Protejat de auth_middleware."""
     if not pg_store.configured():
         return JSONResponse({"error": "postgres indisponibil"}, status_code=503)
     body = await request.json()
@@ -2328,7 +2317,20 @@ async def admin_etl(request: Request):
         if action == "day":
             day = body.get("day") or datetime.date.today().isoformat()
             return JSONResponse(await asyncio.to_thread(etl.run_day, day, "manual"))
-        return JSONResponse({"error": "action necunoscut (backfill | day)"}, status_code=400)
+        if action == "gaps":
+            days = await asyncio.to_thread(etl.processed_days)
+            return JSONResponse({"processed_days": len(days),
+                                 "range": [days[0], days[-1]] if days else None,
+                                 "gaps": etl.find_gaps(days)})
+        if action == "quality":
+            day = body.get("day") or datetime.date.today().isoformat()
+            try:
+                datetime.date.fromisoformat(day)
+            except (TypeError, ValueError):
+                return JSONResponse({"error": "day trebuie să fie YYYY-MM-DD"}, status_code=400)
+            return JSONResponse(await asyncio.to_thread(etl.quality_report, day))
+        return JSONResponse({"error": "action necunoscut (backfill | day | gaps | quality)"},
+                            status_code=400)
     except Exception as e:
         logger.error(f"[etl] rulare manuală eșuată: {e}")
         return JSONResponse({"status": "error", "error": str(e)}, status_code=500)

@@ -7,6 +7,7 @@ available_time exclus din mart) · endpoint-ul întoarce seria zilnică.
 
 Cer o instanță PostgreSQL de test (fixture-ul `pg` din conftest) — fără ea sar cu skip.
 """
+import json
 import sqlite3
 
 import pytest
@@ -239,3 +240,43 @@ async def test_analytics_daily_endpoint_no_pg(monkeypatch):
     monkeypatch.setattr(pg_store, "_dsn", None)
     resp = await orchestrator.analytics_daily(days=30)
     assert resp == {"days": [], "count": 0}
+
+
+# ── /admin/etl: gaps + quality (find_gaps / quality_report legate de rută) ─────
+
+class _FakeRequest:
+    def __init__(self, body):
+        self._body = body
+
+    async def json(self):
+        return self._body
+
+
+def test_processed_days_from_snapshots(etl_pg):
+    for d in ("2026-07-10", "2026-07-13", "2026-07-10"):
+        etl.run_day(d)
+    assert etl.processed_days() == ["2026-07-10", "2026-07-13"]
+
+
+async def test_admin_etl_gaps(etl_pg):
+    etl.run_day("2026-07-10")
+    etl.run_day("2026-07-13")
+    resp = await orchestrator.admin_etl(_FakeRequest({"action": "gaps"}))
+    assert resp.status_code == 200
+    body = json.loads(resp.body)
+    assert body == {"processed_days": 2, "range": ["2026-07-10", "2026-07-13"],
+                    "gaps": ["2026-07-11", "2026-07-12"]}
+
+
+async def test_admin_etl_quality(etl_pg):
+    _add_run("open", "2026-07-10T09:00:00", finished_at=None, tier=1, status="running")
+    etl.run_day("2026-07-10")
+    resp = await orchestrator.admin_etl(_FakeRequest({"action": "quality", "day": "2026-07-10"}))
+    assert resp.status_code == 200
+    assert json.loads(resp.body) == {"day": "2026-07-10", "future_events": 0,
+                                     "unavailable_events": 1}
+
+
+async def test_admin_etl_quality_requires_valid_day(etl_pg):
+    resp = await orchestrator.admin_etl(_FakeRequest({"action": "quality", "day": "ieri"}))
+    assert resp.status_code == 400

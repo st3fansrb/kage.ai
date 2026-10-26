@@ -375,6 +375,13 @@ def backfill(trading_db_path: str | None = None) -> dict:
 
 # ── DATA-QUALITY & RAPORT ────────────────────────────────────────────────────
 
+def processed_days() -> list[str]:
+    """Zilele pentru care pipeline-ul a rulat cel puțin o dată (din `etl_snapshots`)."""
+    ensure_schema()
+    return [r[0] for r in pg_store.fetchall(
+        "SELECT DISTINCT day FROM etl_snapshots WHERE day IS NOT NULL ORDER BY day")]
+
+
 def find_gaps(days) -> list[str]:
     """Zilele calendaristice lipsă între prima și ultima zi prezentă (detecție de gap)."""
     ds = sorted(set(days))
