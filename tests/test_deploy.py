@@ -78,8 +78,8 @@ async def test_deploy_command_git_error_is_graceful(monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
-    return TestClient(orchestrator.app)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 def test_deploy_confirm_pulls_and_triggers_restart(client, monkeypatch):

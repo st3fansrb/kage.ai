@@ -310,8 +310,8 @@ async def test_ask_timeout_returns_none(mdb, monkeypatch):
 
 @pytest.fixture
 def client(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
-    return TestClient(orchestrator.app)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 def test_mission_answer_endpoint(mdb, client):

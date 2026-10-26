@@ -16,9 +16,9 @@ import orchestrator
 
 @pytest.fixture
 def client(monkeypatch):
-    # Dezactivează auth-ul (mașina reală poate avea api_token în config)
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
-    return TestClient(orchestrator.app)
+    # Token de test fix (auth-ul e fail-closed; mașina reală poate avea alt api_token)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 class _FakeProc:

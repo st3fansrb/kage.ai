@@ -22,7 +22,7 @@ import orchestrator
 
 @pytest.fixture
 def client():
-    return TestClient(orchestrator.app)
+    return TestClient(orchestrator.app, headers={"Authorization": "Bearer test-token"})
 
 
 @pytest.fixture(autouse=True)
@@ -33,8 +33,8 @@ def _silence_side_effects(monkeypatch):
     monkeypatch.setattr(orchestrator, "_write_status_idle", lambda *a, **k: None)
     monkeypatch.setattr(orchestrator, "_log_to_vault", lambda *a, **k: None)
     monkeypatch.setattr(orchestrator, "_notify", lambda *a, **k: None)
-    # Dezactivează auth-ul (mașina reală poate avea un api_token în config)
-    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "")
+    # Token de test fix (auth-ul e fail-closed; mașina reală poate avea alt api_token)
+    monkeypatch.setattr(orchestrator, "_get_api_token", lambda: "test-token")
 
 
 def _mock_backends(router):

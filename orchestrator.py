@@ -634,7 +634,12 @@ async def _background_task_exec(task_id: str, task_text: str, agent: str, cwd: s
 
 
 # ── Auth helpers (Faza 16) ────────────────────────────────────────────────────
-_AUTH_EXEMPT = {"/health", "/chat", "/dashboard", "/jobs", "/v1/models", "/manifest.json"}
+import hmac  # noqa: E402 — local auth block; compare_digest pentru token
+
+# /dashboard și /jobs NU mai sunt exempt: livrau date (și /jobs chiar token-ul admin
+# pe cookie) oricui deschidea pagina.
+_AUTH_EXEMPT = {"/health", "/chat", "/v1/models", "/manifest.json"}
+_auth_missing_token_warned = False
 
 def _get_api_token() -> str:
     try:
@@ -795,11 +800,21 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     token = _get_api_token()
     if not token:
-        return await call_next(request)
+        # Fail-closed: fără api_token în config nu lăsăm API-ul deschis.
+        global _auth_missing_token_warned
+        if not _auth_missing_token_warned:
+            logger.warning("api_token lipsește din kage_config.json — toate rutele "
+                           "neexempt răspund 401 până îl configurezi")
+            _auth_missing_token_warned = True
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    # Token-ul vine doar din header sau cookie; `?token=` nu mai e acceptat
+    # (ajungea în loguri, istoric și Referer).
     auth_header = request.headers.get("Authorization", "")
-    query_token = request.query_params.get("token", "")
+    bearer = auth_header[7:] if auth_header.startswith("Bearer ") else ""
     cookie_token = request.cookies.get("kage_token", "")
-    if auth_header == f"Bearer {token}" or query_token == token or cookie_token == token:
+    expected = token.encode()
+    if (bearer and hmac.compare_digest(bearer.encode(), expected)) or \
+            (cookie_token and hmac.compare_digest(cookie_token.encode(), expected)):
         return await call_next(request)
     return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
@@ -5558,15 +5573,8 @@ async def jobs_set_status(jhash: str, request: Request):
 @app.get("/jobs")
 async def jobs_page():
     """Tracker de aplicații (WP-J): tabel cu joburi + status, vizibil în browser.
-    Exempt de auth ca /dashboard; livrează cookie-ul kage_token pentru AJAX."""
-    resp = HTMLResponse(_build_jobs_html())
-    token = _get_api_token()
-    if token:
-        resp.set_cookie(
-            "kage_token", token,
-            httponly=True, samesite="strict", path="/", max_age=60 * 60 * 24 * 30,
-        )
-    return resp
+    Protejat de auth_middleware; nu mai livrează token-ul pe cookie."""
+    return HTMLResponse(_build_jobs_html())
 
 
 def _build_jobs_html() -> str:
