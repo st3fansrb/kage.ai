@@ -84,3 +84,69 @@ def test_restore_invalid_archive(tmp_path):
         pass  # arhivă goală, fără cache_db/
     with pytest.raises(ValueError):
         o._restore_cache_db(bad, dest=tmp_path / "cache_db")
+
+
+def _make_malicious_archive(archive_path: Path, evil_name: str):
+    """Arhivă cu cache_db/ valid plus un membru care iese din directorul de extragere."""
+    import io
+    import tempfile
+    with tempfile.TemporaryDirectory() as staging:
+        cdb = Path(staging) / "cache_db"
+        cdb.mkdir()
+        (cdb / "chat_history.db").write_text("DATA", encoding="utf-8")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            tar.add(cdb, arcname="cache_db")
+            payload = b"pwned"
+            info = tarfile.TarInfo(evil_name)
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+
+
+def test_restore_rejects_path_traversal(tmp_path):
+    """#3: un membru `../evil` nu are voie să fie scris în afara staging-ului."""
+    import tempfile
+    import uuid
+    evil = f"kage-evil-{uuid.uuid4().hex}"
+    archive = tmp_path / "cache_db-20260705-050000.tar.gz"
+    _make_malicious_archive(archive, f"../{evil}")
+
+    dest = tmp_path / "cache_db"
+    dest.mkdir()
+    (dest / "chat_history.db").write_text("CURENT", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="nesigur"):
+        o._restore_cache_db(archive, dest=dest)
+    # staging-ul e în tempdir, deci `../` ar fi aterizat direct acolo
+    assert not (Path(tempfile.gettempdir()) / evil).exists()
+    # restore-ul refuzat nu atinge datele curente
+    assert (dest / "chat_history.db").read_text(encoding="utf-8") == "CURENT"
+
+
+def test_restore_rejects_absolute_symlink(tmp_path):
+    """#3: un symlink spre o cale absolută e refuzat de filtrul `data`."""
+    archive = tmp_path / "cache_db-20260705-050000.tar.gz"
+    import tempfile
+    with tempfile.TemporaryDirectory() as staging:
+        cdb = Path(staging) / "cache_db"
+        cdb.mkdir()
+        (cdb / "chat_history.db").write_text("DATA", encoding="utf-8")
+        with tarfile.open(archive, "w:gz") as tar:
+            tar.add(cdb, arcname="cache_db")
+            link = tarfile.TarInfo("cache_db/passwd")
+            link.type = tarfile.SYMTYPE
+            link.linkname = "/etc/passwd"
+            tar.addfile(link)
+
+    with pytest.raises(ValueError, match="nesigur"):
+        o._restore_cache_db(archive, dest=tmp_path / "cache_db")
+    assert not (tmp_path / "cache_db").exists()
+
+
+def test_restore_emits_no_tar_deprecation_warning(tmp_path):
+    """#3: extragerea cu filtru explicit nu mai declanșează DeprecationWarning."""
+    import warnings
+    archive = tmp_path / "cache_db-20260704-050000.tar.gz"
+    _make_archive(archive, {"chat_history.db": "ORIGINAL"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        o._restore_cache_db(archive, dest=tmp_path / "cache_db")
