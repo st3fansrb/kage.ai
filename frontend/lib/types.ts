@@ -56,8 +56,6 @@ export interface ScheduledTask {
 
 export interface Briefing {
   tasksToday: ScheduledTask[];
-  newJobs: number;
-  topJobs: { title: string; company: string }[];
 }
 
 export interface MissionState {
@@ -76,6 +74,6 @@ export const EMPTY_STATE: MissionState = {
   approvals: [],
   activity: [],
   cache: { hits: 0, misses: 0, hitRate: null, entries: 0, memories: 0, routingExamples: 0 },
-  briefing: { tasksToday: [], newJobs: 0, topJobs: [] },
+  briefing: { tasksToday: [] },
   runningCount: 0,
 };

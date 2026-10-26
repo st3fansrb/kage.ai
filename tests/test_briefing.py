@@ -1,7 +1,6 @@
 """Teste pentru briefingul zilnic (WP-D).
 
-Acoperă: adunarea per-secțiune (joburi noi peste noapte, taskuri programate azi,
-buget, vault), degradarea grațioasă a fiecărei secțiuni, intro-ul pe T2 local cu
+Acoperă: adunarea per-secțiune (taskuri programate azi, misiuni, buget, vault), degradarea grațioasă a fiecărei secțiuni, intro-ul pe T2 local cu
 fallback, randarea (markdown pentru comandă / HTML pentru push) și faptul că
 compunerea nu atinge NICIUN tier cloud (zero cost cloud).
 
@@ -9,7 +8,6 @@ Toate rulează pe SQLite in-memory + monkeypatch; niciun apel real de rețea.
 """
 import datetime
 import json
-import sqlite3
 
 import pytest
 
@@ -17,24 +15,6 @@ import orchestrator
 
 
 # ── Fixturi ───────────────────────────────────────────────────────────────────
-
-@pytest.fixture
-def jobs_db(monkeypatch):
-    conn = sqlite3.connect(":memory:")
-    orchestrator._ensure_jobs_table(conn)
-    monkeypatch.setattr(orchestrator, "_db_conn", conn)
-    yield conn
-    conn.close()
-
-
-def _insert_job(conn, hash_, profile, title, company, status, score, first_seen):
-    conn.execute(
-        "INSERT INTO jobs (hash, profile, title, company, location, url, site, "
-        "description, score, status, first_seen) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (hash_, profile, title, company, "", "", "linkedin", "", score, status, first_seen),
-    )
-    conn.commit()
-
 
 def _fake_httpx_content(monkeypatch, content):
     class _Resp:
@@ -47,37 +27,6 @@ def _fake_httpx_content(monkeypatch, content):
         async def post(self, *a, **k): return _Resp()
 
     monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda *a, **k: _Client())
-
-
-# ── Joburi noi peste noapte ───────────────────────────────────────────────────
-
-def test_new_jobs_groups_by_profile_recent_only(jobs_db):
-    now = datetime.datetime.now()
-    recent = (now - datetime.timedelta(hours=2)).isoformat()
-    old = (now - datetime.timedelta(hours=48)).isoformat()
-    _insert_job(jobs_db, "a", "stefan", "QA Intern", "Acme", orchestrator._JOB_STATUS_SENT, 8, recent)
-    _insert_job(jobs_db, "b", "stefan", "Dev Junior", "Globex", orchestrator._JOB_STATUS_SAVED, 7, recent)
-    _insert_job(jobs_db, "c", "tata", "PM", "Initech", orchestrator._JOB_STATUS_SENT, 9, recent)
-    _insert_job(jobs_db, "d", "stefan", "Vechi", "Old", orchestrator._JOB_STATUS_SENT, 6, old)
-
-    jobs = orchestrator._briefing_new_jobs(since_hours=24)
-    assert set(jobs.keys()) == {"stefan", "tata"}
-    assert len(jobs["stefan"]) == 2           # 'vechi' e >24h → exclus
-    assert jobs["stefan"][0]["score"] == 8    # ordonat desc după scor
-    assert len(jobs["tata"]) == 1
-
-
-def test_new_jobs_excludes_irrelevant_statuses(jobs_db):
-    recent = datetime.datetime.now().isoformat()
-    _insert_job(jobs_db, "a", "stefan", "Skipped", "X", orchestrator._JOB_STATUS_SKIPPED, 3, recent)
-    _insert_job(jobs_db, "b", "stefan", "Ignored", "Y", orchestrator._JOB_STATUS_IGNORED, 2, recent)
-    _insert_job(jobs_db, "c", "stefan", "New", "Z", orchestrator._JOB_STATUS_NEW, 0, recent)
-    assert orchestrator._briefing_new_jobs() == {}
-
-
-def test_new_jobs_no_db_degrades(monkeypatch):
-    monkeypatch.setattr(orchestrator, "_db_conn", None)
-    assert orchestrator._briefing_new_jobs() == {}
 
 
 # ── Taskuri programate azi ────────────────────────────────────────────────────
@@ -160,7 +109,7 @@ async def test_intro_uses_t2_local(monkeypatch):
 
     monkeypatch.setattr(orchestrator, "BRIEFING_INTRO_LLM", True)
     monkeypatch.setattr(orchestrator.httpx, "AsyncClient", lambda *a, **k: _Client())
-    data = {"jobs": {}, "tasks": [], "budget": {"cloud": 0, "max": 20}}
+    data = {"tasks": [], "budget": {"cloud": 0, "max": 20}}
     intro = await orchestrator._briefing_intro(data)
     assert intro == "Bună dimineața, o zi bună!"
     assert seen["model"] == orchestrator.TIER_MODELS[2]     # T2 local
@@ -192,10 +141,9 @@ async def test_intro_llm_disabled_no_call(monkeypatch):
 def _sample_data():
     return {
         "date": datetime.date(2026, 7, 6),
-        "jobs": {"stefan": [{"title": "QA Intern", "company": "Acme", "score": 8, "status": "sent"}]},
         "tasks": [{"at": "09:00", "message": "recap zilnic"}],
         "budget": {"total": 10, "cloud": 4, "max": 20},
-        "missions": None,
+        "missions": [{"name": "kage-ui", "status": "running"}],
         "vault": "exam la 14:00",
     }
 
@@ -203,7 +151,7 @@ def _sample_data():
 def test_render_markdown_has_all_sections():
     text = orchestrator._briefing_render(_sample_data(), "Salut!", html=False)
     assert "**Briefing — 06.07.2026**" in text
-    assert "QA Intern" in text and "Acme" in text
+    assert "kage-ui" in text                  # misiuni
     assert "4/20" in text                     # buget
     assert "recap zilnic" in text             # task programat
     assert "exam la 14:00" in text            # vault
@@ -212,7 +160,7 @@ def test_render_markdown_has_all_sections():
 
 def test_render_html_escapes_dynamic_text():
     data = _sample_data()
-    data["jobs"] = {"stefan": [{"title": "R&D <Lead>", "company": "A&B", "score": 5, "status": "sent"}]}
+    data["missions"] = [{"name": "R&D <Lead>", "status": "A&B"}]
     text = orchestrator._briefing_render(data, "bună", html=True)
     assert "<b>Briefing" in text              # HTML bold pt push
     assert "R&amp;D &lt;Lead&gt;" in text     # caracterele periculoase escape-uite
@@ -222,23 +170,21 @@ def test_render_html_escapes_dynamic_text():
 def test_render_degrades_missing_sections():
     data = {
         "date": datetime.date(2026, 7, 6),
-        "jobs": {}, "tasks": [], "budget": {"cloud": 0, "max": 20},
+        "tasks": [], "budget": {"cloud": 0, "max": 20},
         "missions": None, "vault": None,
     }
     text = orchestrator._briefing_render(data, "Bună dimineața.", html=False)
     assert "Briefing" in text and "Bună dimineața." in text
     assert "Buget" in text                    # bugetul e mereu prezent
-    assert "Joburi noi" not in text           # secțiunile goale sunt omise
+    assert "Misiuni" not in text              # secțiunile goale sunt omise
     assert "Programate azi" not in text
     assert "vault" not in text.lower()
 
 
 # ── Compunere end-to-end (zero cloud) ─────────────────────────────────────────
 
-async def test_compose_briefing_zero_cloud(monkeypatch, jobs_db):
+async def test_compose_briefing_zero_cloud(monkeypatch):
     """`_compose_briefing` nu apelează NICIODATĂ un tier cloud."""
-    recent = datetime.datetime.now().isoformat()
-    _insert_job(jobs_db, "a", "stefan", "QA Intern", "Acme", orchestrator._JOB_STATUS_SENT, 8, recent)
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
     _fake_httpx_content(monkeypatch, "Bună dimineața!")
 
@@ -248,11 +194,11 @@ async def test_compose_briefing_zero_cloud(monkeypatch, jobs_db):
     monkeypatch.setattr(orchestrator, "_route_claude_autonomous", _no_cloud, raising=False)
 
     text = await orchestrator._compose_briefing(html=True)
-    assert "QA Intern" in text
+    assert "Briefing" in text
     assert "Bună dimineața!" in text
 
 
-async def test_handle_briefing_command_returns_sse(monkeypatch, jobs_db):
+async def test_handle_briefing_command_returns_sse(monkeypatch):
     monkeypatch.setattr(orchestrator, "BRIEFING_VAULT_SECTION", False)
     _fake_httpx_content(monkeypatch, "Salut!")
     resp = await orchestrator._handle_briefing_command()

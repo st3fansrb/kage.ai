@@ -93,8 +93,8 @@ async def test_classify_intent_unknown_label_fails_safe(monkeypatch):
 
 
 async def test_classify_intent_confidence_clamped_to_unit_interval(monkeypatch):
-    _fake_ollama_content(monkeypatch, json.dumps({"intent": "jobs", "arg": "", "confidence": 5}))
-    _, _, conf = await orchestrator._classify_intent("caută joburi", has_draft=False, mission_active=False)
+    _fake_ollama_content(monkeypatch, json.dumps({"intent": "status", "arg": "", "confidence": 5}))
+    _, _, conf = await orchestrator._classify_intent("ce face sistemul?", has_draft=False, mission_active=False)
     assert conf == 1.0
 
 
@@ -206,19 +206,10 @@ async def test_route_intent_briefing_dispatches(monkeypatch):
     assert resp == "BRIEFING_SENTINEL"
 
 
-async def test_route_intent_jobs_dispatches_with_arg(monkeypatch):
-    async def fake_classify(msg, **kw):
-        return "jobs", "stefan", 0.85
-    calls = []
-    async def fake_scan(message):
-        calls.append(message)
-        return "JOBS_SENTINEL"
-    monkeypatch.setattr(orchestrator, "_classify_intent", fake_classify)
-    monkeypatch.setattr(orchestrator, "_latest_draft_id", lambda: None)
-    monkeypatch.setattr(orchestrator, "_handle_scan_command", fake_scan)
-    resp = await orchestrator._route_intent("scanează joburi pentru profilul stefan")
-    assert resp == "JOBS_SENTINEL"
-    assert calls == ["!scan stefan"]
+async def test_jobs_intent_removed():
+    # Job scan-ul s-a mutat în kage-labs: „jobs” nu mai e o intenție validă, deci un
+    # răspuns „jobs” de la clasificator cade pe chat (ca orice etichetă necunoscută).
+    assert "jobs" not in orchestrator._INTENT_LABELS
 
 
 @pytest.mark.parametrize("verb", ["pause", "resume", "stop"])
@@ -294,8 +285,6 @@ _LABELED_PHRASES = [
     ("pune misiunea pe pauză", "mission_control"),
     ("oprește misiunea curentă", "mission_control"),
     ("reia misiunea de unde a rămas", "mission_control"),
-    ("caută joburi noi", "jobs"),
-    ("scanează joburi pentru profilul tata", "jobs"),
     ("care e diferența dintre threading și asyncio în python?", "chat"),
     ("mulțumesc!", "chat"),
     ("ce zi e azi", "chat"),

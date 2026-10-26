@@ -15,7 +15,7 @@
   "eur_usd_rate": 0.92,
   "max_cloud_calls_per_day": 20,
 
-  "_comment_api_budget": "#7 Budget v2, felia de enforcement (12.07.2026): plafonul-gate GLOBAL pe bani reali (OpenRouter azi; advisor WP13 / failover mâine). enabled=false (default) = NICIUN apel plătit nu pleacă — modelele gratuite (price_per_mtok_in/out = 0, ex. sufix ':free') trec și așa, nu ard credite. Activează abia când vrei să cheltui: enabled=true + plafoanele. monthly_cap_eur = plafonul global lunar peste TOATE rolurile plătite (sub-plafoanele per rol, ex. trading.critic.monthly_cap_eur, rămân valabile în plus). daily_cap_eur = gard anti-buclă pe zi. Fail-closed: secțiune lipsă = dezactivat.",
+  "_comment_api_budget": "#7 Budget v2, felia de enforcement (12.07.2026): plafonul-gate GLOBAL pe bani reali (OpenRouter azi; advisor WP13 / failover mâine). enabled=false (default) = NICIUN apel plătit nu pleacă — modelele gratuite (price_per_mtok_in/out = 0, ex. sufix ':free') trec și așa, nu ard credite. Activează abia când vrei să cheltui: enabled=true + plafoanele. monthly_cap_eur = plafonul global lunar peste TOATE rolurile plătite. daily_cap_eur = gard anti-buclă pe zi. Fail-closed: secțiune lipsă = dezactivat.",
   "api_budget": {
     "enabled": false,
     "monthly_cap_eur": 10,
@@ -42,39 +42,6 @@
     "startup_online_message": true
   },
 
-  "_comment_trading": "WP-T faza T1: laborator crypto PAPER-ONLY. NU pune aici chei de exchange live — sistemul nu are cod care să plaseze ordine reale, iar prezența oricărei chei live e refuzată de teste. Doar dry-run/backtest. Promovarea pe bani reali e o decizie manuală, în afara Kage. Slice 2: freqtrade rulează într-un venv separat (.trading-venv) ca subprocess. Etapa 5: bucla nocturnă Actor→Critic (trading/pipeline.py) — Actorul (Qwen local) propune ipoteze pre-înregistrate (NU cod), Criticul (OpenRouter, buget-gated) aprobă ≤1, apoi validare la costuri stresate. openrouter_api_key = cheie OpenRouter (secret — pune-o DOAR în kage_config.json, nu aici); gol ⇒ Criticul rulează pe fallback local.",
-  "trading": {
-    "enabled": false,
-    "exchange": "binance",
-    "pairs": ["BTC/USDT", "ETH/USDT"],
-    "timeframe": "5m",
-    "dry_run_wallet": 1000,
-    "stake_currency": "USDT",
-    "freqtrade_venv": ".trading-venv",
-    "backtest_days": 90,
-    "fee_rate": 0.001,
-    "killswitch_cron": "*/5 * * * *",
-    "daily_context_cron": "0 6 * * *",
-    "nightly_cron": "0 3 * * *",
-    "calibration_cron": "0 4 * * 1",
-    "openrouter_api_key": "",
-    "actor": {
-      "litellm_name": "trading-actor",
-      "max_proposals": 3,
-      "timeout_s": 900
-    },
-    "critic": {
-      "provider": "openrouter",
-      "base_url": "https://openrouter.ai/api/v1",
-      "_comment_model": "Model Critic pe OpenRouter. Pentru cost 0 folosește un model cu sufix ':free' (vezi openrouter.ai/models filtrat pe Free) și lasă prețurile pe 0. La model plătit, pune price_per_mtok_in/out reale ca să funcționeze plafonul monthly_cap_eur. Modelele free se rotesc/DEGRADEAZĂ/dispar (verificat 09.07.2026: nemotron-550b era 'DEGRADED', hy3 mergea) → fallback_local=true e plasa de siguranță (cade pe Qwen local la eroare SAU buget depășit).",
-      "_comment_model_plan": "Decizie 09.07.2026 (Stefan): după 21.07.2026 (expiră gratuitatea hy3) Criticul trece pe model plătit 'deepseek/deepseek-v4-pro' cu price_per_mtok_in=0.435, price_per_mtok_out=0.87 (prețuri OpenRouter 09.07.2026 — reverifică la comutare). Consum estimat: ~0.10 USD/lună la 1 apel/noapte — plafonul de 7 EUR rămâne larg.",
-      "model": "tencent/hy3:free",
-      "monthly_cap_eur": 7,
-      "price_per_mtok_in": 0,
-      "price_per_mtok_out": 0,
-      "fallback_local": true
-    }
-  },
   "api_token": "CHANGEME-run: openssl rand -hex 20",
 
   "vault_path": "~/Documents/MyVault",
@@ -116,61 +83,8 @@
   "icloud_backup_dir": "~/Library/Mobile Documents/com~apple~CloudDocs/KageBackups",
   "backup_include_config": true,
 
-  "_comment_jobs": "WP-J: job hunter multi-profil. enabled=false → scanner oprit. scan_cron = când rulează scanul automat (default 2×/zi). search_terms = keywords date platformei (LinkedIn caută și în descriere, nu doar titlu → folosește keywords, nu titluri exacte). exclude_keywords/include_keywords = screen IEFTIN pe titlu+descriere ÎNAINTE de LLM (word-boundary): exclude taie ex. 'senior'/'5+ years' fără cost; include (dacă e ne-gol) cere măcar un keyword relevant. notify (push|silent, default push) per profil: 'silent' = scanat+stocat, FĂRĂ push automat pe Telegram (se vede în /jobs sau se cere cu `!scan <profil>`) — util pentru joburi de contract. Tracker vizual: localhost:4001/jobs. prefilter_min_score/top_n = gate pe T2 LOCAL (scor 1-10 vs criterii, ZERO cost cloud); doar joburile ≥ min_score, top_n, intră în digest. career-ops rulează DOAR la butonul ✍️ (evaluare + CV tailoring, arde budget cloud). Fiecare profil are un workspace career-ops (adaugă-l în allowed_task_roots) + criteria (text liber, prompt de scor). Piața RO acoperită prin LinkedIn; eJobs/BestJobs nu-s în JobSpy.",
-  "jobs": {
-    "enabled": false,
-    "scan_cron": "0 7,19 * * *",
-    "prefilter_min_score": 6,
-    "prefilter_top_n": 5,
-    "profiles": [
-      {
-        "id": "candidate",
-        "label": "👔 Candidate",
-        "workspace": "~/career-ops/candidate",
-        "search_terms": ["software engineer", "machine learning", "test automation", "internship software"],
-        "sites": ["linkedin", "indeed"],
-        "location": "Timișoara, Romania",
-        "results_wanted": 25,
-        "hours_old": 168,
-        "is_remote": true,
-        "country_indeed": "romania",
-        "exclude_keywords": ["senior", "lead", "principal", "staff", "manager", "5+ years", "7+ years", "10+ years"],
-        "include_keywords": [],
-        "criteria": "Descrie aici profilul căutat în limbaj natural: nivel, domeniu, oraș, ce accepți și ce excluzi. Textul e trimis modelului care filtrează rezultatele."
-      },
-      {
-        "id": "second",
-        "label": "👨‍💼 Second profile",
-        "workspace": "~/career-ops/second",
-        "search_terms": ["project manager"],
-        "sites": ["linkedin"],
-        "location": "Romania",
-        "results_wanted": 20,
-        "hours_old": 72,
-        "is_remote": false,
-        "country_indeed": "romania",
-        "criteria": "Al doilea profil e opțional — job scanner-ul suportă mai multe profiluri independente, fiecare cu workspace-ul lui."
-      },
-      {
-        "id": "contract-ai",
-        "label": "🤝 Contract AI",
-        "workspace": "~/career-ops/candidate",
-        "notify": "silent",
-        "search_terms": ["AI training", "data annotation", "LLM evaluation"],
-        "sites": ["linkedin", "indeed"],
-        "location": "Romania",
-        "results_wanted": 25,
-        "hours_old": 168,
-        "is_remote": true,
-        "country_indeed": "romania",
-        "exclude_keywords": ["senior", "lead", "manager", "5+ years"],
-        "include_keywords": [],
-        "criteria": "Freelance/contract AI training, data annotation, RLHF, LLM evaluation (Alignerr, DataAnnotation, Mindrift, Outlier). Remote, part-time, per task/oră. Evită: full-time senior, management."
-      }
-    ]
-  },
 
-  "_comment_briefing": "WP-D: briefing zilnic pe Telegram. enabled=true → un mesaj compus la ora din cron (default 08:00) cu: joburi noi peste noapte (WP-J), starea misiunilor (WP11), bugetul zilei, taskurile programate azi, opțional o secțiune 'azi din vault'. Fiecare secțiune degradează grațios dacă sursa ei lipsește. Compunerea folosește DOAR T2 local (o propoziție de intro) — zero cost cloud; faptele sunt asamblate determinist. Comandă manuală: !briefing. intro_llm=false → intro static, fără niciun apel de model. vault_section=false dezactivează extrasul din nota zilnică; vault_daily_dir = subdirector RELATIV la vault_path unde stau notele zilnice ({YYYY-MM-DD}.md) dacă nu-s în rădăcină.",
+  "_comment_briefing": "WP-D: briefing zilnic pe Telegram. enabled=true → un mesaj compus la ora din cron (default 08:00) cu: starea misiunilor (WP11), bugetul zilei, taskurile programate azi, opțional o secțiune 'azi din vault'. Fiecare secțiune degradează grațios dacă sursa ei lipsește. Compunerea folosește DOAR T2 local (o propoziție de intro) — zero cost cloud; faptele sunt asamblate determinist. Comandă manuală: !briefing. intro_llm=false → intro static, fără niciun apel de model. vault_section=false dezactivează extrasul din nota zilnică; vault_daily_dir = subdirector RELATIV la vault_path unde stau notele zilnice ({YYYY-MM-DD}.md) dacă nu-s în rădăcină.",
   "briefing": {
     "enabled": true,
     "cron": "0 8 * * *",
@@ -186,21 +100,6 @@
     "language": "auto"
   },
 
-  "_comment_video_intel": "WP-V: fluxul normal (subtitrări/Whisper/T2) costă 0. 🖼 trimite PNG-uri base64 prin OpenRouter la visual_model (Qwen3-VL), iar 🔎 reanalizează prin OpenRouter pe deep_model (Sonnet). Ambele verifică fail-closed plafonul EUR (#7) şi înregistrează costul estimat în trading.db; cu api_budget.enabled=false sunt refuzate. Gemini nu este folosit; LiteLLM nu e implicat în pasul vizual.",
-  "video_intel": {
-    "enabled": true,
-    "ytdlp_bin": "yt-dlp",
-    "max_duration_s": 1800,
-    "analysis_timeout_s": 300,
-    "_comment_openrouter": "Folosește video_intel.openrouter_api_key dacă vrei o cheie separată; altfel se reutilizează trading.openrouter_api_key. Nu necesită LiteLLM local.",
-    "openrouter_api_key": "",
-    "openrouter_base_url": "https://openrouter.ai/api/v1",
-    "visual_model": "qwen/qwen3-vl-30b-a3b-instruct",
-    "deep_model": "anthropic/claude-sonnet-4-6",
-    "visual_max_frames": 20,
-    "visual_est_usd_per_frame": 0.002,
-    "deep_est_usd": 0.03
-  },
 
   "_comment_models": "Model assignments per tier. Defaults shown below match the bundled setup. Tier 4 (was Gemini CLI) e retras (WP-RMG, 13.07.2026) — nu mai e configurabil aici, rămâne doar etichetă moartă în cod pentru rânduri istorice din DB.",
   "models": {

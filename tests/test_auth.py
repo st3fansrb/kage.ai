@@ -1,6 +1,7 @@
 """Teste pentru auth_middleware (audit #1, #2, #9).
 
-- /jobs nu mai livrează token-ul admin pe cookie și nu mai e exempt;
+- /dashboard nu e exempt și nu livrează token-ul admin pe cookie (fosta pagină /jobs o făcea;
+  a plecat în kage-labs);
 - fără api_token în config, rutele neexempt răspund 401 (fail-closed);
 - `?token=` în URL nu mai e acceptat; doar `Authorization: Bearer` sau cookie.
 """
@@ -34,7 +35,7 @@ def _bearer(token=TOKEN):
     return {"Authorization": f"Bearer {token}"}
 
 
-# ── /jobs și /dashboard ───────────────────────────────────────────────────────
+# ── /jobs (scos) și /dashboard ────────────────────────────────────────────────
 
 def test_jobs_requires_auth(client, with_token):
     assert client.get("/jobs").status_code == 401
@@ -44,8 +45,12 @@ def test_dashboard_requires_auth(client, with_token):
     assert client.get("/dashboard").status_code == 401
 
 
-def test_jobs_does_not_set_cookie(client, with_token):
-    resp = client.get("/jobs", headers=_bearer())
+def test_jobs_page_removed(client, with_token):
+    assert client.get("/jobs", headers=_bearer()).status_code == 404
+
+
+def test_dashboard_does_not_set_cookie(client, with_token):
+    resp = client.get("/dashboard", headers=_bearer())
     assert resp.status_code == 200
     assert "kage_token" not in resp.headers.get("set-cookie", "")
     assert TOKEN not in resp.text
@@ -59,9 +64,9 @@ def test_dashboard_renders_with_empty_request_log(client, with_token):
     assert "${agent}" in resp.text
 
 
-def test_visiting_jobs_does_not_grant_api_access(client, with_token):
-    client.get("/jobs")
-    client.get("/jobs", headers=_bearer())
+def test_visiting_dashboard_does_not_grant_api_access(client, with_token):
+    client.get("/dashboard")
+    client.get("/dashboard", headers=_bearer())
     assert "kage_token" not in client.cookies
     assert client.get("/api/config").status_code == 401
 
