@@ -6021,7 +6021,7 @@ function updateReqTable(entries) {{
     const ts = (e.ts||'').slice(0,19).replace('T',' ');
     const dur = e.duration_ms != null ? e.duration_ms + 'ms' : '—';
     const agent = e.agent;
-    const cloud = agent ? `☁ (${agent})` : (e.cloud ? '☁' : '⚙');
+    const cloud = agent ? `☁ (${{agent}})` : (e.cloud ? '☁' : '⚙');
     const preview = (e.preview||'').slice(0,45);
     return "<tr>" +
       "<td style='padding:3px 8px;color:#888;font-size:12px'>" + ts + "</td>" +

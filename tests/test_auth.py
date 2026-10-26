@@ -51,6 +51,14 @@ def test_jobs_does_not_set_cookie(client, with_token):
     assert TOKEN not in resp.text
 
 
+def test_dashboard_renders_with_empty_request_log(client, with_token):
+    # `${agent}` din JS-ul paginii era interpolat de f-string-ul Python: fără niciun
+    # request azi, variabila Python `agent` nu exista și /dashboard dădea 500.
+    resp = client.get("/dashboard", headers=_bearer())
+    assert resp.status_code == 200
+    assert "${agent}" in resp.text
+
+
 def test_visiting_jobs_does_not_grant_api_access(client, with_token):
     client.get("/jobs")
     client.get("/jobs", headers=_bearer())
