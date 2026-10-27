@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { T } from "@/lib/tokens";
+import { Sheet } from "./Sheet";
 
 interface Msg {
   role: "user" | "assistant";
@@ -16,7 +16,8 @@ interface Session {
 }
 
 const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
-const SESSION_KEY = "kage_session"; // partajat cu kage.html → sesiuni comune
+const SESSION_KEY = "kage_session"; // partajat cu vechiul kage.html → sesiuni comune
+const SESSION_FMT = new Intl.DateTimeFormat("ro-RO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 function newSessionId(): string {
   try {
@@ -24,6 +25,12 @@ function newSessionId(): string {
   } catch {
     return "ui-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   }
+}
+
+function sessionLabel(s: Session): string {
+  const d = new Date(s.started);
+  const when = Number.isNaN(d.getTime()) ? s.started.slice(0, 16) : SESSION_FMT.format(d);
+  return `${when} · ${s.messages} mesaje`;
 }
 
 export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -34,6 +41,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
   const [sessions, setSessions] = useState<Session[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const frame = useRef<number | null>(null);
 
   const loadHistory = useCallback(async (sid: string) => {
     try {
@@ -57,31 +65,46 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
 
   // Inițializează sesiunea din localStorage (o dată).
   useEffect(() => {
-    let sid = localStorage.getItem(SESSION_KEY);
-    if (!sid) {
+    let sid: string | null = null;
+    try {
+      sid = localStorage.getItem(SESSION_KEY);
+      if (!sid) {
+        sid = newSessionId();
+        localStorage.setItem(SESSION_KEY, sid);
+      }
+    } catch {
       sid = newSessionId();
-      localStorage.setItem(SESSION_KEY, sid);
     }
     setSessionId(sid);
   }, []);
 
-  // La deschidere: încarcă lista de sesiuni + istoricul sesiunii curente.
+  // La deschidere: lista de sesiuni + istoricul sesiunii curente.
   useEffect(() => {
     if (open && sessionId) {
       loadSessions();
       if (msgs.length === 0) loadHistory(sessionId);
-      inputRef.current?.focus();
+      setTimeout(() => inputRef.current?.focus(), 0);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sessionId]);
 
+  // Rămâi lipit de fund doar dacă erai deja acolo.
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+    const el = scrollRef.current;
+    if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 120) el.scrollTop = el.scrollHeight;
   }, [msgs]);
+
+  function remember(sid: string) {
+    try {
+      localStorage.setItem(SESSION_KEY, sid);
+    } catch {
+      /* fără storage: sesiunea ține cât pagina */
+    }
+  }
 
   function newChat() {
     const sid = newSessionId();
-    localStorage.setItem(SESSION_KEY, sid);
+    remember(sid);
     setSessionId(sid);
     setMsgs([]);
     inputRef.current?.focus();
@@ -89,7 +112,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
 
   function switchSession(sid: string) {
     if (sid === sessionId) return;
-    localStorage.setItem(SESSION_KEY, sid);
+    remember(sid);
     setSessionId(sid);
     setMsgs([]);
     loadHistory(sid);
@@ -103,24 +126,30 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
     setInput("");
     setBusy(true);
 
+    let acc = "";
+    let badge: string | undefined;
+    // Un singur re-render pe cadru, nu unul pe token.
+    const flush = () => {
+      frame.current = null;
+      const cur = acc, b = badge;
+      setMsgs((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: "assistant", content: cur, badge: b };
+        return next;
+      });
+    };
+
     try {
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Session-Id": sessionId },
-        body: JSON.stringify({
-          model: "auto",
-          stream: true,
-          messages: history.map((m) => ({ role: m.role, content: m.content })),
-        }),
+        body: JSON.stringify({ model: "auto", stream: true, messages: history.map((m) => ({ role: m.role, content: m.content })) }),
       });
-      if (!resp.body) throw new Error("fără stream");
+      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? "Kage a refuzat cererea (401)." : `Kage a răspuns cu ${resp.status}.`);
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
-      let acc = "";
-      let badge: string | undefined;
-
       while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -146,128 +175,49 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
               acc = acc.slice(m[0].length);
             }
           }
-          const cur = acc;
-          const b = badge;
-          setMsgs((prev) => {
-            const next = [...prev];
-            next[next.length - 1] = { role: "assistant", content: cur, badge: b };
-            return next;
-          });
+          if (frame.current == null) frame.current = requestAnimationFrame(flush);
         }
       }
+      if (frame.current != null) cancelAnimationFrame(frame.current);
+      flush();
     } catch (e) {
       setMsgs((prev) => {
         const next = [...prev];
-        next[next.length - 1] = { role: "assistant", content: `⚠️ ${String(e)}` };
+        next[next.length - 1] = { role: "assistant", content: e instanceof Error ? e.message : String(e) };
         return next;
       });
     } finally {
       setBusy(false);
-      loadSessions(); // reflectă sesiunea nouă în listă
+      loadSessions();
     }
   }
 
-  if (!open) return null;
+  const known = sessions.some((s) => s.id === sessionId);
 
   return (
-    <>
-      <div
-        onClick={onClose}
-        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 40 }}
-      />
-      <aside
-        style={{
-          position: "fixed",
-          top: 0,
-          right: 0,
-          height: "100vh",
-          width: "min(420px, 92vw)",
-          background: T.bg,
-          borderLeft: `1px solid ${T.border}`,
-          zIndex: 50,
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "-16px 0 40px rgba(0,0,0,.4)",
-        }}
-      >
-        <div style={{ height: 52, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 12px 0 16px", borderBottom: `1px solid ${T.border}` }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>chat</span>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>⌘J</span>
-          <div style={{ flex: 1 }} />
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Chat"
+      meta={
+        <>
           {sessions.length > 0 && (
-            <select
-              value={sessions.some((s) => s.id === sessionId) ? sessionId : ""}
-              onChange={(e) => e.target.value && switchSession(e.target.value)}
-              title="Sesiuni recente"
-              style={{
-                background: T.panel,
-                color: T.muted,
-                border: `1px solid ${T.border3}`,
-                borderRadius: 8,
-                fontSize: 11,
-                fontFamily: T.mono,
-                padding: "3px 6px",
-                maxWidth: 150,
-                outline: "none",
-              }}
-            >
-              {!sessions.some((s) => s.id === sessionId) && <option value="">· sesiune nouă</option>}
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.id.slice(0, 8)} · {s.messages} msg
-                </option>
-              ))}
+            <select className="input" style={{ width: "auto", maxWidth: 190, padding: "6px 10px", fontSize: 13, marginLeft: 8 }}
+              aria-label="Conversații recente" value={known ? sessionId : ""} onChange={(e) => e.target.value && switchSession(e.target.value)}>
+              {!known && <option value="">Conversație nouă</option>}
+              {sessions.map((s) => <option key={s.id} value={s.id}>{sessionLabel(s)}</option>)}
             </select>
           )}
-          <button
-            onClick={newChat}
-            title="Conversație nouă"
-            style={{ background: "none", border: "none", color: T.muted, fontSize: 16, cursor: "pointer", padding: "0 2px" }}
-          >
-            ✦
-          </button>
-          <button
-            onClick={onClose}
-            style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}
-          >
-            ✕
-          </button>
-        </div>
-
-        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-          {msgs.length === 0 && (
-            <div style={{ color: T.dim, fontSize: 13, textAlign: "center", marginTop: 40, lineHeight: 1.6 }}>
-              <div style={{ fontSize: 34, opacity: 0.5, textShadow: "3px 3px 0 rgba(255,106,48,.15)" }}>影</div>
-              Vorbește cu Kage.<br />Rutare automată pe tier.
-            </div>
-          )}
-          {msgs.map((m, i) => (
-            <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", maxWidth: "88%" }}>
-              {m.badge && (
-                <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.teal, marginBottom: 3 }}>{m.badge}</div>
-              )}
-              <div
-                style={{
-                  background: m.role === "user" ? "rgba(255,106,48,.12)" : T.panel,
-                  border: `1px solid ${m.role === "user" ? T.orangeLine : T.border2}`,
-                  borderRadius: 12,
-                  padding: "9px 12px",
-                  fontSize: 13.5,
-                  lineHeight: 1.55,
-                  color: T.soft,
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-word",
-                }}
-              >
-                {m.content || (busy && i === msgs.length - 1 ? "…" : "")}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ flex: "none", padding: 12, borderTop: `1px solid ${T.border}`, display: "flex", gap: 8 }}>
+          <button className="link" onClick={newChat} style={{ marginLeft: 4 }}>Nouă</button>
+        </>
+      }
+      footer={
+        <>
+          <label className="sr-only" htmlFor="chat-input">Mesaj</label>
           <textarea
+            id="chat-input"
             ref={inputRef}
+            className="input"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
@@ -276,42 +226,30 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
                 send();
               }
             }}
-            placeholder="mesaj… (Enter trimite)"
-            rows={1}
-            style={{
-              flex: 1,
-              resize: "none",
-              background: T.panel,
-              border: `1px solid ${T.border3}`,
-              borderRadius: 10,
-              color: T.text,
-              fontFamily: T.sans,
-              fontSize: 13.5,
-              padding: "10px 12px",
-              outline: "none",
-              maxHeight: 120,
-            }}
+            placeholder="Scrie un mesaj (Enter trimite, Shift+Enter rând nou)"
+            rows={2}
+            style={{ maxHeight: 160 }}
           />
-          <button
-            onClick={send}
-            disabled={busy || !input.trim()}
-            style={{
-              flex: "none",
-              width: 44,
-              borderRadius: 10,
-              border: "none",
-              background: T.orange,
-              color: T.bg,
-              fontWeight: 700,
-              fontSize: 16,
-              cursor: busy || !input.trim() ? "not-allowed" : "pointer",
-              opacity: busy || !input.trim() ? 0.5 : 1,
-            }}
-          >
-            ↑
+          <button className="btn primary" onClick={send} disabled={busy || !input.trim()}>
+            {busy ? "…" : "Trimite"}
           </button>
-        </div>
-      </aside>
-    </>
+        </>
+      }
+    >
+      <div className="sheet-body" ref={scrollRef} aria-live="polite">
+        {msgs.length === 0 && (
+          <div className="empty-chat">
+            <span className="kanji" lang="ja" aria-hidden="true">影</span>
+            Întreabă orice. Kage alege singur modelul: local când se poate, cloud când trebuie.
+          </div>
+        )}
+        {msgs.map((m, i) => (
+          <div key={i} className={`msg ${m.role}`}>
+            {m.badge && <div className="route">{m.badge}</div>}
+            <div className="bubble">{m.content || (busy && i === msgs.length - 1 ? "…" : "")}</div>
+          </div>
+        ))}
+      </div>
+    </Sheet>
   );
 }

@@ -48,6 +48,8 @@ def test_agents_filters_agentic_kinds():
     assert [a["id"] for a in agents] == ["r1"]  # doar kind task/mission
     assert agents[0]["status"] == "running"
     assert agents[0]["costUsd"] == 0.08
+    assert agents[0]["kind"] == "task"
+    assert agents[0]["startedAt"] == "2026-07-06T10:00:00"
 
 
 def test_activity_includes_all_runs():
@@ -60,7 +62,25 @@ def test_activity_includes_all_runs():
 def test_state_has_expected_shape():
     st = orchestrator._mc_state()
     assert set(st.keys()) >= {"budget", "agents", "approvals", "activity", "runningCount"}
-    assert set(st["budget"].keys()) >= {"cloudCalls", "maxCloud", "spentUsd", "spentEur", "maxUsd"}
+    assert set(st["budget"].keys()) >= {"cloudCalls", "maxCloud", "spentUsd", "spentEur", "maxUsd",
+                                        "localCalls", "spendPoints"}
+    assert st["budget"]["localCalls"] >= 0
+    assert isinstance(st["budget"]["spendPoints"], list)
+
+
+def test_spend_points_without_pg_is_empty(monkeypatch):
+    monkeypatch.setattr(orchestrator.pg_store, "configured", lambda: False)
+    assert orchestrator._mc_spend_points() == []
+
+
+def test_spend_points_maps_rows(monkeypatch):
+    monkeypatch.setattr(orchestrator.pg_store, "configured", lambda: True)
+    monkeypatch.setattr(orchestrator.pg_store, "fetchall",
+                        lambda q, p: [("2026-07-06T09:00:00", 0.12), ("2026-07-06T09:30:00", 0.5)])
+    assert orchestrator._mc_spend_points() == [
+        {"ts": "2026-07-06T09:00:00", "costUsd": 0.12},
+        {"ts": "2026-07-06T09:30:00", "costUsd": 0.5},
+    ]
 
 
 # ── endpoint SSE /agui ────────────────────────────────────────────────────────

@@ -1,25 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { T } from "@/lib/tokens";
+import { Sheet } from "./Sheet";
 
 type Mode = "claude" | "sysrun";
 
 const MODES: { value: Mode; label: string }[] = [
-  { value: "claude", label: "Claude" },
-  { value: "sysrun", label: "Sysrun (cod Kage)" },
+  { value: "claude", label: "Claude Code" },
+  { value: "sysrun", label: "Sysrun (codul Kage)" },
 ];
 
 const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
 
 // Construiește textul de task în forma așteptată de /task/run (vezi _prepare_and_launch_task).
 function buildTask(mode: Mode, text: string): string {
-  switch (mode) {
-    case "sysrun":
-      return "!sysrun " + text;
-    default:
-      return text; // claude = agent implicit
-  }
+  return mode === "sysrun" ? "!sysrun " + text : text; // claude = agent implicit
 }
 
 export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -31,12 +26,13 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
   const [output, setOutput] = useState("");
   const [badge, setBadge] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const outRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    inputRef.current?.focus();
+    setTimeout(() => inputRef.current?.focus(), 0);
     fetch("/api/config")
       .then((r) => r.json())
       .then((cfg) => {
@@ -58,6 +54,7 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
     setBusy(true);
     setOutput("");
     setBadge(undefined);
+    setError(null);
 
     const usesCwd = mode !== "sysrun" && cwd;
     const body = usesCwd ? { task: buildTask(mode, task), cwd } : { task: buildTask(mode, task) };
@@ -68,13 +65,13 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!resp.body) throw new Error("fără stream");
+      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? "Kage a refuzat task-ul (401)." : `Kage a răspuns cu ${resp.status}.`);
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
       let acc = "";
-      let foundBadge = false;
+      let badgeDone = false;
 
       while (true) {
         const { value, done } = await reader.read();
@@ -93,94 +90,66 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
             continue;
           }
           if (!delta) continue;
-          if (!foundBadge) {
-            const m = delta.match(BADGE_RE);
+          acc += delta;
+          // Badge-ul poate veni rupt în mai multe delta-uri: îl căutăm pe textul acumulat.
+          if (!badgeDone) {
+            const m = acc.match(BADGE_RE);
             if (m) {
               setBadge(m[1]);
-              acc += delta.slice(m[0].length);
-            } else {
-              acc += delta;
+              acc = acc.slice(m[0].length);
+              badgeDone = true;
+            } else if (acc.length > 80 || !acc.startsWith("*")) {
+              badgeDone = true;
             }
-            foundBadge = true;
-          } else {
-            acc += delta;
           }
           setOutput(acc);
         }
       }
     } catch (e) {
-      setOutput(`⚠️ ${String(e)}`);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
   }
 
-  if (!open) return null;
-
-  const ctrl: React.CSSProperties = {
-    background: T.panel,
-    color: T.text,
-    border: `1px solid ${T.border3}`,
-    borderRadius: 8,
-    fontSize: 12,
-    fontFamily: T.mono,
-    padding: "6px 8px",
-    outline: "none",
-  };
-
   return (
-    <>
-      <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.35)", zIndex: 40 }} />
-      <aside
-        style={{
-          position: "fixed",
-          top: 0,
-          right: 0,
-          height: "100vh",
-          width: "min(460px, 94vw)",
-          background: T.bg,
-          borderLeft: `1px solid ${T.border}`,
-          zIndex: 50,
-          display: "flex",
-          flexDirection: "column",
-          boxShadow: "-16px 0 40px rgba(0,0,0,.4)",
-        }}
-      >
-        <div style={{ height: 52, flex: "none", display: "flex", alignItems: "center", gap: 10, padding: "0 12px 0 16px", borderBottom: `1px solid ${T.border}` }}>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>task runner</span>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.dim }}>agent autonom</span>
-          <div style={{ flex: 1 }} />
-          <button onClick={onClose} style={{ background: "none", border: "none", color: T.muted, fontSize: 18, cursor: "pointer" }}>
-            ✕
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title="Task nou"
+      footer={
+        <>
+          <span className="quiet" style={{ fontSize: 12, marginRight: "auto", alignSelf: "center" }}>
+            Rulează în fundal; îl găsești la Agenți și dacă închizi.
+          </span>
+          <button className="btn primary" onClick={run} disabled={busy || !text.trim()}>
+            {busy ? "Rulează…" : <>Pornește <kbd>⌘↵</kbd></>}
           </button>
+        </>
+      }
+    >
+      <div className="sheet-body">
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12 }}>
+          <label className="field">
+            Cine lucrează
+            <select className="input" value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+              {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+            </select>
+          </label>
+          <label className="field">
+            În folderul
+            <select className="input" value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={mode === "sysrun" || roots.length === 0}>
+              {mode === "sysrun" && <option value="">codul Kage</option>}
+              {mode !== "sysrun" && roots.length === 0 && <option value="">{confinement ? "niciun folder permis" : "folderul implicit"}</option>}
+              {mode !== "sysrun" && roots.map((r) => <option key={r} value={r}>{r.replace(/^\/Users\/[^/]+/, "~")}</option>)}
+            </select>
+          </label>
         </div>
-
-        <div style={{ flex: "none", padding: 14, display: "flex", flexDirection: "column", gap: 10, borderBottom: `1px solid ${T.border}` }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            <select value={mode} onChange={(e) => setMode(e.target.value as Mode)} style={{ ...ctrl, flex: 1 }}>
-              {MODES.map((m) => (
-                <option key={m.value} value={m.value}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-            <select
-              value={cwd}
-              onChange={(e) => setCwd(e.target.value)}
-              disabled={mode === "sysrun" || roots.length === 0}
-              title={mode === "sysrun" ? "Sysrun folosește directorul sursă Kage" : "Director de lucru"}
-              style={{ ...ctrl, flex: 1.4, opacity: mode === "sysrun" || roots.length === 0 ? 0.5 : 1 }}
-            >
-              {roots.length === 0 && <option value="">{confinement ? "fără rooturi" : "cwd implicit"}</option>}
-              {roots.map((r) => (
-                <option key={r} value={r}>
-                  {r.replace(/^\/Users\/[^/]+/, "~")}
-                </option>
-              ))}
-            </select>
-          </div>
+        <label className="field">
+          Ce trebuie făcut
           <textarea
             ref={inputRef}
+            className="input"
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
@@ -189,44 +158,18 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
                 run();
               }
             }}
-            placeholder="descrie task-ul agentului… (⌘Enter pornește)"
-            rows={3}
-            style={{ ...ctrl, fontFamily: T.sans, fontSize: 13, resize: "vertical", minHeight: 64 }}
+            placeholder="ex: rulează testele și repară ce pică în test_scheduler.py"
+            rows={4}
           />
-          <button
-            onClick={run}
-            disabled={busy || !text.trim()}
-            style={{
-              alignSelf: "flex-start",
-              padding: "8px 18px",
-              borderRadius: 10,
-              border: "none",
-              background: T.orange,
-              color: T.bg,
-              fontWeight: 700,
-              fontSize: 13,
-              cursor: busy || !text.trim() ? "not-allowed" : "pointer",
-              opacity: busy || !text.trim() ? 0.5 : 1,
-            }}
-          >
-            {busy ? "rulează…" : "▶ Pornește agentul"}
-          </button>
-        </div>
-
-        <div ref={outRef} style={{ flex: 1, overflowY: "auto", padding: 16 }}>
-          {badge && <div style={{ fontFamily: T.mono, fontSize: 10, color: T.teal, marginBottom: 8 }}>{badge}</div>}
-          {output ? (
-            <pre style={{ margin: 0, fontFamily: T.mono, fontSize: 12, lineHeight: 1.55, color: T.soft, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {output}
-              {busy && <span style={{ color: T.orange }}>▍</span>}
-            </pre>
-          ) : (
-            <div style={{ color: T.dim, fontSize: 13, textAlign: "center", marginTop: 40, lineHeight: 1.6 }}>
-              Agentul rulează în fundal.<br />Output-ul se salvează în istoric chiar dacă închizi.
-            </div>
-          )}
-        </div>
-      </aside>
-    </>
+        </label>
+        {error && <p className="err" role="alert">{error}</p>}
+        {(output || busy) && (
+          <div ref={outRef} style={{ background: "var(--ground)", borderRadius: 12, padding: 14, overflowY: "auto", maxHeight: "50dvh" }} aria-live="polite">
+            {badge && <div className="quiet" style={{ fontSize: 12, marginBottom: 6 }}>{badge}</div>}
+            <pre className="out">{output || "Pornește…"}</pre>
+          </div>
+        )}
+      </div>
+    </Sheet>
   );
 }
