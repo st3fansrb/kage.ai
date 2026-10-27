@@ -1,93 +1,70 @@
-<div align="center">
-
 # Kage
 
-**A self-hosted Python platform that orchestrates, governs and evaluates AI workflows.**
+A self-hosted orchestrator for personal AI work. It routes each request to the cheapest model
+that can handle it, runs agents on your machine, and stops them before they do anything
+irreversible until you approve it.
 
-Routes every request to the right model · keeps state and telemetry in PostgreSQL · turns it into
-analytics through a raw → staging → mart pipeline · and refuses to let an autonomous agent do
-anything irreversible without an explicit approval.
+[![CI](https://img.shields.io/github/actions/workflow/status/st3fansrb/kage.ai/ci.yml?branch=dev&label=CI)](.github/workflows/ci.yml)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB)
+![PostgreSQL 16](https://img.shields.io/badge/postgresql-16-4169E1)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-0969DA)](LICENSE)
 
-<br/>
+![Mission Control on a desktop browser](docs/images/mission-control-desktop.png)
 
-[![CI](https://img.shields.io/github/actions/workflow/status/st3fansrb/kage.ai/ci.yml?branch=dev&style=for-the-badge&label=CI&logo=githubactions&logoColor=white)](.github/workflows/ci.yml)
-![Tests](https://img.shields.io/badge/tests-576%20passing-3FB950?style=for-the-badge&logo=pytest&logoColor=white)
-![License](https://img.shields.io/badge/license-AGPL--3.0-0969DA?style=for-the-badge)
-
-![Python](https://img.shields.io/badge/Python-3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)
-![Airflow](https://img.shields.io/badge/Airflow-017CEE?style=for-the-badge&logo=apacheairflow&logoColor=white)
-![ChromaDB](https://img.shields.io/badge/ChromaDB-FF6F61?style=for-the-badge)
-![Ollama](https://img.shields.io/badge/Ollama-local%20models-000000?style=for-the-badge&logo=ollama&logoColor=white)
-
-<br/>
-
-### 🔐 Security documentation
-
-[![OWASP LLM Top 10](https://img.shields.io/badge/OWASP%20GenAI%20LLM%20Top%2010-2026%20mapping-8A2BE2?style=for-the-badge)](docs/SECURITY-LLM-TOP10.md)
-[![Sentinel lab](https://img.shields.io/badge/Detection%20lab-Sentinel%20%2B%20MITRE%20ATT%26CK-0078D4?style=for-the-badge&logo=microsoftazure&logoColor=white)](docs/lab-azure-sentinel/)
-
-</div>
+<sub>Mission Control at 1440 px, rendered with sample data. The interface text is in Romanian.</sub>
 
 ---
 
-## At a glance
+## What it does
+
+- **Routes by difficulty.** Every message goes to one of six tiers. Tiers 1 and 2 are local
+  models served by Ollama and cost nothing. Tiers 3 to 6 are cloud models (Claude, Gemini) and
+  are only used when the task needs them. A semantic cache answers near-identical questions
+  without calling a model at all.
+- **Caps spending.** There is a hard daily limit on cloud calls and on dollars spent. Mission
+  Control shows the running total and, at the current pace, the time the limit will be reached.
+- **Runs agents.** `!run` starts a Claude Code agent in an allowed folder; `!sysrun` runs one on
+  Kage's own code. Longer multi-step work runs as a *mission*: a plan you approve once, executed
+  work package by work package.
+- **Asks before risky actions.** Every tool call an agent makes is scored before it runs. Anything
+  destructive (deleting files, force-pushing, installing into the system) waits for you to approve
+  or deny it, from Telegram or from Mission Control.
+- **Records everything.** Each request, run and decision is stored in PostgreSQL with its cost,
+  model and outcome, so you can see afterwards what an agent did and what it cost.
+
+## Mission Control
+
+The web interface (`frontend/`, Next.js on port 3001) is a single page called *Today*. It shows,
+in order of urgency:
+
+1. **One sentence of status**: who is waiting for approval, how many agents are working or have
+   failed, how much has been spent and when the budget runs out at today's pace.
+2. **Waiting for your decision**: the exact command an agent wants to run, why, and Approve / Deny.
+3. **Agents**: waiting, running and failed first; finished ones are folded away. One button stops
+   them all.
+4. **Today's budget**: cumulative cloud spend against the limit, with a projection. Orange marks
+   paid cloud usage; teal marks requests answered locally for free.
+5. **Scheduled today**: what already ran and what runs next.
+6. **Latest requests**: time, channel, request, which tier answered it and the cost.
+
+Chat (Cmd+J) and New task (Cmd+K) open in a side panel. If the orchestrator stops responding,
+the page says why (wrong token or service down), keeps the last data on screen marked as stale,
+and reconnects on its own.
 
 <table>
 <tr>
-<td width="50%" valign="top">
-
-### 🧭 Six-tier routing
-
-Local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above. Tier selection is
-semantic, with a classifier and heuristic fallback — plus a ChromaDB cache so near-identical
-questions never reach a model at all.
-
+<td width="62%" valign="top">
+<img src="docs/images/mission-control-new-task.png" alt="Starting a new agent task from the side panel">
+<br><sub>New task: pick the agent and the allowed folder, describe the work.</sub>
 </td>
-<td width="50%" valign="top">
-
-### 🛡️ Fail-closed governance
-
-Every tool call is scored on reversibility, explicit intent and content before it runs.
-High-risk calls block until approved from Telegram. Workspace confinement, spend caps and a
-kill switch bound the rest.
-
-</td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-
-### 🗄️ A real data platform
-
-PostgreSQL 16 for cross-process state and telemetry, an ETL pipeline with point-in-time lineage,
-and Airflow owning the batch work — retries, backfill and history included.
-
-</td>
-<td width="50%" valign="top">
-
-### 📊 Measured, not asserted
-
-576 tests on every push against a real `postgres:16`. KageBench replays fixed tasks in a clean
-worktree and diffs success, cost, latency and approvals against the previous report.
-
+<td width="38%" valign="top">
+<img src="docs/images/mission-control-phone.png" alt="Mission Control on a 390 px phone screen" width="390">
+<br><sub>The same page on a 390 px phone.</sub>
 </td>
 </tr>
 </table>
 
----
-
-## Why it exists
-
-Most personal AI tooling is a thin wrapper around one model. That breaks down the moment you
-want an agent to actually *do* things: you need to know what it did, what it cost, whether it
-followed the rules, and how to stop it. Kage is built around those four questions.
-
-The design bias throughout: **make behaviour inspectable and measurable rather than asserted.**
-An agent that claims it followed the rules is not evidence. A run ledger, a regression benchmark
-and a fail-closed approval gate are.
-
----
+All screenshots use sample data served by a stand-in orchestrator.
 
 ## Architecture
 
@@ -95,27 +72,27 @@ and a fail-closed approval gate are.
 flowchart TB
     subgraph clients["Interfaces"]
         MC["Mission Control<br/>Next.js :3001"]
-        TG["Telegram gateway<br/>notifications + inline approvals"]
+        TG["Telegram gateway<br/>notifications and approvals"]
     end
 
-    subgraph core["Orchestrator — FastAPI :4001"]
-        API["/v1 API<br/>chat · missions · usage · analytics"]
-        ROUTE["6-tier semantic router<br/>+ semantic cache"]
-        GATE["Risk gate<br/>policy · confinement · budget"]
-        RUN["Agent & mission runner<br/>Claude Agent SDK"]
+    subgraph core["Orchestrator: FastAPI :4001"]
+        API["/v1 API<br/>chat, missions, usage, analytics"]
+        ROUTE["6-tier router<br/>and semantic cache"]
+        GATE["Risk gate<br/>policy, confinement, budget"]
+        RUN["Agent and mission runner<br/>Claude Agent SDK"]
+        SCHED["Scheduler<br/>APScheduler"]
     end
 
-    subgraph models["Model layer"]
+    subgraph models["Models"]
         LL["LiteLLM :4000"]
-        OL["Ollama :11434<br/>Qwen 8B / 35B"]
-        CL["Anthropic · Google"]
+        OL["Ollama :11434<br/>local models"]
+        CL["Anthropic, Google"]
     end
 
-    subgraph data["Data platform"]
-        PG[("PostgreSQL 16<br/>state · telemetry")]
-        ETL["ETL raw → staging → mart<br/>point-in-time lineage"]
-        AF["Airflow DAGs<br/>retries · backfill"]
-        CH[("ChromaDB<br/>cache · memory")]
+    subgraph data["Data"]
+        PG[("PostgreSQL 16<br/>state and telemetry")]
+        ETL["ETL<br/>raw, staging, mart"]
+        CH[("ChromaDB<br/>cache and memory")]
     end
 
     clients --> API
@@ -124,77 +101,61 @@ flowchart TB
     LL --> OL & CL
     ROUTE --> CH
     core --> PG --> ETL --> PG
-    AF --> API
+    SCHED --> ETL
 ```
 
----
+Everything runs on one machine. The orchestrator is a single FastAPI process (`orchestrator.py`)
+that owns routing, the agent runner, the scheduler and every HTTP endpoint. Mission Control and
+the Telegram gateway are clients of it; neither talks to a model directly.
 
-## What's inside
-
-### Data platform
-
-- **PostgreSQL 16** holds shared state and telemetry across processes — 7 tables (`usage`,
-  `runs`/`run_events`, `missions`/`mission_wps`, `job_runs`, `scheduled_tasks`, `status`),
-  hand-written SQL over `psycopg`, no ORM. Chat history and single-process tables stay in SQLite,
-  deliberately: migrating them would not remove any pain.
-- **Idempotent cutover.** The migration off lock files and SQLite verifies row counts *inside the
-  same transaction* and raises on mismatch, so a partial migration rolls back to nothing. Sources
-  are never deleted — they remain archives.
-- **ETL pipeline** (`etl.py`) — raw → staging → mart, entirely in SQL. Staging rows carry
-  point-in-time lineage (`event_time`, `available_time`, `ingested_time`, `source`); mart rows
-  carry the `dataset_snapshot_id` of the run that produced them. Processing unit is a **day**, so
-  idempotency is local and provable: re-running a day yields exactly the same rows.
-- **Airflow** (`airflow/dags/`) owns the non-safety-critical batches — nightly ETL aggregation,
-  backup, job scan, weekly trading calibration — for retries, backfill and history. Fail-closed
-  near-real-time jobs (trading killswitch, heartbeat) stay in-process on purpose.
+## How the pieces work
 
 ### Routing and cost
 
-- **6-tier router** — local Qwen 8B/35B for fast and reasoning work, Claude and Gemini above.
-  Tier selection is semantic (embeddings) with a classifier and heuristic fallback.
-- **Semantic cache** over ChromaDB, so near-identical questions never reach a model.
-- **Daily budget** with a hard cap on cloud calls and an inline warning before it bites.
+- Tier selection uses embeddings first, then a classifier, then simple heuristics as a fallback.
+- Prefixes override the router when you want a specific tier (see [Chat prefixes](#chat-prefixes)).
+- The semantic cache lives in ChromaDB. `!nocache` skips it for one message.
 
 ### Governance
 
-- **Risk gate** (`risk_hook.py`) — a PreToolUse hook scoring every tool call on reversibility,
-  explicit intent and content. High-risk calls block until approved via inline Telegram buttons.
-- **Workspace confinement** — task working directories are canonicalised (`resolve()`, so `..`
-  and symlinks don't help) and checked against an allow-list before any subprocess starts.
-- **Kill switch** — `!stop` halts every agent and pauses the scheduler.
+- **Risk gate** (`risk_hook.py`): a PreToolUse hook that scores every tool call on reversibility,
+  explicit intent and content. High-risk calls block until someone approves them. If the gate
+  cannot reach a decision, the call is denied.
+- **Workspace confinement**: an agent's working directory is resolved (so `..` and symlinks do not
+  escape) and checked against an allow-list before any process starts.
+- **Kill switch**: `!stop` halts every agent and pauses the scheduler; `!resume` restarts it.
 
-These controls are documented against an external standard rather than asserted:
+These controls are mapped to an external standard rather than described in prose:
 
-**[OWASP GenAI / LLM Top 10 (2026) — architecture mapping](docs/SECURITY-LLM-TOP10.md)** maps each
-of the ten risks to a concrete control with line-level code references, and closes with eight
-limitations the architecture does *not* cover — including the places where it fails open.
+- [OWASP GenAI / LLM Top 10 (2026) mapping](docs/SECURITY-LLM-TOP10.md) links each of the ten
+  risks to the control that addresses it, with line references, and lists eight things the
+  design does not cover.
+- [Detection lab in Microsoft Sentinel](docs/lab-azure-sentinel/) ships 481 real risk-gate
+  decisions to Azure Log Analytics and adds three KQL detection rules mapped to MITRE ATT&CK.
 
-**[Detection lab — risk-gate telemetry in Microsoft Sentinel](docs/lab-azure-sentinel/)** takes 481
-real policy decisions from 20 days of use, ships them into Azure Log Analytics, and adds three KQL
-detection rules mapped to MITRE ATT&CK — with the tuning decision that separates a usable rule
-from one an analyst would mute.
+### Data
+
+- **PostgreSQL 16** holds state shared between processes: `usage`, `runs` and `run_events`,
+  `missions` and `mission_wps`, `job_runs`, `scheduled_tasks`, `status`. The SQL is written by
+  hand over `psycopg`, without an ORM. Chat history stays in SQLite because only one process
+  uses it.
+- **ETL** (`etl.py`) moves data from raw to staging to mart in plain SQL. Staging rows record when
+  an event happened, when it became available and where it came from. Mart rows record which
+  ETL run produced them. The unit of work is one day, so re-running a day produces the same rows.
+- **Scheduled jobs** run inside the orchestrator with APScheduler: the nightly ETL, vault commit,
+  cache cleanup, backup and heartbeat, plus any task you add with `!schedule`.
 
 ### Evaluation
 
-- **KageBench** (`kagebench.py`) — a regression gate that runs fixed tasks in a clean worktree and
-  records success, cost, latency, turns, tool calls and approval requests, then diffs against the
-  previous report. Deliberately not part of every commit: run it before a large change.
-
----
-
-## Testing and CI
-
-```bash
-source .venv/bin/activate && pytest
-```
-
-**576 tests** across routing, budget, confinement, memory, backup/restore, ETL, PostgreSQL store,
-Airflow batches, missions and end-to-end HTTP. [GitHub Actions](.github/workflows/ci.yml) runs the
-suite against a real `postgres:16` service on every push and PR to `dev`.
-
----
+**KageBench** (`kagebench.py`) replays a fixed set of tasks in a clean git worktree and records
+success, cost, latency, turns, tool calls and approval requests, then compares the result with
+the previous report. Run it before a large change; it is not part of every commit.
 
 ## Quick start
+
+Requirements: macOS or Linux, Python 3.12, Node.js 20+, PostgreSQL 16,
+[Ollama](https://ollama.com), and the [Claude CLI](https://docs.anthropic.com/claude-code) for
+agent tasks.
 
 ```bash
 git clone https://github.com/st3fansrb/kage.ai.git
@@ -202,13 +163,8 @@ cd kage.ai
 bash scripts/setup.sh
 ```
 
-Edit `kage_config.json` (created from the example by `setup.sh`), then:
-
-```bash
-bash start_all.sh
-```
-
-Mission Control opens at **`http://localhost:3001`**. Pull the local models once:
+`setup.sh` creates `kage_config.json` from `kage_config.example.json`. Fill in your API keys and
+an API token, then pull the local models once:
 
 ```bash
 ollama pull qwen3:8b
@@ -216,55 +172,87 @@ ollama pull qwen3.6:35b
 ollama pull nomic-embed-text
 ```
 
-Requirements: Python 3.12, [Ollama](https://ollama.ai), PostgreSQL 16,
-[Claude CLI](https://docs.anthropic.com/claude-code) for agent tasks. Full instructions:
-[docs/INSTALL.md](docs/INSTALL.md) · restoring from backup: [docs/RESTORE.md](docs/RESTORE.md)
+Start everything:
 
----
+```bash
+./start_all.sh
+```
 
-## API surface
+| Service | Address |
+|---|---|
+| Mission Control | http://localhost:3001 |
+| Orchestrator API | http://localhost:4001 (`/health` for a liveness check) |
+| LiteLLM | http://localhost:4000 |
 
-Versioned under `/v1`, token-authenticated:
+Mission Control reads the orchestrator token from `frontend/.env.local` (`KAGE_API_TOKEN`). If
+the page says the orchestrator refuses requests, that token does not match the one in
+`kage_config.json`.
+
+Full setup: [docs/INSTALL.md](docs/INSTALL.md). Restoring from a backup:
+[docs/RESTORE.md](docs/RESTORE.md).
+
+## Tests
+
+```bash
+source .venv/bin/activate && pytest
+```
+
+415 tests cover routing, budget, confinement, memory, backup and restore, ETL, the PostgreSQL
+store, missions and the HTTP endpoints. Tests that need PostgreSQL are skipped when no database
+is configured. [GitHub Actions](.github/workflows/ci.yml) runs the full suite against a real
+`postgres:16` service on every push and pull request to `dev`.
+
+## API
+
+All endpoints except `/health` and `/v1/models` require `Authorization: Bearer <token>`.
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/chat/completions` | OpenAI-compatible, streaming and non-streaming |
-| `GET /v1/missions` · `POST /v1/missions` | List and create autonomous missions |
-| `GET /v1/usage` | Paginated usage and cost telemetry |
-| `GET /v1/analytics/daily` | Mart-level daily aggregates |
-| `GET /health` · `GET /api/stats` | Liveness and live counters |
-| `POST /admin/backup` · `POST /admin/etl` | Operational triggers (backup, ETL backfill) |
-
----
+| `POST /v1/chat/completions` | OpenAI-compatible chat, streaming or not |
+| `GET /v1/missions`, `POST /v1/missions` | List missions, create a mission |
+| `GET /v1/usage` | Paginated usage and cost records |
+| `GET /v1/analytics/daily` | Daily aggregates from the mart |
+| `GET /health`, `GET /api/stats` | Liveness and live counters |
+| `POST /admin/backup`, `POST /admin/etl` | Run a backup, backfill the ETL |
 
 ## Chat prefixes
 
-Messages without a prefix go through an intent router; prefixes remain the deterministic bypass.
+Messages without a prefix go through the router. A prefix forces a specific behaviour.
 
 | Prefix | Effect |
 |---|---|
-| `!fast` · `!best` · `!opus` | Force Tier 1 (local) / Tier 5 (Sonnet) / Tier 6 (Opus) |
-| `!plan` · `!retry` · `!nocache` | Minimum Tier 2 · escalate one tier · skip the cache |
-| `!run` · `!sysrun` | Autonomous agent task, with or without orchestrator context |
-| `!mission new` · `!mission start <slug>` | Draft a mission plan for approval · run it autonomously |
-| `!save [path]` · `!schedule "CRON" msg` | Save the answer to the vault · add a scheduled task |
-| `!scan [profile]` · `!briefing` | Job-hunter scan · daily digest |
-| `!status` · `!stop` · `!resume` · `!help` | Snapshot · kill switch · resume scheduler · this list |
+| `!fast`, `!best`, `!opus` | Force tier 1 (local), tier 5 or tier 6 |
+| `!plan`, `!retry`, `!nocache` | At least tier 2; one tier higher than last time; skip the cache |
+| `!run`, `!sysrun` | Start an agent task in an allowed folder, or on Kage's own code |
+| `!mission new`, `!mission start <slug>` | Draft a mission plan for approval; run an approved one |
+| `!save [path]` | Save the answer to the notes vault |
+| `!schedule "CRON" message` | Add a scheduled task |
+| `!briefing` | Send the daily digest now |
+| `!status`, `!stop`, `!resume`, `!help` | Snapshot, kill switch, resume the scheduler, list prefixes |
 
----
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `orchestrator.py` | Routing, cache, memory, budget, agents, scheduler, all endpoints |
+| `risk_hook.py`, `policy.yaml` | Risk gate and its policy |
+| `pg_store.py`, `etl.py` | PostgreSQL store and the ETL pipeline |
+| `mission_runner.py`, `agent_runner.py` | Mission and agent execution |
+| `telegram_gateway.py` | Telegram bot: notifications and approvals |
+| `frontend/` | Mission Control (Next.js) |
+| `scripts/` | Setup, start and stop scripts |
+| `docs/` | Install, restore, roadmap, security mapping, detection lab |
+| `tests/` | pytest suite |
 
 ## Documentation
 
-- [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md) — what Kage is and does (Romanian)
-- [docs/ROADMAP.md](docs/ROADMAP.md) — phase history and scope decisions
-- [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md) — **OWASP GenAI / LLM Top 10 (2026)** mapping, with what is *not* covered
-- [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/) — **detection lab**: risk-gate telemetry in Microsoft Sentinel, 3 KQL rules mapped to MITRE ATT&CK
-
----
+- [docs/DESPRE_KAGE.md](docs/DESPRE_KAGE.md): what Kage is and does (Romanian)
+- [docs/ROADMAP.md](docs/ROADMAP.md): history of the project phases and scope decisions
+- [docs/SECURITY-LLM-TOP10.md](docs/SECURITY-LLM-TOP10.md): OWASP GenAI / LLM Top 10 mapping
+- [docs/lab-azure-sentinel/](docs/lab-azure-sentinel/): risk-gate telemetry in Microsoft Sentinel
 
 ## License
 
-[AGPL-3.0](LICENSE) — free for personal and open source use.
-
-For commercial use (hosted service, closed-source product) without AGPL obligations:
-contact `stefan.andrei.sirbu@gmail.com`
+[AGPL-3.0](LICENSE). Free for personal and open-source use. For commercial use without the AGPL
+obligations (a hosted service or a closed-source product), contact
+`stefan.andrei.sirbu@gmail.com`.

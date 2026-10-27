@@ -59,7 +59,10 @@ function SpendChart({ points, locals, max, nowMin, runsOut }: {
   d += ` H${X(nowMin)}`;
   const hours: number[] = [];
   for (let m = x0; m <= x1; m += 60) hours.push(m);
-  const step = hours.length > 8 ? 2 : 1;
+  // Cel puțin ~56px între etichetele de oră, ca să nu se suprapună pe telefon.
+  const step = Math.max(1, Math.ceil(56 / (right / Math.max(1, hours.length - 1))));
+  // Eticheta „acum” stă în dreapta liniei (zona de sub proiecție e mereu goală) când e loc.
+  const nowRight = right - X(nowMin) > 120;
 
   return (
     <div className="spend" ref={host}>
@@ -90,7 +93,7 @@ function SpendChart({ points, locals, max, nowMin, runsOut }: {
         ))}
         <g className="now">
           <line x1={X(nowMin)} x2={X(nowMin)} y1={top - 6} y2={base} stroke="var(--text)" strokeOpacity={0.5} />
-          <text x={X(nowMin) - 6} y={base - 6} textAnchor="end">acum {hhmm(nowMin)} · {usd(acc)}</text>
+          <text x={X(nowMin) + (nowRight ? 6 : -6)} y={base - 6} textAnchor={nowRight ? "start" : "end"}>acum {hhmm(nowMin)} · {usd(acc)}</text>
         </g>
         {hours.filter((_, i) => i % step === 0).map((m) => (
           <text key={m} x={X(m)} y={H - 8} textAnchor={m === x0 ? "start" : "middle"}>{hhmm(m)}</text>
