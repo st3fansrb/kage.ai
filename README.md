@@ -51,18 +51,13 @@ Chat (Cmd+J) and New task (Cmd+K) open in a side panel. If the orchestrator stop
 the page says why (wrong token or service down), keeps the last data on screen marked as stale,
 and reconnects on its own.
 
-<table>
-<tr>
-<td width="62%" valign="top">
-<img src="docs/images/mission-control-new-task.png" alt="Starting a new agent task from the side panel">
-<br><sub>New task: pick the agent and the allowed folder, describe the work.</sub>
-</td>
-<td width="38%" valign="top">
-<img src="docs/images/mission-control-phone.png" alt="Mission Control on a 390 px phone screen" width="390">
-<br><sub>The same page on a 390 px phone.</sub>
-</td>
-</tr>
-</table>
+![Starting a new agent task from the side panel](docs/images/mission-control-new-task.png)
+
+<sub>New task: pick the agent and the allowed folder, describe the work.</sub>
+
+![Mission Control on a 390 px phone, three screens from top to bottom](docs/images/mission-control-phone.png)
+
+<sub>The same page on a 390 px phone: status and the pending decision, then agents and budget, then the schedule and latest requests.</sub>
 
 All screenshots use sample data served by a stand-in orchestrator.
 
