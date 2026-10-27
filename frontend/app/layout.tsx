@@ -1,20 +1,26 @@
 import type { Metadata, Viewport } from "next";
+import { IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
+import { LANG, t } from "@/lib/i18n";
+
+// Fonturi self-hosted prin next/font (fără @import blocant, fără cereri la Google din browser).
+const sans = IBM_Plex_Sans({ subsets: ["latin", "latin-ext"], weight: ["400", "500", "600"], variable: "--font-sans", display: "swap" });
+const mono = IBM_Plex_Mono({ subsets: ["latin", "latin-ext"], weight: ["400", "500"], variable: "--font-mono", display: "swap" });
 
 export const metadata: Metadata = {
-  title: "Kage Mission Control",
-  description: "WP10 — dashboard live peste run ledger-ul Kage (AG-UI).",
+  title: t("Kage · Astăzi", "Kage · Today"),
+  description: t("Ce așteaptă după tine, ce lucrează acum și cât s-a cheltuit azi.", "What is waiting on you, what is running now and what has been spent today."),
 };
 
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: "#0d0b09",
+  themeColor: "#0e0d0c",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="ro">
+    <html lang={LANG} className={`${sans.variable} ${mono.variable}`}>
       <body>{children}</body>
     </html>
   );

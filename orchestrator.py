@@ -1630,6 +1630,8 @@ def _mc_agents(runs: list[dict]) -> list[dict]:
             "note": r["input"] or "",
             "elapsedMs": r["duration_ms"],
             "costUsd": r["cost_usd"],
+            "kind": r["kind"],
+            "startedAt": r["created_at"],
         })
     return out[:8]
 
@@ -1669,7 +1671,7 @@ def _api_spend_status() -> Optional[dict]:
 
 def _mc_budget() -> dict:
     """Header buget: apeluri cloud azi + cost real în $/EUR (din run ledger)."""
-    _, cloud_today = _usage_counts_today()
+    total_today, cloud_today = _usage_counts_today()
     try:
         cfg = json.loads(KAGE_CONFIG_PATH.read_text(encoding="utf-8"))
         max_cloud = int(cfg.get("max_cloud_calls_per_day", 20))
@@ -1686,6 +1688,7 @@ def _mc_budget() -> dict:
             spent = float(row[0] or 0.0)
         except Exception:
             pass
+    spend_points = _mc_spend_points()
     return {
         "cloudCalls": cloud_today,
         "maxCloud": max_cloud,
@@ -1693,7 +1696,25 @@ def _mc_budget() -> dict:
         "spentEur": _usd_to_eur(spent),
         "maxUsd": _MC_MAX_USD,
         "api": _api_spend_status(),   # #7: plafonul global pe bani reali (EUR) sau None
+        "localCalls": max(0, total_today - cloud_today),
+        "spendPoints": spend_points,  # run-urile plătite de azi, pentru graficul de cheltuială cumulată
     }
+
+
+def _mc_spend_points(limit: int = 300) -> list[dict]:
+    """Run-urile de azi cu cost > 0, în ordine cronologică: {ts, costUsd}. [] fără PG."""
+    if not pg_store.configured():
+        return []
+    try:
+        today, tomorrow = _usage_day_bounds()
+        rows = pg_store.fetchall(
+            "SELECT created_at, cost_usd FROM runs WHERE created_at >= %s AND created_at < %s "
+            "AND cost_usd > 0 ORDER BY created_at ASC LIMIT %s",
+            (today, tomorrow, max(1, min(int(limit), 1000))),
+        )
+        return [{"ts": r[0], "costUsd": float(r[1])} for r in rows]
+    except Exception:
+        return []
 
 
 def _mc_cache() -> dict:
@@ -4047,7 +4068,7 @@ def _budget_check(tier: int, confidence: float) -> tuple[int, float, Optional[st
     except Exception:
         max_cloud = 20
 
-    _, cloud_today = _usage_counts_today()
+    total_today, cloud_today = _usage_counts_today()
     today = datetime.date.today().isoformat()
 
     if cloud_today >= max_cloud:

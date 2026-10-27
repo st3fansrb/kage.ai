@@ -3,12 +3,19 @@
 
 export type AgentStatus = "running" | "pending" | "done" | "failed";
 
+export interface SpendPoint {
+  ts: string; // ISO, ora locală a orchestratorului
+  costUsd: number;
+}
+
 export interface Budget {
   cloudCalls: number;
   maxCloud: number;
   spentUsd: number;
   spentEur: number | null;
   maxUsd: number;
+  localCalls?: number; // backend mai vechi: lipsește
+  spendPoints?: SpendPoint[];
 }
 
 export interface Agent {
@@ -18,6 +25,8 @@ export interface Agent {
   note: string;
   elapsedMs: number | null;
   costUsd: number | null;
+  kind?: string;
+  startedAt?: string;
 }
 
 export interface Approval {
@@ -40,15 +49,6 @@ export interface ActivityRow {
   costUsd: number | null;
 }
 
-export interface Cache {
-  hits: number;
-  misses: number;
-  hitRate: number | null;
-  entries: number;
-  memories: number;
-  routingExamples: number;
-}
-
 export interface ScheduledTask {
   at: string;
   message: string;
@@ -63,7 +63,6 @@ export interface MissionState {
   agents: Agent[];
   approvals: Approval[];
   activity: ActivityRow[];
-  cache: Cache;
   briefing: Briefing;
   runningCount: number;
 }
@@ -73,7 +72,6 @@ export const EMPTY_STATE: MissionState = {
   agents: [],
   approvals: [],
   activity: [],
-  cache: { hits: 0, misses: 0, hitRate: null, entries: 0, memories: 0, routingExamples: 0 },
   briefing: { tasksToday: [] },
   runningCount: 0,
 };
