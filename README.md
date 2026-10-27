@@ -55,9 +55,10 @@ and reconnects on its own.
 
 <sub>New task: pick the agent and the allowed folder, describe the work.</sub>
 
-![Mission Control on a 390 px phone, three screens from top to bottom](docs/images/mission-control-phone.png)
-
-<sub>The same page on a 390 px phone: status and the pending decision, then agents and budget, then the schedule and latest requests.</sub>
+<p align="center">
+<img src="docs/images/mission-control-phone.png" alt="Mission Control on a 390 px phone, four screens from top to bottom" width="480">
+<br><sub>The same page on a 390 px phone, scrolled from top to bottom.</sub>
+</p>
 
 All screenshots use sample data served by a stand-in orchestrator.
 
