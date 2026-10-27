@@ -1,24 +1,32 @@
 """#7 Budget v2 — plafonul-gate global pe bani reali (`api_budget.SpendGate`).
 
 Contractul: fail-closed (implicit NU se cheltuie), modelele gratuite trec mereu,
-plafoanele lunar/zilnic sunt garduri hard, iar pipeline-ul de trading ține Criticul
-pe local când gate-ul refuză (bucla nu moare, doar nu cheltuie).
+plafoanele lunar/zilnic sunt garduri hard. Integrarea cu ledger-ul real de costuri
+(Criticul nocturn) a plecat în kage-labs.
 """
-
-import json
-import time
 
 import pytest
 
 from api_budget import DEFAULT_DAILY_CAP_EUR, DEFAULT_MONTHLY_CAP_EUR, SpendGate
-from trading.budget import ApiBudget
-from trading.ledger import TradingLedger
-from trading.pipeline import NightlyPipeline
+
+
+class _FakeLedger:
+    """Orice obiect cu `api_cost_sum(month)` + `api_cost_sum_day(day)` merge ca ledger."""
+
+    def __init__(self, month_usd: float = 0.0, day_usd: float = 0.0):
+        self.month_usd = month_usd
+        self.day_usd = day_usd
+
+    def api_cost_sum(self, month=None) -> float:
+        return self.month_usd
+
+    def api_cost_sum_day(self, day) -> float:
+        return self.day_usd
 
 
 @pytest.fixture
-def ledger(tmp_path):
-    return TradingLedger(tmp_path / "trading.db")
+def ledger():
+    return _FakeLedger()
 
 
 # ── semantica gate-ului ──────────────────────────────────────────────────────
@@ -84,19 +92,20 @@ def test_from_config_missing_section_is_disabled():
     assert g.allows().reason == "disabled"
 
 
-def test_from_config_reads_ledger_sums(ledger):
-    ledger.record_api_cost(model="m", usd=3.0, role="critic")
+def test_from_config_reads_ledger_sums():
     cfg = {"eur_usd_rate": 1.0,
            "api_budget": {"enabled": True, "monthly_cap_eur": 2.5, "daily_cap_eur": 5}}
-    d = SpendGate.from_config(cfg, ledger).allows()
+    d = SpendGate.from_config(cfg, _FakeLedger(month_usd=3.0, day_usd=3.0)).allows()
     assert not d.allowed and d.reason == "monthly_cap"
 
 
-def test_ledger_api_cost_sum_day(ledger):
-    ledger.record_api_cost(model="m", usd=0.25, role="critic")
-    today = time.strftime("%Y-%m-%d", time.localtime())
-    assert ledger.api_cost_sum_day(today) == pytest.approx(0.25)
-    assert ledger.api_cost_sum_day("1999-01-01") == 0.0
+def test_from_config_without_ledger_counts_zero_spend():
+    """Fără ledger (cum e acum în orchestrator), cheltuielile sunt 0 și decid doar switch-ul și plafoanele."""
+    cfg = {"api_budget": {"enabled": True, "monthly_cap_eur": 10, "daily_cap_eur": 1}}
+    st = SpendGate.from_config(cfg).status()
+    assert st["enabled"] is True
+    assert st["spend_month_eur"] == 0.0
+    assert SpendGate.from_config(cfg).allows().allowed
 
 
 def test_gate_status_shape(ledger):
@@ -105,103 +114,3 @@ def test_gate_status_shape(ledger):
     assert st["blocked_reason"] == "disabled"
     assert st["spend_month_eur"] == 0.0
     assert st["monthly_cap_eur"] == DEFAULT_MONTHLY_CAP_EUR
-
-
-# ── integrarea în pipeline-ul de trading ─────────────────────────────────────
-
-_PROPOSALS = json.dumps([{
-    "mecanism_cauzal": "funding negativ extrem forțează închideri de shorts",
-    "predictie_cu_interval": {"kind": "point", "mean": 1.2, "interval_80": [-1, 4], "horizon": "48h"},
-    "criteriu_falsificare": "randament mediu 48h post-semnal < 0 pe 30 instanțe",
-    "implementare_schita": "filtrează funding < percentila 5, long pe fereastră de 48h",
-}])
-_APPROVE = json.dumps({"approved_index": 0, "reasoning": "plauzibil"})
-
-
-def _mk_config(enabled: bool, price_in: float, price_out: float) -> dict:
-    return {
-        "eur_usd_rate": 1.0,
-        "api_budget": {"enabled": enabled, "monthly_cap_eur": 10, "daily_cap_eur": 1},
-        "providers": {"litellm_url": "http://localhost:4000", "litellm_key": "sk-x"},
-        "trading": {
-            "openrouter_api_key": "sk-or-test",
-            "actor": {"litellm_name": "tier-2-worker", "max_proposals": 2},
-            "critic": {"model": "deepseek/deepseek-chat", "monthly_cap_eur": 7,
-                       "price_per_mtok_in": price_in, "price_per_mtok_out": price_out},
-        },
-    }
-
-
-def _local_poster(url, headers, payload):
-    content = _APPROVE if "approved_index" in json.dumps(payload) else _PROPOSALS
-    return {"model": "qwen35b", "choices": [{"message": {"content": content}}], "usage": {}}
-
-
-def _or_poster(url, headers, payload):
-    raise AssertionError("apel OpenRouter deși plafonul global e închis")
-
-
-def test_pipeline_gate_disabled_keeps_critic_local(ledger):
-    """Cheie OpenRouter + model PLĂTIT + api_budget oprit → Critic local, zero apeluri plătite."""
-    pipe = NightlyPipeline.from_config(
-        _mk_config(enabled=False, price_in=0.4, price_out=0.87), ledger,
-        poster_local=_local_poster, poster_openrouter=_or_poster,
-    )
-    assert pipe.budget is None
-    assert pipe.gate_reason == "disabled"
-    out = pipe.run_once(regime="bull")   # _or_poster ar exploda dacă ar fi apelat
-    assert out["critic"]["cost_usd"] == 0.0
-    assert "Plafon global #7" in out["report"]
-    assert ledger.api_cost_sum() == 0.0
-
-
-def test_pipeline_gate_disabled_allows_free_model(ledger):
-    """Model gratuit (prețuri 0, ex. ':free') → OpenRouter permis chiar cu switch-ul oprit."""
-    def or_ok(url, headers, payload):
-        return {"model": "hy3-free", "choices": [{"message": {"content": _APPROVE}}],
-                "usage": {"prompt_tokens": 100, "completion_tokens": 20}}
-    pipe = NightlyPipeline.from_config(
-        _mk_config(enabled=False, price_in=0.0, price_out=0.0), ledger,
-        poster_local=_local_poster, poster_openrouter=or_ok,
-    )
-    assert pipe.budget is not None and pipe.gate_reason is None
-    out = pipe.run_once(regime="bull")
-    assert out["critic"]["model_used"] == "hy3-free"
-    assert out["critic"]["cost_usd"] == 0.0   # prețuri 0 → cost estimat 0
-
-
-def test_pipeline_gate_enabled_allows_paid(ledger):
-    """Switch pornit + sub plafoane → Criticul plătit funcționează ca înainte."""
-    def or_ok(url, headers, payload):
-        return {"model": "deepseek", "choices": [{"message": {"content": _APPROVE}}],
-                "usage": {"prompt_tokens": 400, "completion_tokens": 80}}
-    pipe = NightlyPipeline.from_config(
-        _mk_config(enabled=True, price_in=0.4, price_out=0.87), ledger,
-        poster_local=_local_poster, poster_openrouter=or_ok,
-    )
-    assert pipe.budget is not None and pipe.gate_reason is None
-    out = pipe.run_once(regime="bull")
-    assert out["critic"]["cost_usd"] > 0
-    assert ledger.api_cost_sum() > 0
-
-
-def test_pipeline_gate_monthly_cap_keeps_critic_local(ledger):
-    """Plafonul global lunar atins → Critic local chiar cu switch-ul pornit."""
-    ledger.record_api_cost(model="m", usd=11.0, role="critic")   # peste 10€ la curs 1.0
-    pipe = NightlyPipeline.from_config(
-        _mk_config(enabled=True, price_in=0.4, price_out=0.87), ledger,
-        poster_local=_local_poster, poster_openrouter=_or_poster,
-    )
-    assert pipe.budget is None
-    assert pipe.gate_reason == "monthly_cap"
-
-
-def test_trading_subcap_still_enforced(ledger):
-    """Sub-plafonul Criticului (7€) rămâne valabil SUB plafonul global (10€)."""
-    ledger.record_api_cost(model="m", usd=8.0, role="critic")   # 8€ < 10€ global, > 7€ critic
-    cfg = _mk_config(enabled=True, price_in=0.4, price_out=0.87)
-    cfg["api_budget"]["daily_cap_eur"] = 50   # izolează testul de gardul zilnic (suma e „azi")
-    gate = SpendGate.from_config(cfg, ledger)
-    assert gate.allows().allowed                       # globalul mai permite
-    b = ApiBudget(ledger, cap_eur=7.0, eur_usd=1.0)
-    assert b.over_budget()                             # dar sub-plafonul Criticului nu

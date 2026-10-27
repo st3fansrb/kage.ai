@@ -66,19 +66,19 @@
     },
     {
       "id": "KB09",
-      "title": "Extract the nightly proposal limit",
+      "title": "Extract the heartbeat interval",
       "fixture": "fixtures/trading_pipeline.json",
-      "instruction": "Extract-the-right-answer (WP-T). Read the `trading.actor.max_proposals` setting in `kage_config.example.json`. Write its decimal value alone to `kagebench_answers/KB09.txt`. Use Bash only for that output file and run the acceptance command.",
+      "instruction": "Extract-the-right-answer (WP12). Read the `remote.heartbeat_interval_min` setting in `kage_config.example.json`. Write its decimal value alone to `kagebench_answers/KB09.txt`. Use Bash only for that output file and run the acceptance command.",
       "allowed_tools": ["Read", "Bash"],
-      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB09.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '3', p.read_text(encoding='utf-8')\""
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB09.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '15', p.read_text(encoding='utf-8')\""
     },
     {
       "id": "KB10",
-      "title": "Extract the kill-switch schedule",
+      "title": "Extract the briefing schedule",
       "fixture": "fixtures/video_intel.json",
-      "instruction": "Extract-the-right-answer (WP-T). Read `trading.killswitch_cron` in `kage_config.example.json`. Write the exact five-field cron expression alone to `kagebench_answers/KB10.txt`. Use Bash only for that output file and run the acceptance command.",
+      "instruction": "Extract-the-right-answer (WP-D). Read `briefing.cron` in `kage_config.example.json`. Write the exact five-field cron expression alone to `kagebench_answers/KB10.txt`. Use Bash only for that output file and run the acceptance command.",
       "allowed_tools": ["Read", "Bash"],
-      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB10.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '*/5 * * * *', p.read_text(encoding='utf-8')\""
+      "acceptance_command": "{python} -c \"from pathlib import Path; p=Path('kagebench_answers/KB10.txt'); assert p.is_file(), 'missing answer'; assert p.read_text(encoding='utf-8').strip() == '0 8 * * *', p.read_text(encoding='utf-8')\""
     }
   ]
 }

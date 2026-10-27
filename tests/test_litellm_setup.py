@@ -1,7 +1,7 @@
 """#5 — LiteLLM doar pe loopback și fără master_key real în git.
 
 setup.sh rulează într-un sandbox: un `.venv` fals (pip no-op, python3 = interpretorul
-testelor) și un PATH minim fără python3.12, ca blocul opțional `.jobs-venv` să fie sărit.
+testelor) și un PATH minim fără python3.12.
 """
 import json
 import os
@@ -67,7 +67,7 @@ def test_setup_generates_random_master_key_shared_with_orchestrator(tmp_path):
     key = _master_key((d / "litellm_config.yaml").read_text())
     assert key != PUBLIC_KEY and key.startswith("sk-kage-") and len(key) >= 40
     cfg = json.loads((d / "kage_config.json").read_text())
-    # orchestrator.py citește litellm_key de la rădăcină, trading/pipeline.py din providers.
+    # orchestrator.py citește litellm_key de la rădăcină; providers e citit de modulele din kage-labs.
     assert cfg["litellm_key"] == key
     assert cfg["providers"]["litellm_key"] == key
     assert (d / "litellm_config.yaml").stat().st_mode & 0o077 == 0

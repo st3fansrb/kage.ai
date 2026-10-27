@@ -368,14 +368,14 @@ async def test_tracked_job_records_failure(jrdb):
 
 async def test_recover_interrupted_retriggers(jrdb, monkeypatch):
     orch = jrdb
-    # simulează un scan întrerupt: rând deschis (finished_at NULL)
+    # simulează un job programat întrerupt: rând deschis (finished_at NULL)
     pg_store.execute(
-        "INSERT INTO job_runs (job_id, started_at) VALUES ('__job_scan__', '2026-07-09T19:00:00')")
+        "INSERT INTO job_runs (job_id, started_at) VALUES ('__demo_job__', '2026-07-09T19:00:00')")
     fired = []
 
-    async def _fake_scan():
+    async def _fake_job():
         fired.append(1)
-    monkeypatch.setattr(orch, "_recoverable_jobs", lambda: {"__job_scan__": _fake_scan})
+    monkeypatch.setattr(orch, "_recoverable_jobs", lambda: {"__demo_job__": _fake_job})
     notes = []
 
     async def _note(t):
@@ -399,6 +399,6 @@ def test_recover_interrupted_noop_when_clean(jrdb):
     jrdb._recover_interrupted_jobs()
 
 
-def test_recoverable_maps_to_raw_coroutine():
-    # NU wrapper-ul tracked (ar dubla urmărirea) — vezi _recover_interrupted_jobs.
-    assert orchestrator._recoverable_jobs()["__job_scan__"] is orchestrator._job_scan_all
+def test_no_recoverable_jobs_after_labs_extraction():
+    # Scanul de joburi (singurul job recuperabil) s-a mutat în kage-labs.
+    assert orchestrator._recoverable_jobs() == {}
