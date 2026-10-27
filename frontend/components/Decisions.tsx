@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Approval } from "@/lib/types";
 import { respondApproval } from "@/lib/actions";
 import { clock, riskLabel } from "@/lib/format";
+import { t } from "@/lib/i18n";
 
 type Outcome = { id: string; ok: boolean; agent: string; at: string };
 
@@ -28,36 +29,36 @@ export function Decisions({ approvals, offline }: { approvals: Approval[]; offli
   return (
     <section aria-labelledby="h-dec" id="decizii">
       <div className="sh">
-        <h2 id="h-dec">Așteaptă decizia ta</h2>
+        <h2 id="h-dec">{t("Așteaptă decizia ta", "Waiting for your decision")}</h2>
         {visible.length > 0 && <span className="meta num" aria-live="polite">{visible.length}</span>}
       </div>
 
       {recent.map((d) => (
         <div key={d.id} className="none" role="status" style={{ borderStyle: "solid", marginBottom: 10 }}>
-          <span className={`pill ${d.ok ? "pos" : "neg"}`}>{d.ok ? "aprobat" : "refuzat"}</span>
-          <span>{d.agent} · la {d.at}</span>
+          <span className={`pill ${d.ok ? "pos" : "neg"}`}>{d.ok ? t("aprobat", "approved") : t("refuzat", "denied")}</span>
+          <span>{d.agent} · {t("la", "at")} {d.at}</span>
         </div>
       ))}
 
       {visible.map((ap) => {
         const risk = riskLabel(ap.risk);
         return (
-          <article key={ap.id} className="approval" aria-label={`Aprobare pentru ${ap.agent}`}>
+          <article key={ap.id} className="approval" aria-label={`${t("Aprobare pentru", "Approval for")} ${ap.agent}`}>
             <div className="who">
               <span className={`pill ${risk.danger ? "neg" : ""}`}>{risk.text}</span>
               <strong>{ap.agent || "agent"}</strong>
-              <span className="quiet">vrea să ruleze:</span>
+              <span className="quiet">{t("vrea să ruleze:", "wants to run:")}</span>
             </div>
             <pre>{ap.cmd}</pre>
             {ap.why && <p className="why">{ap.why}</p>}
-            {failed[ap.id] && <p className="err" role="alert">Kage n-a primit decizia. Verifică legătura și încearcă din nou.</p>}
-            {offline && <p className="err">Nu poți decide cât timp nu am legătură cu Kage.</p>}
+            {failed[ap.id] && <p className="err" role="alert">{t("Kage n-a primit decizia. Verifică legătura și încearcă din nou.", "Kage did not receive the decision. Check the connection and try again.")}</p>}
+            {offline && <p className="err">{t("Nu poți decide cât timp nu am legătură cu Kage.", "You cannot decide while Kage is unreachable.")}</p>}
             <div className="decide">
               <button className="btn" disabled={offline || busy[ap.id]} onClick={() => decide(ap, false)}>
-                Refuză
+                {t("Refuză", "Deny")}
               </button>
               <button className="btn primary" disabled={offline || busy[ap.id]} onClick={() => decide(ap, true)}>
-                {busy[ap.id] ? "Se trimite…" : "Aprobă"}
+                {busy[ap.id] ? t("Se trimite…", "Sending…") : t("Aprobă", "Approve")}
               </button>
             </div>
           </article>
@@ -67,7 +68,7 @@ export function Decisions({ approvals, offline }: { approvals: Approval[]; offli
       {visible.length === 0 && done.length === 0 && (
         <div className="none">
           <span className="kanji" lang="ja" aria-hidden="true">影</span>
-          <span>Nimic de aprobat. Când un agent vrea să ruleze o comandă riscantă, apare aici.</span>
+          <span>{t("Nimic de aprobat. Când un agent vrea să ruleze o comandă riscantă, apare aici.", "Nothing to approve. When an agent wants to run a risky command, it shows up here.")}</span>
         </div>
       )}
     </section>

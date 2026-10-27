@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Sheet } from "./Sheet";
+import { LOCALE, t } from "@/lib/i18n";
 
 interface Msg {
   role: "user" | "assistant";
@@ -17,7 +18,7 @@ interface Session {
 
 const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
 const SESSION_KEY = "kage_session"; // partajat cu vechiul kage.html → sesiuni comune
-const SESSION_FMT = new Intl.DateTimeFormat("ro-RO", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+const SESSION_FMT = new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
 function newSessionId(): string {
   try {
@@ -30,7 +31,7 @@ function newSessionId(): string {
 function sessionLabel(s: Session): string {
   const d = new Date(s.started);
   const when = Number.isNaN(d.getTime()) ? s.started.slice(0, 16) : SESSION_FMT.format(d);
-  return `${when} · ${s.messages} mesaje`;
+  return `${when} · ${s.messages} ${t("mesaje", "messages")}`;
 }
 
 export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -145,7 +146,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
         headers: { "Content-Type": "application/json", "X-Session-Id": sessionId },
         body: JSON.stringify({ model: "auto", stream: true, messages: history.map((m) => ({ role: m.role, content: m.content })) }),
       });
-      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? "Kage a refuzat cererea (401)." : `Kage a răspuns cu ${resp.status}.`);
+      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? t("Kage a refuzat cererea (401).", "Kage refused the request (401).") : `${t("Kage a răspuns cu", "Kage answered with")} ${resp.status}.`);
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -203,17 +204,17 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
         <>
           {sessions.length > 0 && (
             <select className="input" style={{ width: "auto", maxWidth: 190, padding: "6px 10px", fontSize: 13, marginLeft: 8 }}
-              aria-label="Conversații recente" value={known ? sessionId : ""} onChange={(e) => e.target.value && switchSession(e.target.value)}>
-              {!known && <option value="">Conversație nouă</option>}
+              aria-label={t("Conversații recente", "Recent conversations")} value={known ? sessionId : ""} onChange={(e) => e.target.value && switchSession(e.target.value)}>
+              {!known && <option value="">{t("Conversație nouă", "New conversation")}</option>}
               {sessions.map((s) => <option key={s.id} value={s.id}>{sessionLabel(s)}</option>)}
             </select>
           )}
-          <button className="link" onClick={newChat} style={{ marginLeft: 4 }}>Nouă</button>
+          <button className="link" onClick={newChat} style={{ marginLeft: 4 }}>{t("Nouă", "New")}</button>
         </>
       }
       footer={
         <>
-          <label className="sr-only" htmlFor="chat-input">Mesaj</label>
+          <label className="sr-only" htmlFor="chat-input">{t("Mesaj", "Message")}</label>
           <textarea
             id="chat-input"
             ref={inputRef}
@@ -226,12 +227,12 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
                 send();
               }
             }}
-            placeholder="Scrie un mesaj (Enter trimite, Shift+Enter rând nou)"
+            placeholder={t("Scrie un mesaj (Enter trimite, Shift+Enter rând nou)", "Write a message (Enter sends, Shift+Enter for a new line)")}
             rows={2}
             style={{ maxHeight: 160 }}
           />
           <button className="btn primary" onClick={send} disabled={busy || !input.trim()}>
-            {busy ? "…" : "Trimite"}
+            {busy ? "…" : t("Trimite", "Send")}
           </button>
         </>
       }
@@ -240,7 +241,7 @@ export function ChatPanel({ open, onClose }: { open: boolean; onClose: () => voi
         {msgs.length === 0 && (
           <div className="empty-chat">
             <span className="kanji" lang="ja" aria-hidden="true">影</span>
-            Întreabă orice. Kage alege singur modelul: local când se poate, cloud când trebuie.
+            {t("Întreabă orice. Kage alege singur modelul: local când se poate, cloud când trebuie.", "Ask anything. Kage picks the model itself: local when it can, cloud when it has to.")}
           </div>
         )}
         {msgs.map((m, i) => (

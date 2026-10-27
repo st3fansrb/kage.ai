@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { EMPTY_STATE, MissionState } from "./types";
+import { t } from "./i18n";
 
 export type ConnState = "connecting" | "live" | "error";
 
@@ -14,9 +15,9 @@ export interface Conn {
 
 // Traduce statusul din /api/ping într-o cauză pe care o poți repara.
 function causeFor(status: number): string {
-  if (status === 401 || status === 403) return `${status}: orchestratorul refuză cererea; verifică KAGE_API_TOKEN în frontend/.env.local`;
-  if (status === 502 || status === 0) return "orchestratorul nu răspunde; pornește-l cu scripts/start_all.sh";
-  return `orchestratorul a răspuns cu ${status}`;
+  if (status === 401 || status === 403) return `${status}: ${t("orchestratorul refuză cererea; verifică KAGE_API_TOKEN în frontend/.env.local", "the orchestrator refuses the request; check KAGE_API_TOKEN in frontend/.env.local")}`;
+  if (status === 502 || status === 0) return t("orchestratorul nu răspunde; pornește-l cu scripts/start_all.sh", "the orchestrator is not responding; start it with ./start_all.sh");
+  return `${t("orchestratorul a răspuns cu", "the orchestrator answered with")} ${status}`;
 }
 
 // Consumă stream-ul AG-UI (same-origin /api/agui) și expune starea Mission Control.
@@ -53,7 +54,7 @@ export function useMissionState(): { state: MissionState; conn: Conn; retry: () 
       fetch("/api/ping", { cache: "no-store" })
         .then((r) => r.json())
         .then((p: { status: number }) => setConn((c) => ({ ...c, cause: p.status === 200 ? null : causeFor(p.status) })))
-        .catch(() => setConn((c) => ({ ...c, cause: "frontend-ul nu poate ajunge la propriul server" })));
+        .catch(() => setConn((c) => ({ ...c, cause: t("frontend-ul nu poate ajunge la propriul server", "the frontend cannot reach its own server") })));
       if (!closedRef.current) retryRef.current = setTimeout(connect, 5000);
     };
   }, []);

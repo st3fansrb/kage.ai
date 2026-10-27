@@ -4,12 +4,13 @@ import { useState } from "react";
 import { Agent, AgentStatus } from "@/lib/types";
 import { stopAll } from "@/lib/actions";
 import { duration, minutesOf, usd } from "@/lib/format";
+import { t } from "@/lib/i18n";
 
 const LABEL: Record<AgentStatus, [string, string]> = {
-  running: ["run", "lucrează"],
-  pending: ["", "așteaptă"],
-  failed: ["neg", "eșuat"],
-  done: ["done", "gata"],
+  running: ["run", t("lucrează", "running")],
+  pending: ["", t("așteaptă", "waiting")],
+  failed: ["neg", t("eșuat", "failed")],
+  done: ["done", t("gata", "done")],
 };
 
 function elapsed(a: Agent, nowMin: number): string {
@@ -20,7 +21,7 @@ function elapsed(a: Agent, nowMin: number): string {
 function Row({ a, nowMin, hasApprovals }: { a: Agent; nowMin: number; hasApprovals: boolean }) {
   const [cls, txt] = LABEL[a.status];
   const extra = a.note && a.note.trim() !== a.name.trim() ? a.note : "";
-  const sub = [a.kind, a.status === "pending" && hasApprovals ? "oprit până decizi mai sus" : "", extra].filter(Boolean).join(" · ");
+  const sub = [a.kind, a.status === "pending" && hasApprovals ? t("oprit până decizi mai sus", "paused until you decide above") : "", extra].filter(Boolean).join(" · ");
   return (
     <div className="row">
       <span className="st"><span className={`pill ${cls}`}>{txt}</span></span>
@@ -68,27 +69,31 @@ export function Agents({ agents, nowMin, offline, hasApprovals, onNewTask, nextS
   return (
     <section aria-labelledby="h-ag">
       <div className="sh">
-        <h2 id="h-ag">Agenți</h2>
+        <h2 id="h-ag">{t("Agenți", "Agents")}</h2>
         {agents.length > 0 && (
-          <span className="meta num">{running} lucrează{failed ? ` · ${failed} eșuat${failed > 1 ? "e" : ""}` : ""}</span>
+          <span className="meta num">{running} {t("lucrează", "running")}{failed ? ` · ${failed} ${t(failed > 1 ? "eșuate" : "eșuat", "failed")}` : ""}</span>
         )}
         <div className="right">
           {running > 0 && !offline && (
             <button className="link danger" onClick={onStop} disabled={stopping}>
-              {stopping ? "Se opresc…" : armed ? `Sigur? Oprește ${running === 1 ? "agentul" : `${running} agenți`} și pauzează programările` : "Oprește tot"}
+              {stopping
+                ? t("Se opresc…", "Stopping…")
+                : armed
+                  ? t(`Sigur? Oprește ${running === 1 ? "agentul" : `${running} agenți`} și pauzează programările`, `Sure? Stop ${running === 1 ? "the agent" : `${running} agents`} and pause the schedule`)
+                  : t("Oprește tot", "Stop all")}
             </button>
           )}
         </div>
       </div>
-      {stopErr && <p className="err" role="alert" style={{ marginBottom: 10 }}>Oprirea n-a ajuns la Kage. Agenții încă rulează; încearcă din nou.</p>}
+      {stopErr && <p className="err" role="alert" style={{ marginBottom: 10 }}>{t("Oprirea n-a ajuns la Kage. Agenții încă rulează; încearcă din nou.", "The stop did not reach Kage. The agents are still running; try again.")}</p>}
 
       {agents.length === 0 ? (
         <div className="none">
           <span className="kanji" lang="ja" aria-hidden="true">影</span>
           <span>
-            Niciun agent nu lucrează acum.
-            {nextScheduled && <> Următorul pornește la <span className="num">{nextScheduled.at}</span>: {nextScheduled.message}.</>}{" "}
-            <button className="link" onClick={onNewTask}>Pornește un task</button>
+            {t("Niciun agent nu lucrează acum.", "No agent is working right now.")}
+            {nextScheduled && <> {t("Următorul pornește la", "The next one starts at")} <span className="num">{nextScheduled.at}</span>: {nextScheduled.message}.</>}{" "}
+            <button className="link" onClick={onNewTask}>{t("Pornește un task", "Start a task")}</button>
           </span>
         </div>
       ) : (
@@ -96,7 +101,7 @@ export function Agents({ agents, nowMin, offline, hasApprovals, onNewTask, nextS
           {active.map((a) => <Row key={a.id} a={a} nowMin={nowMin} hasApprovals={hasApprovals} />)}
           {done.length > 0 && (
             <details className={active.length ? "more" : ""} style={active.length ? undefined : { padding: "12px 0" }}>
-              <summary className="link">{done.length === 1 ? "1 terminat recent" : `${done.length} terminați recent`}</summary>
+              <summary className="link">{done.length === 1 ? t("1 terminat recent", "1 finished recently") : `${done.length} ${t("terminați recent", "finished recently")}`}</summary>
               {done.map((a) => <Row key={a.id} a={a} nowMin={nowMin} hasApprovals={false} />)}
             </details>
           )}

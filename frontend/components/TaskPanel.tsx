@@ -2,12 +2,13 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Sheet } from "./Sheet";
+import { t } from "@/lib/i18n";
 
 type Mode = "claude" | "sysrun";
 
 const MODES: { value: Mode; label: string }[] = [
   { value: "claude", label: "Claude Code" },
-  { value: "sysrun", label: "Sysrun (codul Kage)" },
+  { value: "sysrun", label: t("Sysrun (codul Kage)", "Sysrun (Kage's own code)") },
 ];
 
 const BADGE_RE = /^\*\*\[([^\]]+)\]\*\* /;
@@ -65,7 +66,7 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? "Kage a refuzat task-ul (401)." : `Kage a răspuns cu ${resp.status}.`);
+      if (!resp.ok || !resp.body) throw new Error(resp.status === 401 ? t("Kage a refuzat task-ul (401).", "Kage refused the task (401).") : `${t("Kage a răspuns cu", "Kage answered with")} ${resp.status}.`);
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -116,14 +117,14 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
     <Sheet
       open={open}
       onClose={onClose}
-      title="Task nou"
+      title={t("Task nou", "New task")}
       footer={
         <>
           <span className="quiet" style={{ fontSize: 12, marginRight: "auto", alignSelf: "center" }}>
-            Rulează în fundal; îl găsești la Agenți și dacă închizi.
+            {t("Rulează în fundal; îl găsești la Agenți și dacă închizi.", "Runs in the background; it stays under Agents if you close this.")}
           </span>
           <button className="btn primary" onClick={run} disabled={busy || !text.trim()}>
-            {busy ? "Rulează…" : <>Pornește <kbd>⌘↵</kbd></>}
+            {busy ? t("Rulează…", "Running…") : <>{t("Pornește", "Start")} <kbd>⌘↵</kbd></>}
           </button>
         </>
       }
@@ -131,22 +132,22 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
       <div className="sheet-body">
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 12 }}>
           <label className="field">
-            Cine lucrează
+            {t("Cine lucrează", "Who does the work")}
             <select className="input" value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
               {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
             </select>
           </label>
           <label className="field">
-            În folderul
+            {t("În folderul", "In folder")}
             <select className="input" value={cwd} onChange={(e) => setCwd(e.target.value)} disabled={mode === "sysrun" || roots.length === 0}>
-              {mode === "sysrun" && <option value="">codul Kage</option>}
-              {mode !== "sysrun" && roots.length === 0 && <option value="">{confinement ? "niciun folder permis" : "folderul implicit"}</option>}
+              {mode === "sysrun" && <option value="">{t("codul Kage", "Kage's own code")}</option>}
+              {mode !== "sysrun" && roots.length === 0 && <option value="">{confinement ? t("niciun folder permis", "no allowed folder") : t("folderul implicit", "default folder")}</option>}
               {mode !== "sysrun" && roots.map((r) => <option key={r} value={r}>{r.replace(/^\/Users\/[^/]+/, "~")}</option>)}
             </select>
           </label>
         </div>
         <label className="field">
-          Ce trebuie făcut
+          {t("Ce trebuie făcut", "What needs doing")}
           <textarea
             ref={inputRef}
             className="input"
@@ -158,7 +159,7 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
                 run();
               }
             }}
-            placeholder="ex: rulează testele și repară ce pică în test_scheduler.py"
+            placeholder={t("ex: rulează testele și repară ce pică în test_scheduler.py", "e.g. run the tests and fix whatever fails in test_scheduler.py")}
             rows={4}
           />
         </label>
@@ -166,7 +167,7 @@ export function TaskPanel({ open, onClose }: { open: boolean; onClose: () => voi
         {(output || busy) && (
           <div ref={outRef} style={{ background: "var(--ground)", borderRadius: 12, padding: 14, overflowY: "auto", maxHeight: "50dvh" }} aria-live="polite">
             {badge && <div className="quiet" style={{ fontSize: 12, marginBottom: 6 }}>{badge}</div>}
-            <pre className="out">{output || "Pornește…"}</pre>
+            <pre className="out">{output || t("Pornește…", "Starting…")}</pre>
           </div>
         )}
       </div>

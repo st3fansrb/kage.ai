@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityRow, Budget as BudgetT, SpendPoint } from "@/lib/types";
 import { hhmm, isCloudTier, minutesOf, usd } from "@/lib/format";
+import { t } from "@/lib/i18n";
 
 // Ora la care se termină bugetul în ritmul de azi (de la primul apel plătit până acum).
 export function runsOutAt(points: SpendPoint[], spent: number, max: number, nowMin: number): string | null {
@@ -67,7 +68,7 @@ function SpendChart({ points, locals, max, nowMin, runsOut }: {
   return (
     <div className="spend" ref={host}>
       <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} role="img"
-        aria-label={`Cheltuiala cumulată azi: ${usd(acc)} din ${usd(max)}${runsOut ? `, estimat să atingă limita pe la ${runsOut}` : ""}`}>
+        aria-label={`${t("Cheltuiala cumulată azi", "Cumulative spend today")}: ${usd(acc)} ${t("din", "of")} ${usd(max)}${runsOut ? `, ${t("estimat să atingă limita pe la", "expected to reach the limit around")} ${runsOut}` : ""}`}>
         <line x1={0} x2={right} y1={Y(max)} y2={Y(max)} stroke="var(--control)" strokeDasharray="2 4" />
         <text x={right + 6} y={Y(max) + 4}>{usd(max)}</text>
         <line x1={0} x2={right} y1={base + 0.5} y2={base + 0.5} stroke="var(--border)" />
@@ -85,7 +86,7 @@ function SpendChart({ points, locals, max, nowMin, runsOut }: {
           <>
             <line x1={X(nowMin)} y1={Y(acc)} x2={X(runM)} y2={Y(max)} stroke="var(--data)" strokeWidth={1.5} strokeDasharray="4 4" />
             <circle cx={X(runM)} cy={Y(max)} r={3.5} fill="var(--data)" />
-            <text x={X(runM)} y={Y(max) - 7} textAnchor="middle" className="em">se termină ~{runsOut}</text>
+            <text x={X(runM)} y={Y(max) - 7} textAnchor="middle" className="em">{t("se termină", "runs out")} ~{runsOut}</text>
           </>
         )}
         {locals.filter((t) => minutesOf(t) >= x0).map((t, i) => (
@@ -93,7 +94,7 @@ function SpendChart({ points, locals, max, nowMin, runsOut }: {
         ))}
         <g className="now">
           <line x1={X(nowMin)} x2={X(nowMin)} y1={top - 6} y2={base} stroke="var(--text)" strokeOpacity={0.5} />
-          <text x={X(nowMin) + (nowRight ? 6 : -6)} y={base - 6} textAnchor={nowRight ? "start" : "end"}>acum {hhmm(nowMin)} · {usd(acc)}</text>
+          <text x={X(nowMin) + (nowRight ? 6 : -6)} y={base - 6} textAnchor={nowRight ? "start" : "end"}>{t("acum", "now")} {hhmm(nowMin)} · {usd(acc)}</text>
         </g>
         {hours.filter((_, i) => i % step === 0).map((m) => (
           <text key={m} x={X(m)} y={H - 8} textAnchor={m === x0 ? "start" : "middle"}>{hhmm(m)}</text>
@@ -120,20 +121,20 @@ export function Budget({ budget, activity, nowMin, staleSince }: {
   return (
     <section aria-labelledby="h-bud">
       <div className="sh">
-        <h2 id="h-bud">Bugetul zilei</h2>
-        <span className="meta">{staleSince ? `date de la ${staleSince}` : "se resetează la 00:00"}</span>
+        <h2 id="h-bud">{t("Bugetul zilei", "Today's budget")}</h2>
+        <span className="meta">{staleSince ? `${t("date de la", "data from")} ${staleSince}` : t("se resetează la 00:00", "resets at 00:00")}</span>
       </div>
       <div className="card">
         <div className="kpis">
-          <div className="kpi"><div className="l">Cheltuit</div><div className="v">{usd(budget.spentUsd)}<small>din {usd(budget.maxUsd)}, {pct}%</small></div></div>
-          <div className="kpi"><div className="l">Apeluri cloud</div><div className="v">{budget.cloudCalls}<small>din {budget.maxCloud}</small></div></div>
+          <div className="kpi"><div className="l">{t("Cheltuit", "Spent")}</div><div className="v">{usd(budget.spentUsd)}<small>{t("din", "of")} {usd(budget.maxUsd)}, {pct}%</small></div></div>
+          <div className="kpi"><div className="l">{t("Apeluri cloud", "Cloud calls")}</div><div className="v">{budget.cloudCalls}<small>{t("din", "of")} {budget.maxCloud}</small></div></div>
           {budget.localCalls != null && (
-            <div className="kpi"><div className="l">Rezolvate local</div><div className="v local">{budget.localCalls}<small>gratuit</small></div></div>
+            <div className="kpi"><div className="l">{t("Rezolvate local", "Answered locally")}</div><div className="v local">{budget.localCalls}<small>{t("gratuit", "free")}</small></div></div>
           )}
         </div>
         <div className="legend">
-          <span className="key"><i />cheltuit, cumulat</span>
-          <span className="key"><i className="loc" />cerere locală, gratuită</span>
+          <span className="key"><i />{t("cheltuit, cumulat", "spent, cumulative")}</span>
+          <span className="key"><i className="loc" />{t("cerere locală, gratuită", "local request, free")}</span>
         </div>
         <SpendChart points={points} locals={locals} max={budget.maxUsd} nowMin={nowMin} runsOut={runsOut} />
       </div>

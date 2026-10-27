@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { t } from "@/lib/i18n";
 
 // Foaie laterală pe <dialog> nativ: focus prins înăuntru, Esc închide, focusul revine
 // pe butonul care a deschis-o.
@@ -43,7 +44,7 @@ export function Sheet({
           <div className="sheet-head">
             <h2>{title}</h2>
             {meta}
-            <button className="icon-btn x" onClick={onClose} aria-label={`Închide ${title.toLowerCase()}`}>
+            <button className="icon-btn x" onClick={onClose} aria-label={`${t("Închide", "Close")} ${title.toLowerCase()}`}>
               <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M3.5 3.5l9 9M12.5 3.5l-9 9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>

@@ -11,7 +11,7 @@ irreversible until you approve it.
 
 ![Mission Control on a desktop browser](docs/images/mission-control-desktop.png)
 
-<sub>Mission Control at 1440 px, rendered with sample data. The interface text is in Romanian.</sub>
+<sub>Mission Control at 1440 px, rendered with sample data.</sub>
 
 ---
 
@@ -184,9 +184,13 @@ Start everything:
 | Orchestrator API | http://localhost:4001 (`/health` for a liveness check) |
 | LiteLLM | http://localhost:4000 |
 
-Mission Control reads the orchestrator token from `frontend/.env.local` (`KAGE_API_TOKEN`). If
-the page says the orchestrator refuses requests, that token does not match the one in
-`kage_config.json`.
+Mission Control reads its settings from `frontend/.env.local` (template:
+`frontend/.env.local.example`):
+
+- `KAGE_API_TOKEN` must match the API token in `kage_config.json`. If the page says the
+  orchestrator refuses requests, these two do not match.
+- `NEXT_PUBLIC_KAGE_LANG` sets the interface language: `ro` (default) or `en`. It is read at
+  build time, so rebuild the frontend after changing it.
 
 Full setup: [docs/INSTALL.md](docs/INSTALL.md). Restoring from a backup:
 [docs/RESTORE.md](docs/RESTORE.md).

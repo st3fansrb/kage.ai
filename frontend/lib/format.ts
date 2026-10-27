@@ -1,5 +1,7 @@
 // Formatări comune pentru ecranul „Astăzi”.
 
+import { LOCALE, t } from "./i18n";
+
 export function usd(v: number | null | undefined): string {
   if (v == null || v === 0) return "$0";
   return "$" + v.toFixed(2);
@@ -40,15 +42,15 @@ export function isCloudTier(tier: string): boolean {
   return Number.isFinite(n) && n >= 3;
 }
 
-const DAY = new Intl.DateTimeFormat("ro-RO", { weekday: "long", day: "numeric", month: "long" });
+const DAY = new Intl.DateTimeFormat(LOCALE, { weekday: "long", day: "numeric", month: "long" });
 export function todayLabel(d = new Date()): string {
   return DAY.format(d);
 }
 
 export function riskLabel(risk: string): { text: string; danger: boolean } {
   const r = risk.toUpperCase();
-  if (r === "DESTRUCTIV") return { text: "destructiv", danger: true };
-  if (r === "FILESYSTEM") return { text: "scrie fișiere", danger: false };
+  if (r === "DESTRUCTIV") return { text: t("destructiv", "destructive"), danger: true };
+  if (r === "FILESYSTEM") return { text: t("scrie fișiere", "writes files"), danger: false };
   if (r === "GIT") return { text: "git", danger: false };
-  return { text: "comandă", danger: false };
+  return { text: t("comandă", "command"), danger: false };
 }
